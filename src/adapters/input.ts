@@ -28,6 +28,14 @@ export type InputFrame = {
   /** 归一化后的摇杆屏幕向量，仅供 HUD 观察（不绘制摇杆 UI） */
   stickX: number;
   stickY: number;
+  /**
+   * v9f：deadZone 之前的原始读数 + 摇杆指针是否按住。
+   * 诊断用：区分「手指根本没动」与「动了但被死区 / 冻结逻辑吃掉」，
+   * 也用来抓「第二指按下后摇杆读数被清零」这类回归。
+   */
+  stickRawX: number;
+  stickRawY: number;
+  stickHeld: boolean;
   source: string;
   /** 一次「轻点」（按下到抬起位移 < 8px），由组装层拿去做假人射线拾取 */
   tap: Tap | null;
@@ -489,6 +497,9 @@ export function createInput(opts: InputOptions): InputAdapter {
         sy /= len;
         len = 1;
       }
+      // v9f：死区前的读数留一份给诊断记录（死区会把它清零，事后无法区分「没动」和「被吃掉」）
+      const rawSx = sx;
+      const rawSy = sy;
       if (len < deadZone) {
         sx = 0;
         sy = 0;
@@ -569,7 +580,11 @@ export function createInput(opts: InputOptions): InputAdapter {
       if (gestures.length > 0) lastGesture = gestures[gestures.length - 1];
 
       const source = stickId !== null ? 'pointer' : keys.size > 0 ? 'keyboard' : 'idle';
-      return { intents, stickX: sx, stickY: sy, source, tap, zoomScale, gestures, lastGesture };
+      return {
+        intents, stickX: sx, stickY: sy,
+        stickRawX: rawSx, stickRawY: rawSy, stickHeld: stickId !== null,
+        source, tap, zoomScale, gestures, lastGesture,
+      };
     },
 
     dispose(): void {

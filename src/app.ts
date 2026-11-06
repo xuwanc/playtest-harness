@@ -2,6 +2,7 @@ import { createClock } from './adapters/clock';
 import { createInput } from './adapters/input';
 import type { InputFrame } from './adapters/input';
 import { clampZoom } from './adapters/pinch';
+import { createRecorder } from './adapters/telemetry';
 import { EMPTY_INTENTS, WEAPON_ORDER, createWorld } from './core';
 import type { Intents, WeaponId } from './core';
 import { CORE_CONFIG, SCENE_CONFIG, VIEW_CONFIG } from './config';
@@ -10,11 +11,15 @@ import type { DebugState } from './presentation/debug-panel';
 import { createHud } from './presentation/hud';
 import { createOverlayFold } from './presentation/overlay-fold';
 import { createSceneView } from './presentation/three-scene';
+import { createTelemetryPanel } from './presentation/telemetry-panel';
 
 const EMPTY_FRAME: InputFrame = {
   intents: { ...EMPTY_INTENTS },
   stickX: 0,
   stickY: 0,
+  stickRawX: 0,
+  stickRawY: 0,
+  stickHeld: false,
   source: 'idle',
   tap: null,
   zoomScale: 1,
@@ -36,7 +41,29 @@ export function startApp(): void {
   const fold = createOverlayFold(hudEl, document.getElementById('hint'));
   // v9e：左下角版本徽标（构建期注入，重新构建才会变）—— 一眼确认线上跑的是哪一版
   const badge = document.getElementById('version-badge');
-  if (badge) badge.textContent = `${__APP_VERSION__} · ${__BUILD_TIME__}`;
+  if (badge) badge.textContent = `${__APP_VERSION__} · ${__BUILD_TIME__} · 诊断`;
+
+  // v9f：发布端飞行记录仪。真机出问题时点徽标 →「复制摘要」，不必开控制台。
+  // 只读 World、纯内存环形缓冲、默认不上传；详见 adapters/telemetry.ts。
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  const opened = new Date();
+  const recorder = createRecorder({
+    meta: {
+      version: __APP_VERSION__,
+      buildTime: __BUILD_TIME__,
+      startedAt: `${pad2(opened.getMonth() + 1)}-${pad2(opened.getDate())} ${pad2(opened.getHours())}:${pad2(opened.getMinutes())}`,
+      ua: navigator.userAgent.slice(0, 90),
+      screen: `${window.innerWidth}×${window.innerHeight}`,
+      dpr: Math.round((window.devicePixelRatio || 1) * 100) / 100,
+      orientation: window.innerHeight > window.innerWidth ? 'portrait' : 'landscape',
+      cores: navigator.hardwareConcurrency || 0,
+    },
+  });
+  const diagPanel = createTelemetryPanel(recorder, badge);
+  // 切后台回来时不要把它当成「单帧 300ms」的掉帧异常
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) recorder.suspend(800);
+  });
 
   const debug: DebugState = {
     timeScale: 1,
@@ -96,10 +123,14 @@ export function startApp(): void {
     // v9d：手势接口读数，技能层 / 自动化验收可直接订阅最近一次手势
     getGestures: () => lastFrame.gestures,
     getLastGesture: () => lastFrame.lastGesture,
+    // v9f：诊断记录（控制台 / 自动化验收都能直接取摘要或完整 dump）
+    telemetry: recorder,
+    telemetrySummary: () => recorder.summary(),
   };
 
   let last = performance.now();
   let fps = 60;
+  let lastDiagTick = 0;
 
   function frame(now: number): void {
     const dt = Math.min((now - last) / 1000, 0.1);
@@ -124,8 +155,18 @@ export function startApp(): void {
       ...sampled,
       intents: { ...sampled.intents, dummyClickId: pendingDummyClick } as Intents,
     };
-    const steps = clock.frame(dt, lastFrame.intents, debug.timeScale, debug.paused);
+    // v9f：逐步收集事件（掉帧补算多步时只有最后一步的留在 world.events 里）
+    const steps = clock.frame(dt, lastFrame.intents, debug.timeScale, debug.paused, () => {
+      const list = world.events;
+      for (let i = 0; i < list.length; i++) recorder.event(list[i], world.time);
+    });
     if (steps > 0) pendingDummyClick = 0;
+    recorder.sample(world, lastFrame, dt * 1000, steps);
+    for (const g of lastFrame.gestures) recorder.gesture(g);
+    if (now - lastDiagTick > 250) {
+      lastDiagTick = now;
+      diagPanel.tick();
+    }
 
     syncWeaponButtons(world.combat.weapon);
     view.render(world, dt);

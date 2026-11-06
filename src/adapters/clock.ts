@@ -2,8 +2,12 @@ import { step } from '../core';
 import type { Intents, World } from '../core';
 
 export type ClockDriver = {
-  /** 推进一帧，返回本帧实际执行的固定步数。按下沿事件只在第一个 step 生效。 */
-  frame(frameSeconds: number, intents: Intents, timeScale: number, paused: boolean): number;
+  /**
+   * 推进一帧，返回本帧实际执行的固定步数。按下沿事件只在第一个 step 生效。
+   * onStep 每执行完一个固定步回调一次 —— 事件队列每步开头清空，
+   * 掉帧补算多步时只有最后一步的事件留在 world.events 里，诊断记录需要逐步收集。
+   */
+  frame(frameSeconds: number, intents: Intents, timeScale: number, paused: boolean, onStep?: () => void): number;
   singleStep(intents: Intents): void;
   reset(): void;
   readonly accumulator: number;
@@ -17,7 +21,7 @@ export function createClock(world: World): ClockDriver {
   let acc = 0;
 
   return {
-    frame(frameSeconds, intents, timeScale, paused) {
+    frame(frameSeconds, intents, timeScale, paused, onStep) {
       if (paused || timeScale <= 0) {
         acc = 0;
         return 0;
@@ -43,6 +47,7 @@ export function createClock(world: World): ClockDriver {
               dummyClickId: 0,
             };
         step(world, dt, i);
+        if (onStep) onStep();
         acc -= dt;
         n++;
       }
