@@ -8,7 +8,7 @@ import type { Intents, WeaponId } from './core';
 import { CORE_CONFIG, SCENE_CONFIG, VIEW_CONFIG } from './config';
 import { createDebugPanel } from './presentation/debug-panel';
 import type { DebugState } from './presentation/debug-panel';
-import { createDirDebug } from './presentation/dir-debug';
+import { createMotionDebug } from './presentation/motion-debug';
 import { createHud } from './presentation/hud';
 import { createOverlayFold } from './presentation/overlay-fold';
 import { createSceneView } from './presentation/three-scene';
@@ -77,9 +77,9 @@ export function startApp(): void {
   });
   const diagPanel = createTelemetryPanel(recorder, badge);
 
-  // v9k：临时方向调试盘（输入 / 移动 / 面朝向三个角度同屏对照）。
-  // 纯观测层，只读 World 与 InputFrame；删掉 createDirDebug 与本段即可完全移除。
-  const dirDebug = createDirDebug({ deadZone: () => VIEW_CONFIG.joystick.deadZone });
+  // v9q：手感调试面板 = 速度随时间曲线 + 方向罗盘（v9k 的罗盘嵌入其中，不再单独居中）。
+  // 纯观测层，只读 World 与 InputFrame；默认收起，点「手感」胶囊或按 V 展开。
+  const motionDebug = createMotionDebug({ deadZone: () => VIEW_CONFIG.joystick.deadZone });
   // 切后台回来时不要把它当成「单帧 300ms」的掉帧异常
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) recorder.suspend(800);
@@ -146,9 +146,13 @@ export function startApp(): void {
     // v9f：诊断记录（控制台 / 自动化验收都能直接取摘要或完整 dump）
     telemetry: recorder,
     telemetrySummary: () => recorder.summary(),
-    // v9k：方向调试盘（控制台 / 自动化可读当前三个角，或直接开关）
-    dirDebug,
-    dirAngles: () => dirDebug.last(),
+    // v9k：方向罗盘（现已嵌入手感面板；接口保持不变）
+    dirDebug: motionDebug.dirDebug,
+    dirAngles: () => motionDebug.dirDebug.last(),
+    // v9q：速度曲线读数 / 窗口样本 / 面板开关，供线上验收直接取数值
+    motionDebug,
+    speedDebug: () => motionDebug.last(),
+    speedSamples: () => motionDebug.samples(),
     // v9n：停步收相 / 侧移偏转 / 双腿姿态读数（验收用手感诊断）
     gaitDebug: () => view.gaitDebug(),
   };
@@ -195,7 +199,7 @@ export function startApp(): void {
 
     syncWeaponButtons(world.combat.weapon);
     view.render(world, dt);
-    dirDebug.update(world, lastFrame, view.getGroundBasis());
+    motionDebug.update(world, lastFrame, view.getGroundBasis());
     const diag = view.diagnostics();
     hud.update(world, fps, steps, lastFrame, debug, {
       attackBlend: diag.attackBlend,

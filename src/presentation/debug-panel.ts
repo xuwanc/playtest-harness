@@ -104,6 +104,10 @@ export function createDebugPanel(
   v9pF.add(view.gait, 'stopChestPitch', 0, 0.4, 0.01).name('上身惯性前倾 (rad)');
   v9pF.add(view.gait, 'stopPeakRatio', 0.05, 0.95, 0.02).name('惯性峰值位置');
 
+  // v9q：被击退时把击退冲量并入步态驱动，下盘跟着迈出后撤步（0 = 旧「身体平移、腿不动」）
+  const v9qF = gui.addFolder('击退步态 (v9q)');
+  v9qF.add(view.gait, 'knockGaitScale', 0, 1.5, 0.05).name('击退步态驱动 (0=旧)');
+
   // v8c/v8d：攻击下半身两条路径 + 跳跃 / 落地蓄力缓冲，热改即时生效，方便 0↔1 直接对比效果
   //   gw=1 / lw=0（默认）：过滤掉挥击跨步，下盘由「攻击等效步态」接管并持续摆动
   //   gw=0 / lw=1：只叠加单次挥击跨步，连击左右脚交替
@@ -376,6 +380,7 @@ export function createDebugPanel(
   cam.close();
   zc.close();
   hurtF.close();
+  v9qF.close();
   lkF.close();
   profFolders.forEach((f) => f.close());
   disp.close();

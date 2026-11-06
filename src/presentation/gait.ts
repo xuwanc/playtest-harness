@@ -353,12 +353,33 @@ export type StopInertia = {
   chestPitch: number;
   /** 停步相位里更靠前的是不是左腿 */
   leadLeft: boolean;
-  /** 移动方向单位向量的前 / 右分量，供骨架把 bodyShift 投影到骨盆局部轴 */
+  /** 移动方向单位向量的前 / 右分量（**骨盆 = bodyYaw 局部轴**，见 bodyLocalDir）。
+   *  fwdN → pelvis.position.z、rightN → pelvis.position.x；用错基准（gaitYaw 局部）
+   *  会让侧移停步时的身体前移方向歪掉一个 hipYaw。 */
   fwdN: number;
   rightN: number;
   /** 诊断：当前脉冲强度 0..1 */
   env: number;
 };
+
+/**
+ * v9q：把「世界水平方向」投影到**骨盆局部轴**（root 只转 bodyYaw）。
+ *
+ * pelvis 直接挂在 root 下，其局部 +Z / +X 分别是 bodyYaw 的前 / 右；而步态解算器
+ * 的 localForward / localRight 用的是 lower（bodyYaw + hipYaw）局部轴。两者差一个
+ * hipYaw（纯侧移时可达 30°+），把 gait 局部方向直接写进 pelvis.position 就会让
+ * 「身体惯性前移」与真实速度方向不一致。所有写 pelvis 局部位移的地方都先过这里。
+ */
+export function bodyLocalDir(
+  bodyYaw: number, worldX: number, worldZ: number,
+): { forward: number; right: number } {
+  const fx = Math.sin(bodyYaw), fz = Math.cos(bodyYaw);
+  const rx = Math.cos(bodyYaw), rz = -Math.sin(bodyYaw);
+  return {
+    forward: worldX * fx + worldZ * fz,
+    right: worldX * rx + worldZ * rz,
+  };
+}
 
 export function solveStopInertia(
   progress: number,

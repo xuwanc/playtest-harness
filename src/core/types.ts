@@ -878,6 +878,10 @@ export type GaitViewConfig = {
   stopChestPitch: number;
   /** 惯性脉冲峰值位置 0.05..0.95（两端值与导数均为 0，与收相淡出无缝衔接） */
   stopPeakRatio: number;
+  /** v9q：把受击击退速度（hurt.knockX/knockZ，Core 只加到 position 不进 velocity）
+   *  纳入步态驱动的比例：1 = 被推开时下盘跟着迈出后撤步（默认），0 = 旧「身体平移、腿不动」。
+   *  只影响表现层的步态解算，不写 Core / 不进快照；玩家与假人共用。 */
+  knockGaitScale: number;
 };
 
 /* ---------------- 程序动画分层 / 落地缓冲（v8c，纯表现层） ---------------- */

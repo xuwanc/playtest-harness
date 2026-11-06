@@ -6,7 +6,7 @@ import type {
 } from '../core';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw,
-  stopBlendGate, chestYawFromHip, solveStopInertia,
+  stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir,
 } from './gait';
 import type { GaitInput } from './gait';
 import { solveHurtPose } from './hurt-pose';
@@ -238,6 +238,9 @@ export function createDummyRig(
   let stopStride0 = 0;
   let stopFwd = 0;
   let stopRight = 0;
+  /** v9q：停步瞬间锁定的**世界**移动方向（单位向量），供惯性按骨盆局部轴投影 */
+  let stopDirWX = 0;
+  let stopDirWZ = 1;
   /** 下盘侧移偏转的平滑状态（与主角同构，避免单帧跳变） */
   let sideYaw = 0;
   /** v9o：上一帧速度，用于区分「减速停步」与「KEEP DIST 低速横移」（后者不该收相） */
@@ -282,6 +285,17 @@ export function createDummyRig(
       // 与玩家共用同一套程序化步态解算器（v8）：怪物侧移 / 后退时也有方向自适应
       // 的腿摆、交叉步与抬膝，承接 #9「怪物也要像主角一样的动画机制」。
       const speed = Math.hypot(s.velocity.x, s.velocity.z);
+      // v9q：与主角同构 —— 击退冲量（s.hurt.knockX/Z）在 Core 里直接加到 position，
+      // 不进 velocity。把它按比例并入**步态驱动**，被推开时下盘才会迈出后撤步，
+      // 而不是身体平移、腿钉在原地。latRatio / 停步门控 / 惯性倾斜仍只用原 speed。
+      const knockScale = clamp(gaitCfg.knockGaitScale ?? 0, 0, 1);
+      const knockX = s.hurt.knockX * knockScale;
+      const knockZ = s.hurt.knockZ * knockScale;
+      // 拉 0 时连「击退期间不收相」也一并关掉，精确回到旧行为
+      const knockActive = knockScale > 0 && Math.hypot(s.hurt.knockX, s.hurt.knockZ) > 1e-3;
+      const gaitVX = s.velocity.x + knockX;
+      const gaitVZ = s.velocity.z + knockZ;
+      const gaitSpeed = Math.hypot(gaitVX, gaitVZ);
 
       // ---- v9n · 侧移下盘偏转 ----
       // 「KEEP DIST / FOLLOW 时与玩家保持距离横移」是纯侧移：两腿只有左右摆、
@@ -303,12 +317,14 @@ export function createDummyRig(
       const fwdZ = Math.cos(gaitYaw);
       const rightX = Math.cos(gaitYaw);
       const rightZ = -Math.sin(gaitYaw);
-      const localForward = s.velocity.x * fwdX + s.velocity.z * fwdZ;
-      const localRight = s.velocity.x * rightX + s.velocity.z * rightZ;
+      // v9q：投影用含击退冲量的等效速度（与主角同构）
+      const localForward = gaitVX * fwdX + gaitVZ * fwdZ;
+      const localRight = gaitVX * rightX + gaitVZ * rightZ;
 
       // ---- v9n · 停步收相（与主角同构）----
       const stopSec = Math.max(0, gaitCfg.stopBlendSec || 0);
-      const stopOn = stopSec > 0;
+      // 击退期间身体还在被推着走，不收相
+      const stopOn = stopSec > 0 && !knockActive;
       // v9o：与主角同构的收相门控。KEEP DIST / FOLLOW 保持距离横移时速度长期停在
       // 低速区间，旧判据会把步态收成 idle、假人整体平移滑行；现在只在减速趋零时接管。
       const gate = stopBlendGate(
@@ -323,8 +339,12 @@ export function createDummyRig(
         stopPhaseEnd = nextFeetTogetherPhase(s.gaitPhase);
         stopSpeed0 = speed;
         stopStride0 = Math.max(s.stride, 1e-6);
-        stopFwd = localForward;
+        stopFwd = localForward;   // gait 局部，给 solveStopGait 用
         stopRight = localRight;
+        // v9q：惯性方向锁定为停步瞬间的**世界**移动方向，收相尾段速度趋零也不漂移
+        const inv = 1 / Math.max(1e-6, speed);
+        stopDirWX = s.velocity.x * inv;
+        stopDirWZ = s.velocity.z * inv;
       }
       prevSpeed = speed;
       const inStop = stopOn && stopT >= 0;
@@ -341,7 +361,7 @@ export function createDummyRig(
         grounded: true,
       } : {
         phase: s.gaitPhase,
-        speed,
+        speed: gaitSpeed,   // v9q：含击退冲量，被推开时腿才跟着迈步
         moveSpeed: referenceSpeed,
         localForward,
         localRight,
@@ -360,7 +380,9 @@ export function createDummyRig(
       let stopBodyZ = 0;
       let stopChest = 0;
       if (inStop) {
-        const si = solveStopInertia(stopT, stopPhase0, stopFwd, stopRight, gaitCfg);
+        // v9q：方向按骨盆(bodyYaw)局部轴投影，避免侧移停步时前移方向歪掉一个 sideYaw
+        const bd = bodyLocalDir(s.bodyYaw, stopDirWX, stopDirWZ);
+        const si = solveStopInertia(stopT, stopPhase0, bd.forward, bd.right, gaitCfg);
         if (si.leadLeft) {
           gait.legL.pitchX -= si.leadPitch;   // 负 = 脚向前踩出
           gait.legL.kneeX += si.leadKnee;
@@ -387,10 +409,10 @@ export function createDummyRig(
       armL.joint.rotation.x = -0.18;
       armR.joint.rotation.x = -0.18;
       // 骨盆起伏 / 重心转移 / 侧倾统一驱动上下半身；程序化身体侧倾在受击时减半
-      pelvis.position.x = gait.pelvisX + stopBodyX;
+      pelvis.position.x = gait.pelvisX;
       pelvis.position.y = legLen + gait.pelvisY;
-      // v9p：停步惯性让骨盆沿停步方向微前移（每帧开头已归零 z）
-      pelvis.position.z = stopBodyZ;
+      // v9q：惯性位移不写在这里（IK 基准之前），改到下方 captureIKBase 之后叠加
+      pelvis.position.z = 0;
       pelvis.rotation.z = gait.pelvisRoll;
       upper.rotation.z = gait.sideLean * (pose.intensity > 0 ? 0.4 : 1);
 
@@ -398,6 +420,12 @@ export function createDummyRig(
       // 基准 = 步态刚写完、还没被受击 / 惯性层推走的骨盆 / 下盘；末尾 IK 把差值
       // 吸收进髋膝角，假人被打得后仰 / 后坐时脚仍踩在原地。
       const ikBase = captureIKBase(pelvis, lower);
+      // v9q：停步惯性的骨盆位移放在 IK 基准之后，并给下盘等量反向补偿 ——
+      // 脚的世界位置净变化 0，IK 开 / 关都钉在原地，不再跟着骨盆一起往前滑。
+      pelvis.position.x += stopBodyX;
+      pelvis.position.z += stopBodyZ;
+      lower.position.x -= stopBodyX;
+      lower.position.z -= stopBodyZ;
       if (leanCfg) {
         const dt = Math.max(1 / 240, Math.min(frameDt, 0.1));
         const fx = Math.sin(s.bodyYaw);

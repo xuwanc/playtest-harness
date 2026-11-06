@@ -6,6 +6,7 @@ import { stopBlendGate, chestYawFromHip } from '../src/presentation/gait';
 import type { VoxelRig } from '../src/presentation/voxel-rig';
 import { makeWorld, intent, run } from './helpers';
 import { rigNodes } from './rig-nodes';
+import { MECH_GAIT } from './mech-gait';
 import type { AppConfig } from '../src/core';
 
 const raw = JSON.parse(
@@ -21,7 +22,7 @@ if (!g.document) {
 function makeRig(moveSpeed: number): VoxelRig {
   return createVoxelRig(
     raw.view.voxel, raw.view.colors, moveSpeed,
-    raw.view.orientation, raw.view.gait, raw.view.weaponMount, raw.view.lean, raw.view.hurt,
+    raw.view.orientation, MECH_GAIT, raw.view.weaponMount, raw.view.lean, raw.view.hurt,
     raw.view.animation,
   );
 }
@@ -39,8 +40,8 @@ const legMag = (d: ReturnType<VoxelRig['gaitDebug']>): number =>
  * -------------------------------------------------------------------------- */
 describe('v9o 停步收相门控：只认减速趋零，不认低速巡航', () => {
   const ref = 4.2;
-  const enter = raw.view.gait.stopEnterRatio;   // 0.08 → 0.336 m/s
-  const exit = raw.view.gait.stopExitRatio;     // 0.18 → 0.756 m/s
+  const enter = MECH_GAIT.stopEnterRatio;   // 0.08 → 0.336 m/s
+  const exit = MECH_GAIT.stopExitRatio;     // 0.18 → 0.756 m/s
 
   it('稳定低速巡航：不进入收相，且速度高于退出阈值时直接复位', () => {
     const gate = stopBlendGate(1.2, 1.2, ref, enter, exit);
@@ -146,7 +147,7 @@ describe('v9o 主角：低速巡航不再「身体走、腿不动」', () => {
       expect(d.stopT).toBeLessThan(0);
       maxLeg = Math.max(maxLeg, legMag(d));
     }
-    expect(rig.gaitDebug().speed).toBeLessThan(w.config.moveSpeed * raw.view.gait.stopEnterRatio * 1.5);
+    expect(rig.gaitDebug().speed).toBeLessThan(w.config.moveSpeed * MECH_GAIT.stopEnterRatio * 1.5);
     expect(maxLeg).toBeGreaterThan(0.05);
   });
 
@@ -226,10 +227,10 @@ describe('v9o 主角：胸随下盘适当偏转，头仍朝目标', () => {
       run(w, 1, aim);
       rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt, false);
       const d = rig.gaitDebug();
-      const max = (raw.view.gait.chestYawMaxDeg * Math.PI) / 180;
+      const max = (MECH_GAIT.chestYawMaxDeg * Math.PI) / 180;
       expect(Math.abs(d.chestYaw)).toBeLessThanOrEqual(max + 1e-9);
-      if (Math.abs(d.hipYaw * raw.view.gait.chestYawScale) < max) {
-        expect(d.chestYaw).toBeCloseTo(d.hipYaw * raw.view.gait.chestYawScale, 6);
+      if (Math.abs(d.hipYaw * MECH_GAIT.chestYawScale) < max) {
+        expect(d.chestYaw).toBeCloseTo(d.hipYaw * MECH_GAIT.chestYawScale, 6);
       }
     }
   });
@@ -279,7 +280,7 @@ describe('v9o 假人：低速横移不收相、胸随下盘带转', () => {
     const s = w.dummies[0];
     return createDummyRig(
       raw.view.voxel, raw.view.colors, '#88aa88', s.id, raw.view.dummies,
-      w.config.dummies.moveSpeed, raw.view.gait, raw.view.hurt, raw.view.lean,
+      w.config.dummies.moveSpeed, MECH_GAIT, raw.view.hurt, raw.view.lean,
     );
   }
 

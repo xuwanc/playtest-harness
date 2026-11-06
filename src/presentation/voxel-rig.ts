@@ -7,7 +7,7 @@ import type {
 } from '../core';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw,
-  stopBlendGate, chestYawFromHip, solveStopInertia,
+  stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir,
 } from './gait';
 import type { GaitInput } from './gait';
 import {
@@ -61,9 +61,9 @@ export type VoxelRig = {
   /** 下盘相对身体的连续偏航（v8b），供验收「引导/后退时跨朝向不跳变」。 */
   hipYaw(): number;
   /** v9n：停步收相进度（-1 = 未接管）与本帧双腿姿态，供浏览器验收过渡是否平滑。
-   *  v9o 追加 chestYaw / speed：验收「低速巡航是否误关步态」与「胸是否跟着下盘带转」。 */
+   *  v9o 追加 chestYaw / speed；v9q 追加 gaitSpeed（= velocity + 击退冲量，步态实际驱动）。 */
   gaitDebug(): {
-    stopT: number; hipYaw: number; chestYaw: number; speed: number;
+    stopT: number; hipYaw: number; chestYaw: number; speed: number; gaitSpeed: number;
     /** v9p：停步惯性脉冲的前脚前伸量（rad）/ 身体前移量（m），未接管时为 0 */
     stopStep: number; stopShift: number;
     legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
@@ -438,6 +438,11 @@ export function createVoxelRig(
   let stopStride0 = 0;
   let stopFwd = 0;
   let stopRight = 0;
+  /** v9q：停步瞬间锁定的**世界**移动方向（单位向量），供惯性按骨盆局部轴投影。
+   *  不能用 gait 的 localForward/Right —— 那是 lower(bodyYaw+hipYaw) 局部，写进
+   *  pelvis 会差一个 hipYaw；也不能每帧重取 velocity（收相尾段速度趋零、方向会漂）。 */
+  let stopDirWX = 0;
+  let stopDirWZ = 1;
   /** v9o：上一帧速度，用于区分「减速停步」与「低速巡航」（后者不该收相） */
   let prevSpeed = 0;
   /** v9o：本帧胸 / 上半身相对身体的偏航（诊断读数，不进 Core / 快照） */
@@ -450,6 +455,8 @@ export function createVoxelRig(
   /** 本帧停步惯性脉冲：前脚额外前伸量 / 身体前移量（诊断用） */
   let lastStopStep = 0;
   let lastStopShift = 0;
+  /** v9q：本帧步态实际驱动速度（velocity + 击退冲量），供验收「被击退时下盘是否跟着动」 */
+  let lastGaitSpeed = 0;
 
   // ---- v8c 程序动画分层状态（全部纯表现，不进入 Core / 快照）----
   /** 攻击姿态混合系数 0..1：指数平滑进出攻击，避免下盘姿态单帧跳变 */
@@ -832,6 +839,19 @@ export function createVoxelRig(
       // （倒着走下盘不翻转）、纯侧移±1；再乘 legYawScale 限幅到 hipYawMaxDeg，
       // 最后指数平滑。全链路没有 atan2 / wrapAngle，任何朝向都不可能跳变。
       const speed = Math.hypot(c.velocity.x, c.velocity.z);
+      // v9q：击退冲量由 Core 直接加到 position、不进 velocity（movement.ts 第 4 步），
+      // 所以只看 velocity 的步态会「身体被推走、腿却不动」= 整体平移滑步。按配置比例
+      // 把击退速度并入**步态驱动**，让下盘沿击退方向迈出后撤步；hipYaw / 惯性倾斜 /
+      // 停步门控仍只用原 velocity，击退不会误触发侧移偏转或收相。纯表现层，不进快照。
+      const knockScale = clamp(gaitCfg.knockGaitScale ?? 0, 0, 1);
+      const knockX = hurt.knockX * knockScale;
+      const knockZ = hurt.knockZ * knockScale;
+      // 拉 0 时连「击退期间不收相」也一并关掉，精确回到旧行为
+      const knockActive = knockScale > 0 && Math.hypot(hurt.knockX, hurt.knockZ) > 1e-3;
+      const gaitVX = c.velocity.x + knockX;
+      const gaitVZ = c.velocity.z + knockZ;
+      const gaitSpeed = Math.hypot(gaitVX, gaitVZ);
+      lastGaitSpeed = gaitSpeed;
       const bRightX = Math.cos(c.bodyYaw);
       const bRightZ = -Math.sin(c.bodyYaw);
       const bodyLocalRight = c.velocity.x * bRightX + c.velocity.z * bRightZ;
@@ -859,10 +879,12 @@ export function createVoxelRig(
       // Core 锁速 → real.speed = 0 → solveGait 首行直接返回 idle，且非 active 段因无位移
       // gaitPhase 也冻结；不补足这一步，gaitWeight 拉到 1 也拿不到任何姿态（旧 bug 根因）。
       const realDrive: GaitDrive = {
-        speed,
+        // v9q：步态看的是「velocity + 击退冲量」，被推开时下盘才会跟着迈步；
+        // 关掉 knockGaitScale 时精确回到旧 realDrive（只 velocity）。
+        speed: gaitSpeed,
         phase: c.gaitPhase,
-        localForward: c.velocity.x * fwdX + c.velocity.z * fwdZ,
-        localRight: c.velocity.x * rightX + c.velocity.z * rightZ,
+        localForward: gaitVX * fwdX + gaitVZ * fwdZ,
+        localRight: gaitVX * rightX + gaitVZ * rightZ,
         stride: c.stride,
       };
       // v9p：相位基准只在「刚进入攻击」那一帧锁定，攻击主体（含连击段切换、
@@ -887,7 +909,8 @@ export function createVoxelRig(
       // 只要 speed>=EPS 就仍按该相位输出，角色于是「卡在最后一个跨步 pose」一小段时间。
       // 这里在减速尾段接管：把相位推进到最近的双脚并拢点、摆幅同步淡到 0。
       const stopSec = Math.max(0, gaitCfg.stopBlendSec || 0);
-      const stopOn = stopSec > 0 && !attacking && c.grounded;
+      // 击退期间身体还在被推着走，不能收相（否则刚迈出的后撤步会被抽回待机）
+      const stopOn = stopSec > 0 && !attacking && !knockActive && c.grounded;
       // v9o：v9n 只看「速度 < 50% 移速」，轻推摇杆做低速巡航时速度稳定在该区间，
       // 收相照样走完并输出 idle —— 身体匀速平移、腿完全静止，就是用户反馈的「低速滑行」。
       // 现在只把「已降到很低且仍在减速」当停步；重新加速或速度回升立即交还正常步态。
@@ -903,8 +926,12 @@ export function createVoxelRig(
         stopPhaseEnd = nextFeetTogetherPhase(c.gaitPhase);
         stopSpeed0 = speed;
         stopStride0 = Math.max(c.stride, EPS);
-        stopFwd = realDrive.localForward;
+        stopFwd = realDrive.localForward;   // gait 局部，给 solveStopGait 用
         stopRight = realDrive.localRight;
+        // v9q：惯性方向存**世界**单位向量并锁定，收相期间速度衰减到 0 也不漂移
+        const inv = 1 / Math.max(EPS, speed);
+        stopDirWX = c.velocity.x * inv;
+        stopDirWZ = c.velocity.z * inv;
       }
       prevSpeed = speed;
       const inStop = stopOn && stopT >= 0;
@@ -941,13 +968,17 @@ export function createVoxelRig(
       const gait = scaleGaitPose(gaitPose, weights.gaitScale);
 
       // ---- v9p 停步惯性：最后一步踩出去 + 身体跟着惯性微前移，再收回待机 ----
-      // 增量全部落在步态层（IK 基准之前）：停步时速度已趋零，短促的整体微移不构成
-      // 滑步；t→1 脉冲归零，与 solveStopGait 的淡出一起平滑接回 idle，不残留姿态。
+      // 腿角增量落在步态层；**骨盆位移必须放到 IK 基准之后**（见下方 1.1），
+      // 否则锚点会把「被惯性推走的骨盆」当成落点，脚跟着一起往前滑。
+      // t→1 脉冲归零，与 solveStopGait 的淡出一起平滑接回 idle，不残留姿态。
       let stopBodyX = 0;
       let stopBodyZ = 0;
       let stopChest = 0;
       if (inStop) {
-        const si = solveStopInertia(stopT, stopPhase0, stopFwd, stopRight, gaitCfg);
+        // v9q：方向按骨盆(bodyYaw)局部轴投影，而不是 gait(bodyYaw+hipYaw) 局部 ——
+        // 后者会让侧移停步时的身体前移歪掉一个 hipYaw（用户反馈方向不一致）。
+        const bd = bodyLocalDir(c.bodyYaw, stopDirWX, stopDirWZ);
+        const si = solveStopInertia(stopT, stopPhase0, bd.forward, bd.right, gaitCfg);
         if (si.leadLeft) {
           gait.legL.pitchX -= si.leadPitch;   // 负 = 脚向前踩出
           gait.legL.kneeX += si.leadKnee;
@@ -1001,10 +1032,10 @@ export function createVoxelRig(
         armR.root.rotation.z = 0;
         // 骨盆起伏 / 左右重心转移 / 侧倾统一写在共享 pelvis 上：
         // 上下半身由层级自动联动，不必再分别给两个并列组手动对齐同一份位移。
-        pelvis.position.x = gait.pelvisX + stopBodyX;
+        pelvis.position.x = gait.pelvisX;
         pelvis.position.y = legLen + gait.pelvisY;
-        // v9p：停步惯性让骨盆沿停步方向微前移（每帧开头已把 z 归零）
-        pelvis.position.z = stopBodyZ;
+        // v9q：惯性位移不写在这里（IK 基准之前），改到下方 captureIKBase 之后叠加
+        pelvis.position.z = 0;
         pelvis.rotation.z = gait.pelvisRoll;
       }
 
@@ -1012,6 +1043,16 @@ export function createVoxelRig(
       // 受击后坐 / 落地缓冲 / 攻击跨步 / 惯性下沉都会改写这些值，末尾的 IK 层
       // 会把差值吸收进髋 / 膝角，让脚仍踩在步态决定的落点上。
       const ikBase = captureIKBase(pelvis, lower);
+
+      // 1.1) v9q：停步惯性的骨盆位移放在 IK 基准**之后**。旧版写在步态层（基准之前），
+      // 锚点会把「已被惯性推走的骨盆」当成落点，于是脚跟着骨盆一起往前滑。
+      // 现在给下盘等量反向补偿：脚的世界位置 = 骨盆(+d) + 下盘(−d)，净变化 0 ——
+      // IK 开启时锚点恰等于当前脚位（IK 解恒等），IK 关闭时脚同样钉在原地。
+      // 脉冲两端归零，收相结束自动消失，不影响待机。
+      pelvis.position.x += stopBodyX;
+      pelvis.position.z += stopBodyZ;
+      lower.position.x -= stopBodyX;
+      lower.position.z -= stopBodyZ;
 
       // 1.5) v8g 惯性分层：盆骨带一点倾斜 + 小幅重心平移 + 移动时略微下沉。
       // 旧版只把惯性倾到 upper，盆骨完全不动，像「上身自己往前折」。现在同一份惯性
@@ -1174,6 +1215,7 @@ export function createVoxelRig(
       return {
         stopT, hipYaw, chestYaw,
         speed: prevSpeed,   // update 末尾已刷新为本帧速度，供线上验收低速巡航
+        gaitSpeed: lastGaitSpeed,
         stopStep: lastStopStep, stopShift: lastStopShift,
         legLPitch: lastLegs.lp, legLRoll: lastLegs.lr,
         legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,

@@ -164,6 +164,11 @@ export type DirDebug = {
 export type DirDebugOptions = {
   /** 输入摇杆的死区（用于画内圈），getter 以便调试面板热改即时生效 */
   deadZone?: () => number;
+  /** v9q：把罗盘挂进外部面板容器（缺省挂 document.body，保持旧行为） */
+  container?: HTMLElement;
+  /** v9q：嵌入模式 —— 不自建开关胶囊 / 不绑 V 键 / 不持久化，开关交给外层面板。
+   *  readDirs / data-* / update / last / setEnabled 等接口全部保持不变。 */
+  embedded?: boolean;
 };
 
 const STORAGE_KEY = 'harness.dirDebug';
@@ -173,20 +178,24 @@ const STORAGE_KEY = 'harness.dirDebug';
  * 指针穿透，只有标题胶囊可点；键盘 V 也可切换显示。
  */
 export function createDirDebug(opts: DirDebugOptions = {}): DirDebug {
+  const embedded = !!opts.embedded;
   const root = document.createElement('div');
   root.id = 'dirdbg';
-  root.innerHTML = [
-    '<button id="dirdbg-toggle" type="button" data-ui-button aria-label="收起方向调试盘">方向 ⌄</button>',
+  if (embedded) root.classList.add('is-embedded');
+  const panelParts = [
     '<canvas id="dirdbg-canvas" width="118" height="118"></canvas>',
     '<div id="dirdbg-read">',
     '  <span class="dd-line"><span class="dd-in" data-k="in">入 -</span><span class="dd-mv" data-k="mv">移 -</span><span class="dd-fc" data-k="fc">面 -</span></span>',
     '  <span class="dd-line dd-sub" data-k="gap">Δ -</span>',
     '</div>',
-  ].join('');
-  document.body.appendChild(root);
+  ];
+  root.innerHTML = embedded
+    ? panelParts.join('')
+    : ['<button id="dirdbg-toggle" type="button" data-ui-button aria-label="收起方向调试盘">方向 ⌄</button>', ...panelParts].join('');
+  (opts.container ?? document.body).appendChild(root);
 
   const canvas = root.querySelector<HTMLCanvasElement>('#dirdbg-canvas')!;
-  const toggleEl = root.querySelector<HTMLButtonElement>('#dirdbg-toggle')!;
+  const toggleEl = root.querySelector<HTMLButtonElement>('#dirdbg-toggle');
   const els = {
     in: root.querySelector<HTMLElement>('[data-k="in"]')!,
     mv: root.querySelector<HTMLElement>('[data-k="mv"]')!,
@@ -195,33 +204,42 @@ export function createDirDebug(opts: DirDebugOptions = {}): DirDebug {
   };
   const ctx = canvas.getContext('2d');
 
+  // 嵌入模式恒开：外层面板负责显隐，避免旧 localStorage 里的 '0' 让罗盘整块消失
   let enabled = true;
-  try {
-    enabled = window.localStorage.getItem(STORAGE_KEY) !== '0';
-  } catch { /* 隐私模式 / 无 storage：默认开 */ }
+  if (!embedded) {
+    try {
+      enabled = window.localStorage.getItem(STORAGE_KEY) !== '0';
+    } catch { /* 隐私模式 / 无 storage：默认开 */ }
+  }
 
   function applyEnabled(): void {
     root.classList.toggle('is-off', !enabled);
-    toggleEl.textContent = enabled ? '方向 ⌄' : '方向 ▸';
-    toggleEl.setAttribute('aria-expanded', String(enabled));
+    if (toggleEl) {
+      toggleEl.textContent = enabled ? '方向 ⌄' : '方向 ▸';
+      toggleEl.setAttribute('aria-expanded', String(enabled));
+    }
   }
   applyEnabled();
 
   function setEnabled(on: boolean): void {
     enabled = on;
-    try { window.localStorage.setItem(STORAGE_KEY, on ? '1' : '0'); } catch { /* 忽略 */ }
+    if (!embedded) {
+      try { window.localStorage.setItem(STORAGE_KEY, on ? '1' : '0'); } catch { /* 忽略 */ }
+    }
     applyEnabled();
   }
 
-  toggleEl.addEventListener('pointerdown', (e) => {
+  toggleEl?.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     e.stopPropagation();
     setEnabled(!enabled);
   });
-  // 键盘 V：真机不好点小胶囊时的兜底
-  window.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() === 'v' && !e.metaKey && !e.ctrlKey) setEnabled(!enabled);
-  });
+  // 键盘 V：真机不好点小胶囊时的兜底；嵌入模式由外层面板统一接管这个快捷键
+  if (!embedded) {
+    window.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'v' && !e.metaKey && !e.ctrlKey) setEnabled(!enabled);
+    });
+  }
 
   // DPR：canvas 位图放大，CSS 尺寸不变，保证细线不发虚
   const dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));

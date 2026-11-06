@@ -8,6 +8,7 @@ import { createDummyRig } from '../src/presentation/dummy-rig';
 import type { VoxelRig } from '../src/presentation/voxel-rig';
 import { makeWorld, intent, run } from './helpers';
 import { rigNodes } from './rig-nodes';
+import { MECH_GAIT } from './mech-gait';
 import type { AppConfig, GaitViewConfig } from '../src/core';
 
 const raw = JSON.parse(
@@ -34,7 +35,7 @@ function resist(vx: number, vz: number, pos: [number, number][], cfg = crowd): n
 }
 
 function makeRig(opts: { gait?: GaitViewConfig; strideScale?: number } = {}): VoxelRig {
-  const gait = opts.gait ?? raw.view.gait;
+  const gait = opts.gait ?? MECH_GAIT;
   const anim = opts.strideScale === undefined
     ? raw.view.animation
     : {
@@ -196,7 +197,7 @@ describe('v9p 挤压阻力 Core 集成：只改速度、不改位置、可关闭
  * 2) 停步惯性：前脚踩出 + 身体微前移，两端归零
  * -------------------------------------------------------------------------- */
 describe('v9p 停步惯性纯函数：脉冲包络 / 领先腿 / 方向投影', () => {
-  const cfg = raw.view.gait;
+  const cfg = MECH_GAIT;
   const peak = cfg.stopPeakRatio;
 
   it('t=0 与 t=1 全部幅度精确为 0（与待机无缝衔接）', () => {
@@ -285,10 +286,10 @@ describe('v9p 主角集成：停步时前脚踩出、身体微前移、再收回
       maxShift = Math.max(maxShift, d.stopShift);
     }
     // 收相按 dt/stopSec 离散推进，峰值不一定精确落在 peak，留 5% 采样误差
-    expect(maxStep).toBeGreaterThan(raw.view.gait.stopStepPitch * 0.95);
-    expect(maxStep).toBeLessThanOrEqual(raw.view.gait.stopStepPitch + 1e-9);
-    expect(maxShift).toBeGreaterThan(raw.view.gait.stopBodyShift * 0.95);
-    expect(maxShift).toBeLessThanOrEqual(raw.view.gait.stopBodyShift + 1e-9);
+    expect(maxStep).toBeGreaterThan(MECH_GAIT.stopStepPitch * 0.95);
+    expect(maxStep).toBeLessThanOrEqual(MECH_GAIT.stopStepPitch + 1e-9);
+    expect(maxShift).toBeGreaterThan(MECH_GAIT.stopBodyShift * 0.95);
+    expect(maxShift).toBeLessThanOrEqual(MECH_GAIT.stopBodyShift + 1e-9);
     const end = rig.gaitDebug();
     expect(end.stopT).toBeGreaterThan(0.9);
     expect(end.stopStep).toBe(0);
@@ -300,7 +301,7 @@ describe('v9p 主角集成：停步时前脚踩出、身体微前移、再收回
     const wOn = makeWorld(); wOn.modules.targeting = false;
     const wOff = makeWorld(); wOff.modules.targeting = false;
     const offCfg: GaitViewConfig = {
-      ...raw.view.gait, stopStepPitch: 0, stopTrailPitch: 0, stopStepKnee: 0,
+      ...MECH_GAIT, stopStepPitch: 0, stopTrailPitch: 0, stopStepKnee: 0,
       stopBodyShift: 0, stopChestPitch: 0,
     };
     const on = makeRig();
@@ -326,7 +327,7 @@ describe('v9p 主角集成：停步时前脚踩出、身体微前移、再收回
   it('配置全 0 时诊断读数恒为 0（精确对照 v9o）', () => {
     const w = makeWorld(); w.modules.targeting = false;
     const offCfg: GaitViewConfig = {
-      ...raw.view.gait, stopStepPitch: 0, stopTrailPitch: 0, stopStepKnee: 0,
+      ...MECH_GAIT, stopStepPitch: 0, stopTrailPitch: 0, stopStepKnee: 0,
       stopBodyShift: 0, stopChestPitch: 0,
     };
     const rig = makeRig({ gait: offCfg });
@@ -346,8 +347,8 @@ describe('v9p 主角集成：停步时前脚踩出、身体微前移、再收回
       raw.view.voxel, raw.view.colors, '#88aa88', s.id, raw.view.dummies,
       w.config.dummies.moveSpeed, gait, raw.view.hurt, raw.view.lean,
     );
-    const offCfg: GaitViewConfig = { ...raw.view.gait, stopBodyShift: 0, stopStepPitch: 0 };
-    const on = make(raw.view.gait);
+    const offCfg: GaitViewConfig = { ...MECH_GAIT, stopBodyShift: 0, stopStepPitch: 0 };
+    const on = make(MECH_GAIT);
     const off = make(offCfg);
     const state = () => ({
       ...s,
@@ -432,7 +433,7 @@ describe('v9p 攻击步幅与相位纯函数', () => {
           phase: d.phase, speed: d.speed, moveSpeed: raw.core.moveSpeed,
           localForward: d.localForward, localRight: d.localRight,
           legLength: raw.view.voxel.legLength, stride: d.stride ?? 0, grounded: true,
-        }, raw.view.gait);
+        }, MECH_GAIT);
         m = Math.max(m, Math.abs(pose.legL.pitchX), Math.abs(pose.legR.pitchX));
       }
       return m;

@@ -20,9 +20,9 @@ export type SceneView = {
   /** 世界坐标 → 屏幕像素坐标，供自动化验收精确定位假人。 */
   projectToScreen(x: number, y: number, z: number): { x: number; y: number };
   /** v9n：停步收相 / 侧移偏转 / 双腿姿态的实时读数（纯观测）；v9o 追加胸偏转与速度，
-   *  v9p 追加停步惯性的前脚前伸量与身体前移量。 */
+   *  v9p 追加停步惯性的前脚前伸量与身体前移量，v9q 追加含击退冲量的步态速度。 */
   gaitDebug(): {
-    stopT: number; hipYaw: number; chestYaw: number; speed: number;
+    stopT: number; hipYaw: number; chestYaw: number; speed: number; gaitSpeed: number;
     stopStep: number; stopShift: number;
     legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
   };
