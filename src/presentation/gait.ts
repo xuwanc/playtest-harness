@@ -269,3 +269,59 @@ export function strafeHipYaw(latRatio: number, baseScale: number, maxDeg: number
   const scale = Math.min(1, baseScale * (1 + Math.max(0, boost) * a * a));
   return clamp(scale * lat, -1, 1) * ((maxDeg * Math.PI) / 180);
 }
+
+/* -------------------------------------------------------------------------- *
+ * v9o · 低速滑行修复：停步收相只在「确实在停下来」时接管
+ * -------------------------------------------------------------------------- *
+ * v9n 把「速度低于 50% 参考移速」直接当成停步尾段并启动 0.3s 收相。但玩家轻推
+ * 摇杆做**低速巡航**（或假人 KEEP DIST 横移）时速度会稳定停在这个区间：收相照样
+ * 走完并输出 idle —— 身体仍以每秒一米多匀速平移，腿却完全静止，观感就是「滑行」。
+ * 这不是支撑相钉地没做好，而是整条步态被误关掉了。
+ *
+ * 门控只用 CharacterState 里已有的速度（表现层只读状态，不依赖输入层），靠**趋势**
+ * 区分两者，而且不只是「进入时判一次」，而是**每帧都要继续成立**：
+ *   - enter：速度已降到 enterRatio 以下、且相对上一帧明显衰减 → 启动收相。
+ *            松手后摩擦是指数衰减（每帧约 -20%），稳定巡航几乎不变。
+ *   - resume：一旦不再满足「正在往零收敛」就立即退出收相。这一步是关键 ——
+ *            从高速切到轻推摇杆时，中途那段减速也会短暂满足 enter 并启动收相；
+ *            若只在进入时判定，收相走完后速度稳定在低速就再也没人把它复位，
+ *            腿会一直停在 idle（线上实测到的第二次滑行）。
+ *    「往零收敛」= 仍在明显减速，或已小到几乎不动（settled，避免浮点末端误判）；
+ *    稳定在任意非零低速、或重新加速，都算「玩家还在走」→ 交还正常步态。
+ * 两个比例按各自参考移速缩放，留出滞回区间，玩家与假人共用同一套语义。
+ */
+export type StopGate = { enter: boolean; resume: boolean };
+
+export function stopBlendGate(
+  speed: number,
+  prevSpeed: number,
+  moveSpeed: number,
+  enterRatio: number,
+  exitRatio: number,
+): StopGate {
+  const ref = Math.max(moveSpeed, EPS);
+  const enterAt = Math.max(0, enterRatio) * ref;
+  const exitAt = Math.max(0, exitRatio) * ref;
+  const decelRatio = prevSpeed > EPS ? (prevSpeed - speed) / prevSpeed : 0;
+  const decelerating = decelRatio > 0.02;
+  const accelerating = decelRatio < -0.015;
+  // 已减速到几乎不动：即使浮点上不再下降，也要保持收相完成的待机态
+  const settled = speed <= enterAt * 0.15;
+  const hold = !accelerating && speed < exitAt && (decelerating || settled);
+  return {
+    // speed > EPS：速度精确归零时 solveGait 本就返回待机，无需收相
+    enter: speed > EPS && speed <= enterAt && decelerating,
+    resume: !hold,
+  };
+}
+
+/**
+ * v9o · 胸朝向随下盘带转：移动时只有腿（lower）朝移动方向偏，胸 / 上半身仍死死
+ * 正对前方，上下身像被拧开。取 hipYaw 的一个比例（默认 0.45）再限幅，符号与下盘
+ * 一致。hipYaw 本身已经按 hipYawSmoothing 指数平滑，线性缩放不会引入任何跳变，
+ * 因此不需要再存一份平滑状态。
+ */
+export function chestYawFromHip(hipYaw: number, scale: number, maxDeg: number): number {
+  const max = Math.max(0, maxDeg) * (Math.PI / 180);
+  return clamp(hipYaw * clamp(scale, 0, 2), -max, max);
+}

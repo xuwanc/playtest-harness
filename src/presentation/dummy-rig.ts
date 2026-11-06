@@ -4,7 +4,10 @@ import type {
   ColorConfig, DummyMode, DummyState, DummyViewConfig, GaitViewConfig, HurtViewConfig,
   IKViewConfig, LeanViewConfig, VoxelConfig,
 } from '../core';
-import { solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw } from './gait';
+import {
+  solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw,
+  stopBlendGate, chestYawFromHip,
+} from './gait';
 import type { GaitInput } from './gait';
 import { solveHurtPose } from './hurt-pose';
 import { solveInertiaPose } from './inertia';
@@ -92,6 +95,7 @@ export function createDummyRig(
 
   // 头部独立枢轴：绕脖子旋转，实现「头先于身体转向目标」（与主角一致，v7b#9）
   const headPivot = new THREE.Group();
+  headPivot.name = 'headPivot';                  // v9o：供测试按名查找
   headPivot.position.y = bodyH;                  // 相对骨盆（脖子在躯干顶）
   upper.add(headPivot);
 
@@ -236,6 +240,8 @@ export function createDummyRig(
   let stopRight = 0;
   /** 下盘侧移偏转的平滑状态（与主角同构，避免单帧跳变） */
   let sideYaw = 0;
+  /** v9o：上一帧速度，用于区分「减速停步」与「KEEP DIST 低速横移」（后者不该收相） */
+  let prevSpeed = 0;
 
   return {
     group: root,
@@ -303,20 +309,24 @@ export function createDummyRig(
       // ---- v9n · 停步收相（与主角同构）----
       const stopSec = Math.max(0, gaitCfg.stopBlendSec || 0);
       const stopOn = stopSec > 0;
-      const resume = speed > referenceSpeed * 0.78;
-      if (!stopOn || resume) {
+      // v9o：与主角同构的收相门控。KEEP DIST / FOLLOW 保持距离横移时速度长期停在
+      // 低速区间，旧判据会把步态收成 idle、假人整体平移滑行；现在只在减速趋零时接管。
+      const gate = stopBlendGate(
+        speed, prevSpeed, referenceSpeed,
+        gaitCfg.stopEnterRatio, gaitCfg.stopExitRatio,
+      );
+      if (!stopOn || gate.resume) {
         stopT = -1;
-      } else if (speed > 1e-6 && speed < referenceSpeed * 0.5) {
-        if (stopT < 0) {
-          stopT = 0;
-          stopPhase0 = s.gaitPhase;
-          stopPhaseEnd = nextFeetTogetherPhase(s.gaitPhase);
-          stopSpeed0 = speed;
-          stopStride0 = Math.max(s.stride, 1e-6);
-          stopFwd = localForward;
-          stopRight = localRight;
-        }
+      } else if (stopT < 0 && gate.enter) {
+        stopT = 0;
+        stopPhase0 = s.gaitPhase;
+        stopPhaseEnd = nextFeetTogetherPhase(s.gaitPhase);
+        stopSpeed0 = speed;
+        stopStride0 = Math.max(s.stride, 1e-6);
+        stopFwd = localForward;
+        stopRight = localRight;
       }
+      prevSpeed = speed;
       const inStop = stopOn && stopT >= 0;
       if (inStop) stopT = Math.min(1, stopT + frameDt / stopSec);
 
@@ -442,6 +452,14 @@ export function createDummyRig(
       } else {
         arcMat.opacity = 0;
       }
+
+      // v9o：胸随下盘带转（比下盘少），与主角同构；头部反向补偿，仍朝 Core 的 headYaw。
+      // 放在所有 upper 姿态写入之后、IK 之前（IK 只读 pelvis / lower，不受影响）。
+      const chestYaw = chestYawFromHip(
+        sideYaw, gaitCfg.chestYawScale, gaitCfg.chestYawMaxDeg,
+      );
+      upper.rotation.y += chestYaw;
+      headPivot.rotation.y = ((s.headYaw - s.bodyYaw - chestYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 
       // 4) v8g 足部 IK 锚定：与主角同一套解算器，放在所有姿态层之后。
       //    enabled=false / 未传配置时整层跳过，精确回到旧 FK 姿态。

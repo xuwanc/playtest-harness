@@ -5,7 +5,10 @@ import type {
   IKViewConfig, LeanViewConfig, LinkState, LinkViewConfig, OrientationViewConfig,
   ProgramAnimViewConfig, VoxelConfig, WeaponId, WeaponMountConfig,
 } from '../core';
-import { solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw } from './gait';
+import {
+  solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw,
+  stopBlendGate, chestYawFromHip,
+} from './gait';
 import type { GaitInput } from './gait';
 import {
   attackBlendStep, attackGaitDrive, attackStridePose, landingImpactScale,
@@ -57,9 +60,10 @@ export type VoxelRig = {
   ik(): IKDiagnostics;
   /** 下盘相对身体的连续偏航（v8b），供验收「引导/后退时跨朝向不跳变」。 */
   hipYaw(): number;
-  /** v9n：停步收相进度（-1 = 未接管）与本帧双腿姿态，供浏览器验收过渡是否平滑。 */
+  /** v9n：停步收相进度（-1 = 未接管）与本帧双腿姿态，供浏览器验收过渡是否平滑。
+   *  v9o 追加 chestYaw / speed：验收「低速巡航是否误关步态」与「胸是否跟着下盘带转」。 */
   gaitDebug(): {
-    stopT: number; hipYaw: number;
+    stopT: number; hipYaw: number; chestYaw: number; speed: number;
     legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
@@ -272,6 +276,7 @@ export function createVoxelRig(
 
   // 头部独立枢轴：绕脖子旋转，实现「头先于身体转向目标方向」
   const headPivot = group();
+  headPivot.name = 'headPivot';                    // 供测试按名查找（不依赖 children 下标）
   headPivot.position.y = ori.headPivotHeight;     // 相对骨盆（配置值 = bodyHeight）
   upper.add(headPivot);
 
@@ -431,6 +436,10 @@ export function createVoxelRig(
   let stopStride0 = 0;
   let stopFwd = 0;
   let stopRight = 0;
+  /** v9o：上一帧速度，用于区分「减速停步」与「低速巡航」（后者不该收相） */
+  let prevSpeed = 0;
+  /** v9o：本帧胸 / 上半身相对身体的偏航（诊断读数，不进 Core / 快照） */
+  let chestYaw = 0;
 
   // ---- v8c 程序动画分层状态（全部纯表现，不进入 Core / 快照）----
   /** 攻击姿态混合系数 0..1：指数平滑进出攻击，避免下盘姿态单帧跳变 */
@@ -856,20 +865,25 @@ export function createVoxelRig(
       // 这里在减速尾段接管：把相位推进到最近的双脚并拢点、摆幅同步淡到 0。
       const stopSec = Math.max(0, gaitCfg.stopBlendSec || 0);
       const stopOn = stopSec > 0 && !attacking && c.grounded;
-      const resume = speed > moveSpeed * 0.78;
-      if (!stopOn || resume) {
+      // v9o：v9n 只看「速度 < 50% 移速」，轻推摇杆做低速巡航时速度稳定在该区间，
+      // 收相照样走完并输出 idle —— 身体匀速平移、腿完全静止，就是用户反馈的「低速滑行」。
+      // 现在只把「已降到很低且仍在减速」当停步；重新加速或速度回升立即交还正常步态。
+      const gate = stopBlendGate(
+        speed, prevSpeed, moveSpeed,
+        gaitCfg.stopEnterRatio, gaitCfg.stopExitRatio,
+      );
+      if (!stopOn || gate.resume) {
         stopT = -1;
-      } else if (speed > EPS && speed < moveSpeed * 0.5) {
-        if (stopT < 0) {
-          stopT = 0;
-          stopPhase0 = c.gaitPhase;
-          stopPhaseEnd = nextFeetTogetherPhase(c.gaitPhase);
-          stopSpeed0 = speed;
-          stopStride0 = Math.max(c.stride, EPS);
-          stopFwd = realDrive.localForward;
-          stopRight = realDrive.localRight;
-        }
+      } else if (stopT < 0 && gate.enter) {
+        stopT = 0;
+        stopPhase0 = c.gaitPhase;
+        stopPhaseEnd = nextFeetTogetherPhase(c.gaitPhase);
+        stopSpeed0 = speed;
+        stopStride0 = Math.max(c.stride, EPS);
+        stopFwd = realDrive.localForward;
+        stopRight = realDrive.localRight;
       }
+      prevSpeed = speed;
       const inStop = stopOn && stopT >= 0;
       if (inStop) stopT = Math.min(1, stopT + dt / stopSec);
 
@@ -1043,9 +1057,14 @@ export function createVoxelRig(
       //    头部先于身体转向目标（补偿攻击旋身，仍用 wrapAngle 走最短弧，但其限幅很小、
       //    受 headTurnRate 平滑，不会造成可见跳变）。
       lower.rotation.y = hipYaw;
-      // 只补偿主动攻击旋身，不含受击扭转（见 2.5 说明）
+      // v9o：胸随下盘按配置比例带转（下盘转得多、胸转得少），避免「只有腿在偏、
+      // 上身还正对前方」的拧巴感。hipYaw 已平滑，线性缩放不会引入跳变。
+      chestYaw = chestYawFromHip(hipYaw, gaitCfg.chestYawScale, gaitCfg.chestYawMaxDeg);
+      upper.rotation.y += chestYaw;
+      // 只补偿主动攻击旋身，不含受击扭转（见 2.5 说明）；v9o 再补偿胸偏转，
+      // 让头仍朝 Core 给的 headYaw（目标方向）而不是跟着胸一起偏走。
       const spin = combatSpin;
-      headPivot.rotation.y = wrapAngle(c.headYaw - c.bodyYaw - spin);
+      headPivot.rotation.y = wrapAngle(c.headYaw - c.bodyYaw - spin - chestYaw);
 
       // 4) v8g 足部 IK 锚定：放在所有姿态层之后，把「骨盆被额外推走」的差值
       //    反解进髋 / 膝角。空中不钉脚（让腿随身体收起）；enabled=false 时整层跳过，
@@ -1100,7 +1119,8 @@ export function createVoxelRig(
     },
     gaitDebug() {
       return {
-        stopT, hipYaw,
+        stopT, hipYaw, chestYaw,
+        speed: prevSpeed,   // update 末尾已刷新为本帧速度，供线上验收低速巡航
         legLPitch: lastLegs.lp, legLRoll: lastLegs.lr,
         legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,
       };

@@ -835,6 +835,17 @@ export type GaitViewConfig = {
   strafeHipScale: number;
   /** v9n：假人下盘偏航上限（度；玩家沿用 orientation.hipYawMaxDeg） */
   strafeHipMaxDeg: number;
+  /** v9o：进入停步收相的速度上限（占参考移速的比例）。只在「已降到该速度且仍在减速」时进入，
+   *  避免把低速巡航误判成停步（误判会让腿静止、身体继续平移 → 滑行）。 */
+  stopEnterRatio: number;
+  /** v9o：退出停步收相的速度阈值（占参考移速的比例）。速度回到该值以上或任一帧重新加速，
+   *  立即交还正常步态。应明显大于 stopEnterRatio 形成滞回。 */
+  stopExitRatio: number;
+  /** v9o：胸 / 上半身跟随下盘偏航的比例（0 = 不跟随，1 = 与下盘同角度）。
+   *  移动时只有腿偏转、胸不动会显得上下身拧巴，取约 0.4~0.5 更自然。 */
+  chestYawScale: number;
+  /** v9o：胸偏航上限（度），防止下盘大角度带转时上半身被拧过头。 */
+  chestYawMaxDeg: number;
 };
 
 /* ---------------- 程序动画分层 / 落地缓冲（v8c，纯表现层） ---------------- */

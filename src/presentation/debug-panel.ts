@@ -87,6 +87,14 @@ export function createDebugPanel(
   gaitF.add(view.gait, 'hipLean', 0, 0.6, 0.01).name('侧移侧倾 (rad)');
   gaitF.add(view.gait, 'armSwing', 0, 2, 0.05).name('手臂对侧摆');
 
+  // v9o：低速滑行修复 + 胸朝向带转，参数可直接热调 / 拉 0 对照旧行为
+  const v9oF = gui.addFolder('停步 / 胸朝向 (v9o)');
+  v9oF.add(view.gait, 'stopBlendSec', 0, 0.8, 0.02).name('停步收相时长 (s)');
+  v9oF.add(view.gait, 'stopEnterRatio', 0.01, 0.4, 0.01).name('进入收相速度比');
+  v9oF.add(view.gait, 'stopExitRatio', 0.05, 0.8, 0.01).name('退出收相速度比');
+  v9oF.add(view.gait, 'chestYawScale', 0, 1.5, 0.05).name('胸随下盘偏转比例');
+  v9oF.add(view.gait, 'chestYawMaxDeg', 0, 90, 1).name('胸偏转上限 (度)');
+
   // v8c/v8d：攻击下半身两条路径 + 跳跃 / 落地蓄力缓冲，热改即时生效，方便 0↔1 直接对比效果
   //   gw=1 / lw=0（默认）：过滤掉挥击跨步，下盘由「攻击等效步态」接管并持续摆动
   //   gw=0 / lw=1：只叠加单次挥击跨步，连击左右脚交替

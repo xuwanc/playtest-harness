@@ -569,7 +569,11 @@
       "stopBlendSec": 0.3,
       "strafeHipBoost": 0.6,
       "strafeHipScale": 0.7,
-      "strafeHipMaxDeg": 62
+      "strafeHipMaxDeg": 62,
+      "stopEnterRatio": 0.08,
+      "stopExitRatio": 0.18,
+      "chestYawScale": 0.45,
+      "chestYawMaxDeg": 32
     },
     "animation": {
       "attack": {
