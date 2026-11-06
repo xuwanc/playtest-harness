@@ -20,6 +20,8 @@ const EMPTY_FRAME: InputFrame = {
   stickRawX: 0,
   stickRawY: 0,
   stickHeld: false,
+  aimDX: 0,
+  aimDY: 0,
   source: 'idle',
   tap: null,
   zoomScale: 1,

@@ -189,6 +189,23 @@ describe('v9i 按钮点按 vs 拖拽瞄准', () => {
     expect(glow.intents.aimZ).toBeCloseTo(held.intents.aimZ, 6);
   });
 
+  it('pointerdown 给 (0,0) 的坏基准：用第一个真实 move 重取，不产生「左上角→手指」巨向量', () => {
+    const r = setup();
+    // 某些 WebView / 合成事件会在按下时给出 (0,0)
+    btnDown(r, 'skill2', 2, 0, 0);
+    btnMove(r, 2, 330, 700);                  // 首个真实坐标：只当基准，不算位移
+    const first = r.input.sample();
+    expect(first.aimDX).toBe(0);
+    expect(first.aimDY).toBe(0);
+    expect(first.intents.aimActive).toBe(false);
+
+    btnMove(r, 2, 370, 700);                  // 再拖 40px 才产生有效方向
+    const second = r.input.sample();
+    expect(second.aimDX).toBeCloseTo(40, 6);
+    expect(second.aimDY).toBeCloseTo(0, 6);
+    expect(second.intents.aimActive).toBe(true);
+  });
+
   it('两个按钮各自 13px 抖动都不产生 aim（攻击 / 技能2 一视同仁）', () => {
     const r = setup();
     for (const k of ['attack', 'skill2']) {

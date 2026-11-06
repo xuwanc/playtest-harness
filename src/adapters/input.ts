@@ -36,6 +36,13 @@ export type InputFrame = {
   stickRawX: number;
   stickRawY: number;
   stickHeld: boolean;
+  /**
+   * v9j：辅助瞄准的原始屏幕向量（相对按钮按下点，单位 CSS px）。
+   * 诊断用：日志里能直接看出「这个方向是从哪个基准量出来的」——
+   * 若长度像几百 px，说明基准被污染（如 pointerdown 给 (0,0)），而不是玩家真拖了那么远。
+   */
+  aimDX: number;
+  aimDY: number;
   source: string;
   /** 一次「轻点」（按下到抬起位移 < 8px），由组装层拿去做假人射线拾取 */
   tap: Tap | null;
@@ -129,6 +136,13 @@ export function createInput(opts: InputOptions): InputAdapter {
   let aimDY = 0;
   /** 本次按下期间是否已拖出确认阈值 —— 没确认过就是点按，抖动向量一律不生效 */
   let aimArmed = false;
+  /**
+   * v9j：按下点是否是可用的基准。
+   * 部分 WebView / 合成事件会在 pointerdown 给出 (0,0)；按钮不可能在屏幕左上角，
+   * 此时若照用，aim 向量就变成「屏幕左上角 → 手指」的几百 px 向量，
+   * 看起来像「摇杆向量和按钮位置被合并了」。标记为无效，等第一个真实 move 再取基准。
+   */
+  let aimStartValid = true;
   /** 最近一次松手时间（performance.now）；< 0 表示从未松手 */
   let aimReleaseAt = -1;
 
@@ -235,6 +249,7 @@ export function createInput(opts: InputOptions): InputAdapter {
     aimDX = 0;
     aimDY = 0;
     aimArmed = false;
+    aimStartValid = true;
   }
   const onVisibility = (): void => {
     if (document.hidden) releaseAllInputs();
@@ -274,8 +289,17 @@ export function createInput(opts: InputOptions): InputAdapter {
       const phantom = (e.pointerType === 'mouse' && e.buttons === 0)
         || (e.clientX === 0 && e.clientY === 0 && (aimStartX !== 0 || aimStartY !== 0));
       if (!phantom) {
-        aimDX = e.clientX - aimStartX;
-        aimDY = e.clientY - aimStartY;
+        if (!aimStartValid) {
+          // 基准不可用：把这个点当作起点，本帧位移记 0（不产生假方向）
+          aimStartX = e.clientX;
+          aimStartY = e.clientY;
+          aimStartValid = true;
+          aimDX = 0;
+          aimDY = 0;
+        } else {
+          aimDX = e.clientX - aimStartX;
+          aimDY = e.clientY - aimStartY;
+        }
       }
     }
 
@@ -385,6 +409,7 @@ export function createInput(opts: InputOptions): InputAdapter {
         aimPointerId = e.pointerId;
         aimStartX = e.clientX;
         aimStartY = e.clientY;
+        aimStartValid = !(e.clientX === 0 && e.clientY === 0);
         aimDX = 0;
         aimDY = 0;
         aimArmed = false;
@@ -611,6 +636,7 @@ export function createInput(opts: InputOptions): InputAdapter {
       return {
         intents, stickX: sx, stickY: sy,
         stickRawX: rawSx, stickRawY: rawSy, stickHeld: stickId !== null,
+        aimDX, aimDY,
         source, tap, zoomScale, gestures, lastGesture,
       };
     },

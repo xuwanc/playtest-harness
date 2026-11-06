@@ -465,7 +465,8 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
         const explained = residual !== null && (residual <= 12 || converging);
         if (deltaDeg > opt.aimDropDeg && dropAim) {
           pushAnomaly('aimDrop', t, world.tick, 0,
-            `${deltaDeg.toFixed(0)}° @aim→none stick(${frame.stickX.toFixed(2)},${frame.stickY.toFixed(2)}) fl=${flagsToText(flags)}`, row);
+            `${deltaDeg.toFixed(0)}° @aim→none stick(${frame.stickX.toFixed(2)},${frame.stickY.toFixed(2)})`
+            + ` aim(${frame.aimDX.toFixed(0)},${frame.aimDY.toFixed(0)}) fl=${flagsToText(flags)}`, row);
         } else if (deltaDeg > opt.dirJumpDeg && busyF === 0 && !dropAim) {
           if (explained) {
             // 玩家自己拨的杆（含锁定解除后归位、松手后重新指方向）：不计异常，但要可见
@@ -473,7 +474,8 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
             if (deltaDeg > stats.inTurnMax) stats.inTurnMax = deltaDeg;
           } else {
             pushAnomaly('dirJump', t, world.tick, 0,
-              `${deltaDeg.toFixed(0)}° res${residual === null ? ' 无输入' : `${residual.toFixed(0)}°`} yaw ${deg1(prevYaw)}→${deg1(yaw)} in ${inYaw === null ? '.' : deg1(inYaw)}° mvΔ${moveDelta.toFixed(0)}° fl=${flagsToText(prevFlags)}→${flagsToText(flags)}`, row);
+              `${deltaDeg.toFixed(0)}° res${residual === null ? ' 无输入' : `${residual.toFixed(0)}°`} yaw ${deg1(prevYaw)}→${deg1(yaw)} in ${inYaw === null ? '.' : deg1(inYaw)}° mvΔ${moveDelta.toFixed(0)}°`
+              + ` aim(${frame.aimDX.toFixed(0)},${frame.aimDY.toFixed(0)}) fl=${flagsToText(prevFlags)}→${flagsToText(flags)}`, row);
           }
         }
       }
