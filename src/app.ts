@@ -8,6 +8,7 @@ import { CORE_CONFIG, SCENE_CONFIG, VIEW_CONFIG } from './config';
 import { createDebugPanel } from './presentation/debug-panel';
 import type { DebugState } from './presentation/debug-panel';
 import { createHud } from './presentation/hud';
+import { createOverlayFold } from './presentation/overlay-fold';
 import { createSceneView } from './presentation/three-scene';
 
 const EMPTY_FRAME: InputFrame = {
@@ -29,6 +30,8 @@ export function startApp(): void {
   const view = createSceneView(container, world, VIEW_CONFIG);
   const clock = createClock(world);
   const hud = createHud(hudEl);
+  // v9c：状态读数 / 操作说明默认收起，开始操作自动收回
+  const fold = createOverlayFold(hudEl, document.getElementById('hint'));
 
   const debug: DebugState = {
     timeScale: 1,
@@ -126,7 +129,7 @@ export function startApp(): void {
       hurt: diag.hurt,
       ik: diag.ik,
       zoom: diag.camera.zoom,
-    });
+    }, fold.hudCompact());
     requestAnimationFrame(frame);
   }
 

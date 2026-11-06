@@ -26,6 +26,8 @@ export type Hud = {
   update(
     world: World, fps: number, steps: number, input: InputFrame, debug: DebugState,
     anim?: AnimDiagnostics,
+    /** v9c：收起态只输出一行摘要，避免长时间占屏挡操作；展开态输出完整读数 */
+    compact?: boolean,
   ): void;
 };
 
@@ -41,7 +43,7 @@ const MODE_LABELS: Record<DummyMode, string> = {
 /** 纯文本状态面板，用来「看见」Core 的状态；不绘制摇杆 UI。 */
 export function createHud(el: HTMLElement): Hud {
   return {
-    update(world, fps, steps, input, debug, anim): void {
+    update(world, fps, steps, input, debug, anim, compact = false): void {
       const c = world.character;
       const p = c.position;
       const v = c.velocity;
@@ -101,6 +103,13 @@ export function createHud(el: HTMLElement): Hud {
       const dummies = world.dummies
         .map((s) => `${s.id}:${MODE_LABELS[s.mode]}`)
         .join('  ');
+
+      // v9c：收起态只输出一行摘要。长时间跑动 / 连击时完整读数会一直压在左上角，
+      // 手机竖屏最明显；默认收起，点「状态」才展开完整读数，开始操作自动收回。
+      if (compact) {
+        el.textContent = `t${world.tick} ${fps.toFixed(0)}fps · ${label} ${cb.phase} · lk ${lk.phase}${lk.kind ? `/${lk.kind}` : ''} w${f(lk.linkWindow)} · hit ${world.hitCount}`;
+        return;
+      }
 
       // 竖屏空间有限：用短版 HUD（7 行、窄宽），避免压住顶部武器条与调试面板标题栏
       const portrait = window.innerHeight > window.innerWidth;
