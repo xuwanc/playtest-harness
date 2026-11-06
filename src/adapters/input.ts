@@ -55,6 +55,20 @@ export type InputFrame = {
   stickPxY: number;
   /** v9l：累计被拦截的可疑指针事件数（幻影 (0,0) / 单帧坐标跳变） */
   stickBad: number;
+  /**
+   * v9m：摇杆实际使用的坐标源。
+   * - `stickScreenOk` 为 true 时，方向由**物理屏幕坐标**（screenX/Y）算出，
+   *   免疫浏览器工具栏收放造成的 client 坐标漂移；
+   * - 否则回落到 client 坐标（并用「坐标系平移吸收」兜底）。
+   * 诊断时这四个值是判断「到底哪套坐标在漂」的唯一依据。
+   */
+  stickScreenOk: boolean;
+  stickOriginSX: number;
+  stickOriginSY: number;
+  stickScreenX: number;
+  stickScreenY: number;
+  /** screen ↔ client 的尺度比（部分浏览器 screen 是物理像素），自适应估计 */
+  stickScale: number;
   /** v9l：本帧起「视口刚变化过」的毫秒数（-1 = 从未变化），诊断用 */
   stickVpAge: number;
   /** v9l：本帧 visualViewport.offsetTop（地址栏收放会让它整体移动，诊断用） */
@@ -83,6 +97,9 @@ export type InputAdapter = {
   peekStick(): {
     id: number | null; held: boolean; originX: number; originY: number;
     x: number; y: number; dx: number; dy: number; radius: number; badMoves: number;
+    /** v9m：方向是否由物理屏幕坐标计算，以及屏幕坐标那一套的原始值 */
+    screenOk: boolean; originSX: number; originSY: number;
+    screenX: number; screenY: number; scale: number;
   };
   /** v9d：只读当前辅助瞄准状态（不消费边沿），供调试面板 / 自动化验收 / 技能层查询 */
   peekAim(): { active: boolean; holding: boolean; x: number; z: number; dx: number; dy: number };
@@ -166,11 +183,28 @@ export function createInput(opts: InputOptions): InputAdapter {
   let lastMoveAt = 0;
   /** v9l：最近一次视口变化（地址栏收放 / 转屏 / 键盘）的时刻 */
   let vpChangedAt = -1;
-  /** v9l：上一帧的屏幕（物理）坐标，用来辨别 client 坐标系是否整体平移 */
-  let lastScreenX: number | null = null;
-  let lastScreenY: number | null = null;
   /** v9l：被丢弃的可疑指针事件数（幻影 (0,0) / 物理上不可能的瞬移），进诊断摘要 */
   let badMoves = 0;
+
+  // ---- v9m 摇杆坐标源 ----
+  /** 按下瞬间的物理屏幕坐标（与 client 原点各存一套） */
+  let originSX = 0;
+  let originSY = 0;
+  /** 上一次被接受的物理屏幕坐标 */
+  let stickPosSX = 0;
+  let stickPosSY = 0;
+  /**
+   * 本根手指是否用屏幕坐标算方向。
+   * 鸿蒙自带浏览器在工具栏收放（平滑动画，每帧只动几像素）时会把 clientY 整体平移
+   * 几十像素，正好等于一个摇杆半径；任何「跳变阈值」都抓不到，但 screenX/Y 相对
+   * 物理屏幕，页面重排完全不影响 —— 用它算方向，这类漂移在物理上不可能发生。
+   */
+  let screenOk = false;
+  /** 连续「client 在动、screen 不动」的次数：达到阈值说明该浏览器 screen 不更新，回退 */
+  let screenStale = 0;
+  /** screen 与 client 的尺度比（部分浏览器 screen 用物理像素），用同向移动自适应校准 */
+  let screenScale = 1;
+  let scaleSamples = 0;
 
   // tap 判定：非 UI 区域按下后几乎不移动地抬起，视为一次点击
   let tapId: number | null = null;
@@ -254,7 +288,12 @@ export function createInput(opts: InputOptions): InputAdapter {
         rawDY = 0;
         stickPxX = p.x;
         stickPxY = p.y;
-          lastMoveAt = performance.now();
+        // 接手时只有 client 坐标可用，屏幕基准未知 → 本根手指先走 client 路径
+        screenOk = false;
+        screenStale = 0;
+        screenScale = 1;
+        scaleSamples = 0;
+        lastMoveAt = performance.now();
         tapId = null;
         tapMoved = true;
         pendingTap = null;
@@ -299,6 +338,14 @@ export function createInput(opts: InputOptions): InputAdapter {
     rawDY = 0;
     stickPxX = 0;
     stickPxY = 0;
+    screenOk = false;
+    screenStale = 0;
+    screenScale = 1;
+    scaleSamples = 0;
+    originSX = 0;
+    originSY = 0;
+    stickPosSX = 0;
+    stickPosSY = 0;
     tapId = null;
     tapMoved = false;
     pendingTap = null;
@@ -332,8 +379,17 @@ export function createInput(opts: InputOptions): InputAdapter {
       stickPxX = e.clientX;
       stickPxY = e.clientY;
       lastMoveAt = performance.now();
-      lastScreenX = typeof e.screenX === 'number' && (e.screenX !== 0 || e.screenY !== 0) ? e.screenX : null;
-      lastScreenY = lastScreenX === null ? null : e.screenY;
+      // v9m：这一刻起同时维护「物理屏幕坐标」基准。screen 全零 / 非数值视为该浏览器不支持。
+      const hasScreen = Number.isFinite(e.screenX) && Number.isFinite(e.screenY)
+        && ((e.screenX as number) !== 0 || (e.screenY as number) !== 0);
+      screenOk = hasScreen;
+      screenStale = 0;
+      screenScale = 1;
+      scaleSamples = 0;
+      originSX = hasScreen ? (e.screenX as number) : 0;
+      originSY = hasScreen ? (e.screenY as number) : 0;
+      stickPosSX = originSX;
+      stickPosSY = originSY;
       tapId = e.pointerId;
       tapStartX = e.clientX;
       tapStartY = e.clientY;
@@ -392,36 +448,72 @@ export function createInput(opts: InputOptions): InputAdapter {
       badMoves++;
       return;
     }
-    const px = ptX - stickPxX;
-    const py = ptY - stickPxY;
-    // 坐标跳变的两个独立证据（都不依赖「手指最大速度」这种拍脑袋阈值）：
-    //  A. 跳变发生在视口刚变化之后（地址栏收放 / 键盘弹出 / 转屏都会先发 resize / scroll）；
-    //  B. 物理屏幕上几乎没动（screenX/Y），但 client 坐标跑了几十像素 —— 典型就是坐标系平移。
-    // 命中任一条就把它当成坐标系平移：原点跟着平移同样的量，d = 手指 - 原点 保持原值。
-    const jumpLen = Math.hypot(px, py);
-    const sinceVp = vpChangedAt < 0 ? Number.POSITIVE_INFINITY : nowMove - vpChangedAt;
-    const sx = typeof e.screenX === 'number' ? e.screenX : 0;
-    const sy = typeof e.screenY === 'number' ? e.screenY : 0;
-    const haveScreen = sx !== 0 || sy !== 0;
-    const screenMoved = haveScreen && lastScreenX !== null
-      ? Math.hypot(sx - lastScreenX, sy - (lastScreenY ?? lastScreenX))
-      : Infinity;
-    const coordsShifted = jumpLen > 28 && (sinceVp < 200 || screenMoved < jumpLen * 0.4);
-    if (coordsShifted) {
-      originX += px;
-      originY += py;
-      badMoves++;
+    const cpx = ptX - stickPxX;
+    const cpy = ptY - stickPxY;
+    const hasScreen = Number.isFinite(e.screenX) && Number.isFinite(e.screenY);
+    const sX = hasScreen ? (e.screenX as number) : 0;
+    const sY = hasScreen ? (e.screenY as number) : 0;
+    // 全零的 screen 是「不支持」而不是「在屏幕左上角」：不能拿它当「物理屏幕没动」的证据，
+    // 否则回退路径会把正常的 client 移动误判成坐标系平移（摇杆直接失效）。
+    const screenValid = hasScreen && (sX !== 0 || sY !== 0);
+    const spx = sX - stickPosSX;
+    const spy = sY - stickPosSY;
+
+    // v9m：先确认「这个浏览器的 screen 坐标到底跟不跟手指」。
+    // 真实移动时 sLen 必然 > 0；若 client 一直在动而 screen 纹丝不动，说明该浏览器
+    // 只是把 client 抄进 screen（或恒为 0），必须回退，否则摇杆会被冻死。
+    if (screenOk && screenValid) {
+      const sLen = Math.hypot(spx, spy);
+      const cLen = Math.hypot(cpx, cpy);
+      if (sLen > 3) {
+        screenStale = 0;
+        // 尺度校准只取「两套坐标同向」的样本，避免被 client 漂移污染
+        if (scaleSamples < 30 && cLen > 6 && spx * cpx + spy * cpy > 0.7 * sLen * cLen) {
+          const ratio = sLen / cLen;
+          if (ratio > 0.2 && ratio < 5) {
+            screenScale += (ratio - screenScale) * 0.3;
+            scaleSamples++;
+          }
+        }
+      } else if (cLen > 12) {
+        screenStale++;
+        if (screenStale >= 2) screenOk = false;
+      }
     }
+
+    const jumpLen = Math.hypot(cpx, cpy);
+    if (!screenOk) {
+      // 回退路径（v9l）：抓「坐标系平移」——视口刚变过，或物理屏幕没动而 client 跑了几十像素。
+      // 命中就把原点平移同样的量，d = 手指 − 原点 保持原值。
+      const sinceVp = vpChangedAt < 0 ? Number.POSITIVE_INFINITY : nowMove - vpChangedAt;
+      const screenMoved = screenValid ? Math.hypot(spx, spy) : Infinity;
+      if (jumpLen > 28 && (sinceVp < 200 || screenMoved < jumpLen * 0.4)) {
+        originX += cpx;
+        originY += cpy;
+        badMoves++;
+      }
+    }
+
     lastMoveAt = nowMove;
     stickPxX = ptX;
     stickPxY = ptY;
-    lastScreenX = haveScreen ? sx : null;
-    lastScreenY = haveScreen ? sy : null;
+    stickPosSX = sX;
+    stickPosSY = sY;
     if (e.pointerId === tapId && Math.hypot(e.clientX - tapStartX, e.clientY - tapStartY) > TAP_SLOP_PX) {
       tapMoved = true;
     }
-    let dx = ptX - originX;
-    let dy = ptY - originY;
+
+    // v9m：方向优先取屏幕坐标（相对物理屏幕，工具栏收放 / 页面重排都不影响它）。
+    // 除以自适应尺度比，把「物理像素」还原成与 client 同量纲的 CSS px，摇杆半径阈值才能通用。
+    let dx: number;
+    let dy: number;
+    if (screenOk && screenValid) {
+      dx = (sX - originSX) / screenScale;
+      dy = (sY - originSY) / screenScale;
+    } else {
+      dx = ptX - originX;
+      dy = ptY - originY;
+    }
     const len = Math.hypot(dx, dy);
     const r = radius();
     if (len > r) {
@@ -484,8 +576,14 @@ export function createInput(opts: InputOptions): InputAdapter {
       rawDY = 0;
       stickPxX = 0;
       stickPxY = 0;
-      lastScreenX = null;
-      lastScreenY = null;
+      screenOk = false;
+      screenStale = 0;
+      screenScale = 1;
+      scaleSamples = 0;
+      originSX = 0;
+      originSY = 0;
+      stickPosSX = 0;
+      stickPosSY = 0;
     }
   };
 
@@ -634,6 +732,10 @@ export function createInput(opts: InputOptions): InputAdapter {
         dx: stickPxX - originX, dy: stickPxY - originY,
         radius: radius(),
         badMoves,
+        screenOk,
+        originSX, originSY,
+        screenX: stickPosSX, screenY: stickPosSY,
+        scale: screenScale,
       };
     },
 
@@ -768,6 +870,10 @@ export function createInput(opts: InputOptions): InputAdapter {
         stickRawX: rawSx, stickRawY: rawSy, stickHeld: stickId !== null,
         stickId, stickOriginX: originX, stickOriginY: originY, stickPxX, stickPxY,
         stickBad: badMoves,
+        stickScreenOk: screenOk,
+        stickOriginSX: originSX, stickOriginSY: originSY,
+        stickScreenX: stickPosSX, stickScreenY: stickPosSY,
+        stickScale: screenScale,
         stickVpTop: currentViewportOrigin()?.top ?? 0,
         stickVpAge: vpChangedAt < 0 ? -1 : Math.round(performance.now() - vpChangedAt),
         aimDX, aimDY,

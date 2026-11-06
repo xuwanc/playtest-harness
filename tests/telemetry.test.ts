@@ -15,7 +15,9 @@ function frame(p: Partial<InputFrame> = {}): InputFrame {
   return {
     intents: intent(),
     stickX: 0, stickY: 0, stickRawX: 0, stickRawY: 0, stickHeld: false,
-    stickId: null, stickOriginX: 0, stickOriginY: 0, stickPxX: 0, stickPxY: 0, stickBad: 0, stickVpTop: 0, stickVpAge: -1,
+    stickId: null, stickOriginX: 0, stickOriginY: 0, stickPxX: 0, stickPxY: 0, stickBad: 0,
+    stickScreenOk: false, stickOriginSX: 0, stickOriginSY: 0,
+    stickScreenX: 0, stickScreenY: 0, stickScale: 1, stickVpTop: 0, stickVpAge: -1,
     aimDX: 0, aimDY: 0,
     source: 'idle', tap: null, zoomScale: 1, gestures: [], lastGesture: null,
     ...p,

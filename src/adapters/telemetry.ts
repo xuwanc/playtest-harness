@@ -52,6 +52,8 @@ export const ROW_COLUMNS = [
   'mx', 'mz', 'px', 'pz', 'vx', 'vz', 'yaw', 'body', 'fl', 'stride', 'inYaw',
   // v9l：摇杆的「身份 + 原点 + 手指当前位置」。只加在末尾，旧 dump 仍可按位置读。
   'pid', 'ox', 'oy', 'fx', 'fy', 'bad', 'vvt',
+  // v9m：屏幕（物理）坐标那一套 —— 「client 漂了没有」靠它和 ox/fx 对比就能看出来。
+  'osx', 'osy', 'fsx', 'fsy', 'scr', 'scl',
 ] as const;
 const COL_T = 0;
 const COL_YAW = 15;
@@ -69,6 +71,11 @@ const COL_FX = 23;
 const COL_FY = 24;
 const COL_BAD = 25;
 const COL_VVT = 26;
+const COL_OSX = 27;
+const COL_OSY = 28;
+const COL_FSX = 29;
+const COL_FSY = 30;
+const COL_SCR = 31;
 
 export type TelemetryRow = (number | string)[];
 
@@ -102,7 +109,12 @@ export type AnomalyKind =
    */
   | 'stickJump'
   /** v9l：幻影 (0,0) 或物理上不可能的瞬移被守卫丢掉（有计数就说明真机上确实在发生） */
-  | 'stickBad';
+  | 'stickBad'
+  /**
+   * v9m：client 坐标相对物理屏幕发生了漂移（浏览器工具栏收放 / 地址栏动画）。
+   * 方向不受影响（已用屏幕坐标校正），但这条记录证明「漂移真的在发生、漂了多少」。
+   */
+  | 'stickDrift';
 
 export type TelemetryAnomaly = {
   kind: AnomalyKind;
@@ -148,6 +160,10 @@ export type TelemetryStats = {
   /** v9l：手指没动方向却变了 / 被丢弃的可疑指针事件 */
   stickJumps: number;
   stickBads: number;
+  stickDrifts: number;
+  /** v9m：摇杆按住期间，方向由屏幕坐标 / client 坐标计算的帧数 */
+  screenFrames: number;
+  clientFrames: number;
 };
 
 export type TelemetryDump = {
@@ -293,7 +309,8 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
     channels: 0, bolts: 0, rings: 0, bowCharges: 0,
     inTurns: 0, inTurnMax: 0,
     dirJumps: 0, aimDrops: 0, freezes: 0, stickLosts: 0,
-    stickJumps: 0, stickBads: 0,
+    stickJumps: 0, stickBads: 0, stickDrifts: 0,
+    screenFrames: 0, clientFrames: 0,
   };
 
   let enabled = true;
@@ -312,7 +329,16 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
   let suspendUntil = -1;
   let lastAnomalyAt: Record<string, number> = {};
   /** v9l：上一帧的摇杆身份 / 原点 / 手指位置，用来判「手指没动方向却变了」 */
-  let prevStick: { id: number | null; ox: number; oy: number; x: number; y: number; dx: number; dy: number; held: boolean } | null = null;
+  let prevStick: {
+    id: number | null; ox: number; oy: number;
+    /** 当前用于算方向的那套坐标（screen 或 client），已按尺度比归一 */
+    cx: number; cy: number;
+    /** 两套原始坐标，用来量「client 相对物理屏幕漂了多少」 */
+    x: number; y: number; sx: number; sy: number;
+    dx: number; dy: number; held: boolean; screenOk: boolean;
+  } | null = null;
+  /** v9m：累计的 client↔screen 漂移量（px），超过阈值报一次后清零 */
+  let driftAccum = 0;
   let prevBad = 0;
   /** 最近一次 sample 的模拟时间 / tick：手势事件不经过 step，用它们对齐时间轴 */
   let curT = 0;
@@ -351,6 +377,7 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
     else if (kind === 'stickLost') stats.stickLosts++;
     else if (kind === 'stickJump') stats.stickJumps++;
     else if (kind === 'stickBad') stats.stickBads++;
+    else if (kind === 'stickDrift') stats.stickDrifts++;
   }
 
   function pushEvent(k: string, d: string, t: number, tick: number): void {
@@ -393,9 +420,9 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
     lines.push(`法杖 引导${s.channels} 飞弹${s.bolts} 电环${s.rings} · 弓蓄力${s.bowCharges} · 当前武器 ${lastWeapon || '-'}`);
     // 数量用「计数」而不是「缓冲条数」：掉帧条目有 6 条上限，用缓冲长度会写出
     // 「异常 3（spike 29）」这种自相矛盾的行。
-    lines.push(`异常 ${s.dirJumps + s.aimDrops + s.freezes + s.stickLosts + s.stickJumps + s.stickBads}`
+    lines.push(`异常 ${s.dirJumps + s.aimDrops + s.freezes + s.stickLosts + s.stickJumps + s.stickBads + s.stickDrifts}`
       + `（dir ${s.dirJumps} / aim ${s.aimDrops} / freeze ${s.freezes} / stick ${s.stickLosts}`
-      + ` / stickJump ${s.stickJumps} / 坏指针 ${s.stickBads}）`
+      + ` / stickJump ${s.stickJumps} / 坏指针 ${s.stickBads} / 坐标漂移 ${s.stickDrifts}）`
       + ` · 掉帧尖峰 ${s.spikes}`
       + (s.inTurns > 0 ? ` · 输入转向 ${s.inTurns} 次（最大 ${s.inTurnMax.toFixed(0)}°）` : ''));
     if (anomalies.length > 0) {
@@ -418,6 +445,13 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
       lines.push('最近事件：');
       for (const e of events.slice(-12)) lines.push(`  ${e.t.toFixed(2)} ${e.k} ${e.d}`.trimEnd());
     }
+    // v9m：这一行决定「下次还坏」时该往哪儿查 ——
+    // 屏幕坐标生效说明漂移已被物理免疫；全是 client 说明该浏览器不给 screenX/Y，需要换方案。
+    const src = stats.screenFrames > 0
+      ? `屏幕 screenX/Y（${stats.screenFrames} 帧）`
+      : 'client（该浏览器未提供可用屏幕坐标）';
+    const fb = stats.screenFrames > 0 && stats.clientFrames > 0 ? ` / client 回退 ${stats.clientFrames} 帧` : '';
+    lines.push(`摇杆坐标源 ${src}${fb}`);
     lines.push(`UA ${meta.ua}`);
     return lines.join('\n');
   }
@@ -425,6 +459,10 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
   return {
     sample(world: World, frame: InputFrame, dtMs: number, steps = 0): void {
       stats.frames++;
+      if (frame.stickHeld) {
+        if (frame.stickScreenOk) stats.screenFrames++;
+        else stats.clientFrames++;
+      }
       stats.steps += steps;
       stats.wallMs += dtMs;
       if (dtMs > stats.dtMax) stats.dtMax = dtMs;
@@ -462,6 +500,9 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
         Math.round(frame.stickOriginX), Math.round(frame.stickOriginY),
         Math.round(frame.stickPxX), Math.round(frame.stickPxY),
         frame.stickBad, Math.round(frame.stickVpTop),
+        Math.round(frame.stickOriginSX), Math.round(frame.stickOriginSY),
+        Math.round(frame.stickScreenX), Math.round(frame.stickScreenY),
+        frame.stickScreenOk ? 1 : 0, Math.round(frame.stickScale * 100) / 100,
       ];
       pushRow(row, false);
 
@@ -552,35 +593,61 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
         stickLostStart = -1;
       }
 
-      // 5) v9l：摇杆读数自洽性 —— 手指几乎没动，方向却转了
-      const sdx = frame.stickPxX - frame.stickOriginX;
-      const sdy = frame.stickPxY - frame.stickOriginY;
+      // 5) v9l/v9m：摇杆读数自洽性 —— 手指几乎没动，方向却转了。
+      // 方向由哪套坐标算就用哪套判：v9m 起方向优先走物理屏幕坐标，
+      // 若仍拿 client 判定，屏幕坐标正常工作这件事本身会被 client 漂移误报成异常。
+      const sc = frame.stickScale > 0.2 && frame.stickScale < 5 ? frame.stickScale : 1;
+      const useScreen = frame.stickScreenOk;
+      const cX = useScreen ? frame.stickScreenX / sc : frame.stickPxX;
+      const cY = useScreen ? frame.stickScreenY / sc : frame.stickPxY;
+      const oX = useScreen ? frame.stickOriginSX / sc : frame.stickOriginX;
+      const oY = useScreen ? frame.stickOriginSY / sc : frame.stickOriginY;
+      const sdx = cX - oX;
+      const sdy = cY - oY;
       if (frame.stickHeld && frame.stickId !== null) {
         const p = prevStick;
         if (p && p.held && p.id === frame.stickId) {
           const len0 = Math.hypot(p.dx, p.dy);
           const len1 = Math.hypot(sdx, sdy);
           const base = Math.max(len0, len1);
-          const dMove = Math.hypot(frame.stickPxX - p.x, frame.stickPxY - p.y);
+          const dMove = Math.hypot(cX - p.cx, cY - p.cy);
           const dAng = Math.abs(deg1(wrapPi(Math.atan2(sdy, sdx) - Math.atan2(p.dy, p.dx))));
           // 转过 dAng 度、半径 base 的手指至少要走过 base·dAng 的弧长
           const arc = (base * dAng * Math.PI) / 180;
-          const originMoved = Math.hypot(frame.stickOriginX - p.ox, frame.stickOriginY - p.oy);
+          const originMoved = Math.hypot(oX - p.ox, oY - p.oy);
           if (base > 18 && dAng > 35 && dMove < Math.max(5, arc * 0.35)) {
             pushAnomaly('stickJump', t, world.tick, 0,
               `Δ${dAng.toFixed(0)}° 手指只动${dMove.toFixed(0)}px(弧长应${arc.toFixed(0)}px)`
-              + ` o(${Math.round(p.ox)},${Math.round(p.oy)})→(${Math.round(frame.stickOriginX)},${Math.round(frame.stickOriginY)})`
-              + ` 原点位移${originMoved.toFixed(0)}px p(${Math.round(frame.stickPxX)},${Math.round(frame.stickPxY)})`
+              + ` o(${Math.round(p.ox)},${Math.round(p.oy)})→(${Math.round(oX)},${Math.round(oY)})`
+              + ` 原点位移${originMoved.toFixed(0)}px p(${Math.round(cX)},${Math.round(cY)})`
               + ` raw(${Math.round(sdx)},${Math.round(sdy)}) id${frame.stickId}`
-              + ` vvt${Math.round(frame.stickVpTop)}`, row);
+              + ` ${useScreen ? 'src=屏幕' : 'src=client'}`, row);
+          }
+          // v9m：client 与物理屏幕之间的位移差 —— 这就是「浏览器工具栏收放」的可观测证据。
+          // 差值会在一段动画里被逐帧摊开（每帧几像素），所以用累计量而不是单帧阈值。
+          if (useScreen && p.screenOk) {
+            const dC = Math.hypot(frame.stickPxX - p.x, frame.stickPxY - p.y);
+            const dS = Math.hypot((frame.stickScreenX - p.sx) / sc, (frame.stickScreenY - p.sy) / sc);
+            driftAccum += dC - dS;
+            if (Math.abs(driftAccum) > 20) {
+              pushAnomaly('stickDrift', t, world.tick, 0,
+                `client 相对屏幕漂移 ${driftAccum > 0 ? '+' : ''}${driftAccum.toFixed(0)}px`
+                + `（方向未受影响，已按屏幕坐标校正）`
+                + ` client(${Math.round(frame.stickPxX)},${Math.round(frame.stickPxY)})`
+                + ` screen(${Math.round(frame.stickScreenX)},${Math.round(frame.stickScreenY)})`, row);
+              driftAccum = 0;
+            }
           }
         }
         prevStick = {
-          id: frame.stickId, ox: frame.stickOriginX, oy: frame.stickOriginY,
-          x: frame.stickPxX, y: frame.stickPxY, dx: sdx, dy: sdy, held: true,
+          id: frame.stickId, ox: oX, oy: oY, cx: cX, cy: cY,
+          x: frame.stickPxX, y: frame.stickPxY,
+          sx: frame.stickScreenX, sy: frame.stickScreenY,
+          dx: sdx, dy: sdy, held: true, screenOk: useScreen,
         };
       } else {
         prevStick = null;
+        driftAccum = 0;
       }
       // 6) v9l：幻影 / 瞬移守卫是否真的在丢事件
       if (frame.stickBad > prevBad) {
@@ -669,6 +736,10 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
       stats.stickLosts = 0;
       stats.stickJumps = 0;
       stats.stickBads = 0;
+      stats.stickDrifts = 0;
+      stats.screenFrames = 0;
+      stats.clientFrames = 0;
+      driftAccum = 0;
       prevStick = null;
       prevBad = 0;
       for (const k of Object.keys(stats.gestures)) delete stats.gestures[k];
@@ -678,7 +749,8 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
       const now = stats.simS;
       const alert = anomalies.some((a) => now - a.t < 8
         && (a.kind === 'dirJump' || a.kind === 'aimDrop' || a.kind === 'moveFreeze'
-          || a.kind === 'stickLost' || a.kind === 'stickJump' || a.kind === 'stickBad'));
+          || a.kind === 'stickLost' || a.kind === 'stickJump' || a.kind === 'stickBad'
+          || a.kind === 'stickDrift'));
       return {
         durationS: stats.wallMs / 1000,
         frames: stats.frames,
