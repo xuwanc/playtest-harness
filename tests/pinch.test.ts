@@ -11,15 +11,19 @@ import { CONFIG } from './helpers';
 const cfg: CameraZoomViewConfig = CONFIG.view.zoom;
 const p = (id: number, x: number, y: number): PinchPoint => ({ id, x, y });
 
-/** 把一串指针帧依次喂给解算器，累积总缩放比例并保留每一步读数。 */
-function gesture(frames: PinchPoint[][], gain = 1, maxStep = 10): {
+/**
+ * 把一串指针帧依次喂给解算器，累积总缩放比例并保留每一步读数。
+ * armPx 默认 0 = 关闭「有意手势」阈值（等价于 v8e 的直接等比例行为），
+ * 阈值相关语义由下面独立的用例覆盖。
+ */
+function gesture(frames: PinchPoint[][], gain = 1, maxStep = 10, armPx = 0): {
   total: number; steps: PinchStep[]; state: PinchState;
 } {
   let state = initialPinchState();
   let total = 1;
   const steps: PinchStep[] = [];
   for (const points of frames) {
-    const step = solvePinch(state, points, gain, maxStep);
+    const step = solvePinch(state, points, gain, maxStep, armPx);
     state = step.state;
     total *= step.scale;
     steps.push(step);
@@ -80,6 +84,30 @@ describe('v8e 双指捏合缩放：纯解算（零 DOM / 零外部时间）', ()
     expect(movedFirst.steps[1].scale).toBe(1);
     const movedLast = gesture([base, [p(1, 0, 0), p(2, 0, 0), p(3, 200, 0)]]);
     expect(movedLast.steps[1].scale).toBeCloseTo(2, 10);
+  });
+
+  it('v9e 有意手势阈值：两指轻蹭（<18px）不缩放也不确认手势', () => {
+    const g = gesture([
+      [p(1, 0, 0), p(2, 100, 0)],
+      [p(1, 0, 0), p(2, 112, 0)],   // +12px < 18 → 不算捏合
+      [p(1, 0, 0), p(2, 104, 0)],
+    ], 1, 10, 18);
+    expect(g.steps[1].scale).toBe(1);
+    expect(g.steps[1].pinching).toBe(false);
+    expect(g.steps[2].scale).toBe(1);
+    expect(g.total).toBe(1);
+  });
+
+  it('v9e 越过阈值才接管：armedNow 那一帧只重取基准，随后等比例缩放', () => {
+    const g = gesture([
+      [p(1, 0, 0), p(2, 100, 0)],
+      [p(1, 0, 0), p(2, 130, 0)],   // +30px ≥ 18 → armedNow，基准重置为 130
+      [p(1, 0, 0), p(2, 195, 0)],   // 1.5
+    ], 1, 10, 18);
+    expect(g.steps[1].armedNow).toBe(true);
+    expect(g.steps[1].pinching).toBe(true);
+    expect(g.steps[1].scale).toBe(1);
+    expect(g.steps[2].scale).toBeCloseTo(1.5, 10);
   });
 
   it('两指重合 / 距离为 0：不除零、不产生 NaN，恢复时从新基准起算', () => {

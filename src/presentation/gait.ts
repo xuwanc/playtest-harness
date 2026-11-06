@@ -20,6 +20,10 @@ import type { GaitViewConfig } from '../core';
 const TAU = Math.PI * 2;
 const EPS = 1e-6;
 
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
 export type GaitInput = {
   /** Core 累加的步态相位（连续单调，跨 2π 循环） */
   phase: number;
@@ -33,6 +37,12 @@ export type GaitInput = {
   localRight: number;
   /** 腿长（m），用于把「脚偏移」换算成髋部弧度 */
   legLength: number;
+  /**
+   * v9e：当前步幅（米 / 周期），由 Core 写入。
+   * 脚前伸距离 = stride × reachRatio，与相位推进速度严格配套 → 支撑脚世界位移为 0。
+   * 传 0 表示拿不到物理步幅（如攻击等效驱动），退回按速度估算摆幅的旧路径。
+   */
+  stride: number;
   grounded: boolean;
 };
 
@@ -75,17 +85,35 @@ function idle(): GaitPose {
 }
 
 /**
- * 单腿在一个步相周期内「脚相对髋」的偏移曲线（单位：米，返回归一化到 ±1）。
- * 全 C∞：cos(p) 为主摆，sin³(p) 为「支撑相脚锁定」修正，端点处 sin=0 不影响边界值，
- * 因此 stance→swing 过渡一阶/二阶都连续，不会出现抽动。
+ * 支撑相 / 摆动相的归一化脚偏移曲线（返回 −1..+1，1 = 脚在最前）。
  *
- *   p = 0      脚在最前（+1），支撑相开始
- *   p ∈ (0, π)  支撑相：sin>0 → sin³>0，把脚往身后压，抵消髋部前移 = 脚锁定
- *   p ∈ (π,2π) 摆动相：sin<0 → sin³<0，脚更快回摆到前方
+ *   p ∈ [0, π]   支撑相：脚从 +1 **线性**移到 −1，斜率恒为 −2/π。
+ *                线性是关键 —— 只要求解器把相位按 v / stride 推进、脚前伸距离取 stride/4，
+ *                脚相对身体的后退速度就恒等于身体前进速度，世界坐标下完全静止（零滑步）。
+ *                旧实现用 cos + sin³，中段最快、两端最慢，身体匀速前进时中段必然往前蹭。
+ *   p ∈ (π, 2π] 摆动相：三次 Hermite 从 −1 回到 +1，两端斜率都是 −2（对 p 是 −2/π），
+ *                与支撑相首尾斜率完全一致 → 全曲线 C¹ 连续，没有折角，不会抽动。
+ *
+ * 摆动相初段会有约 0.08 的「向后过冲」（脚趾离地后的跟随），这是保持 C¹ 的代价，
+ * 且发生在腾空阶段，不影响落地观感。
+ */
+function plantOffset(p: number): number {
+  if (p <= Math.PI) return 1 - (2 * p) / Math.PI;
+  const t = (p - Math.PI) / Math.PI;
+  return -8 * t * t * t + 12 * t * t - 2 * t - 1;
+}
+
+/**
+ * 单腿在一个步相周期内「脚相对髋」的偏移（归一化到 ±1）。
+ * plantLock 在「旧余弦曲线」与「零滑步曲线」之间线性插值，方便调试面板 A/B 对照。
+ * 两条曲线都是 C¹，凸组合仍 C¹，所以插值不会引入抽动。
  */
 function footOffset(p: number, plantLock: number): number {
-  const sp = Math.sin(p);
-  return Math.cos(p) - plantLock * 0.28 * sp * sp * sp;
+  const cos = Math.cos(p);
+  const k = plantLock <= 0 ? 0 : plantLock >= 1 ? 1 : plantLock;
+  if (k === 0) return cos;
+  const plant = plantOffset(p);
+  return k === 1 ? plant : cos + (plant - cos) * k;
 }
 
 /** 抬膝权重：支撑相中 ≈0、摆动相中 ≈1，C∞（由 sin 直接映射，无折点）。 */
@@ -97,7 +125,21 @@ export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
   if (!input.grounded || input.speed < EPS) return idle();
 
   const u = input.speed / Math.max(input.moveSpeed, EPS);
-  const amp = Math.min(cfg.maxAmp, u * cfg.strideGain);
+  const legLen = Math.max(input.legLength, EPS);
+
+  // v9e：脚前伸距离（米）。有物理步幅时取 stride × reachRatio（0.25 = 零滑步），
+  // 拿不到步幅（攻击等效驱动）才退回「摆幅随速度」的旧估算，保证 v8d 的攻击下盘观感不变。
+  const reach = input.stride > EPS
+    ? input.stride * cfg.reachRatio
+    : Math.min(cfg.maxAmp, u * cfg.strideGain) * legLen;
+  /** 摆幅（rad 等效），只用于抬膝 / 重心 / 摆臂等次级动作 */
+  const amp = Math.min(cfg.maxAmp, reach / legLen);
+  /**
+   * 脚可达半径（米）：髋转角的几何上限。超出即钳制（钳制段必然有滑步，只在冲刺时发生）。
+   * 1.25 rad（72°）是两骨 IK 仍能完全复现 FK 脚位的上限 —— 再大时摆动末期
+   * 脚位会逼近 IK 的奇异区，实测钉地残差从 0 跳到 3cm（脚会「弹」一下）。
+   */
+  const maxFoot = legLen * Math.sin(Math.min(cfg.maxAmp, 1.25));
 
   // 方向权重：用分量绝对值，符号单独交给 dirF / dirR 处理
   const af = Math.abs(input.localForward);
@@ -108,8 +150,11 @@ export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
   const dirF = input.localForward >= 0 ? 1 : -1; // 前进 +1 / 后退 -1
   const dirR = input.localRight >= 0 ? 1 : -1;   // 右移 +1 / 左移 -1
 
-  const legLen = Math.max(input.legLength, EPS);
-  const halfStride = amp * legLen;
+  const halfStride = reach;
+
+  /** 脚偏移 → 髋关节角：用 asin 反解，保证「渲染出来的脚」水平位移真的等于设计值。
+   *  线性近似（footLen / legLen）在 50° 以上会少算约 15%，那部分就是残余滑步。 */
+  const legAngle = (foot: number): number => Math.asin(clamp(foot, -maxFoot, maxFoot) / legLen);
 
   /** side: -1 左腿 / +1 右腿；两腿相位差 π。 */
   function solveLeg(p: number, side: number): LegPose {
@@ -118,14 +163,14 @@ export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
 
     // 前后轴：脚偏移 → 髋俯仰（rotation.x 正使脚向后，故取负号）
     const footZ = dirF * wF * halfStride * off;
-    const pitchX = -footZ / legLen;
+    const pitchX = -legAngle(footZ);
 
     // 左右轴：领先腿 = 移动方向那一侧；摆动相额外跨过中线（交叉步）
     const lead = side * dirR > 0 ? 1 : -1;
     const sideScale = 1 + lead * cfg.crossStep * 0.45;
     const crossOut = dirR * lead * cfg.crossStep * halfStride * 0.4 * lift;
     const footX = dirR * wS * halfStride * cfg.sideWeight * sideScale * off + crossOut * wS;
-    const rollZ = footX / legLen;
+    const rollZ = legAngle(footX);
 
     // 膝：摆动相抬起；侧移的领先腿多弯一点（跨步更明显）
     const kneeX = cfg.kneeLift * lift * amp * (0.55 + 0.25 * wF + (lead > 0 ? 0.2 * wS : 0));

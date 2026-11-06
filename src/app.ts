@@ -34,6 +34,9 @@ export function startApp(): void {
   const hud = createHud(hudEl);
   // v9c：状态读数 / 操作说明默认收起，开始操作自动收回
   const fold = createOverlayFold(hudEl, document.getElementById('hint'));
+  // v9e：左下角版本徽标（构建期注入，重新构建才会变）—— 一眼确认线上跑的是哪一版
+  const badge = document.getElementById('version-badge');
+  if (badge) badge.textContent = `${__APP_VERSION__} · ${__BUILD_TIME__}`;
 
   const debug: DebugState = {
     timeScale: 1,

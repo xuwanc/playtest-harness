@@ -57,6 +57,11 @@ const AIM_SLOP_PX = 12;
  * 导致弓释放 / 法杖收招那一帧读到 aimActive=false，朝向退回锁定目标或 0（看起来像「面朝正下方」）。
  */
 const AIM_HOLD_MS = 140;
+/**
+ * v9e：双指捏合的「有意手势」阈值（像素）。
+ * 两指相对移动不足该值视为误触（手掌 / 拇指侧缘蹭屏），既不缩放也不影响摇杆。
+ */
+const PINCH_ARM_PX = 18;
 /** 滚轮 deltaMode=1（行）/ 2（页）换算成像素，保证不同设备缩放速度一致 */
 const WHEEL_LINE_PX = 16;
 const WHEEL_PAGE_PX = 400;
@@ -138,21 +143,23 @@ export function createInput(opts: InputOptions): InputAdapter {
   function syncPinch(): void {
     const points: PinchPoint[] = Array.from(activePointers.values());
     const zc = zoom();
-    const step = solvePinch(pinchState, points, zc.pinchGain, zc.maxStepRatio);
+    const step = solvePinch(pinchState, points, zc.pinchGain, zc.maxStepRatio, PINCH_ARM_PX);
     pinchState = step.state;
     pinchActive = step.pinching;
     if (step.scale !== 1) zoomScaleAccum *= step.scale;
 
-    if (step.started) {
-      // 进入捏合：第一根指针不再当摇杆，清掉方向 / tap，避免松手误拾取假人
-      stickId = null;
-      rawDX = 0;
-      rawDY = 0;
+    if (step.started || step.armedNow) {
+      // 确认双指手势：只清 tap（避免松手误拾取假人）。
+      // v9e：绝不在这里动摇杆 —— 旧版一进入捏合就清 stickId / 重置原点，
+      // 于是「按右边按钮时手掌蹭到屏幕」会表现为移动方向突然失灵或偏移。
+      // 移动输入只由「摇杆那根手指自己的 down / up」决定。
       tapId = null;
       tapMoved = true;
       pendingTap = null;
     } else if (step.ended) {
-      if (points.length === 1) {
+      // 双指结束：只剩一根手指时把它接续为摇杆；摇杆本来就按住时保持原样，
+      // 不重新取原点（否则方向会在松手瞬间跳变）。
+      if (stickId === null && points.length === 1) {
         const p = points[0];
         stickId = p.id;
         originX = p.x;
@@ -162,11 +169,6 @@ export function createInput(opts: InputOptions): InputAdapter {
         tapId = null;
         tapMoved = true;
         pendingTap = null;
-      } else {
-        stickId = null;
-        rawDX = 0;
-        rawDY = 0;
-        tapId = null;
       }
     }
   }
@@ -434,7 +436,8 @@ export function createInput(opts: InputOptions): InputAdapter {
   // 系统辅助缩放仍可能接管 pinch。这里兜底阻止默认手势，保证两指 pointer 事件完整
   // 派发到自定义解算器；UI 区域放行，调试面板等仍可正常用系统手势。
   const onGestureStart = (e: Event): void => {
-    if (isUiTarget(e.target)) return;
+    // v9e：不再放过 UI 区域。手指同时落在「摇杆 + 按钮」上时，iOS 的系统捏合
+    // 会接管页面并给已经按下的手指补 pointercancel，表现就是移动方向被掐断。
     e.preventDefault();
   };
 

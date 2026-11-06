@@ -122,7 +122,7 @@ export function createHud(el: HTMLElement): Hud {
         el.textContent = [
           `tick ${world.tick}  fps ${fps.toFixed(0)}  steps ${steps}`,
           `pos (${f(p.x)},${f(p.y)},${f(p.z)})  vel (${f(v.x)},${f(v.y)},${f(v.z)})`,
-          `face ${deg(c.facing)}  body ${deg(c.bodyYaw)}  head ${deg(c.headYaw)}  move ${deg(c.moveYaw)}  st${strafePct}%`,
+          `face ${deg(c.facing)}  body ${deg(c.bodyYaw)}  head ${deg(c.headYaw)}  move ${deg(c.moveYaw)}  st${strafePct}%  stick(${f(input.stickX)},${f(input.stickY)}) ${input.source}  str${f(c.stride)}`,
           `weapon ${label}  ${cb.phase}  combo ${cb.comboIndex}/3  atk ${f(cb.attackProgress)}  dash ${dashLabel}  ab ${atkBlendLabel}  gw/lw ${wShort}  land ${landShort}  ik ${ikShort}`,
           `aim ${aimLabel}  target ${world.targeting.hasTarget ? `#${world.targeting.targetId} @${f(world.targeting.targetDist)}m` : '无'}  hit ${world.hitCount}  hurt ${world.playerHurt.type}  lay ${hurtShort}`,
           `dummies ${dummies}  atkCount ${world.dummyAttackCount}  cam ${(cam.threat * 100).toFixed(0)}% ×${f(cam.distanceScale)}  ${zoomLabel}  lk ${linkShort}`,

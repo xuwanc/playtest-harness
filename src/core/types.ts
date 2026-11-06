@@ -615,6 +615,8 @@ export type DummyState = {
   /** 头部朝向：更快追随 facing，头先于身体转向目标，再相对身体限幅（v7b#9） */
   headYaw: number;
   gaitPhase: number;
+  /** v9e：与主角同构的步幅（米 / 周期），表现层据此做零滑步的脚落地 */
+  stride: number;
   distance: number;
   targetX: number;
   targetZ: number;
@@ -772,9 +774,15 @@ export type VoxelConfig = {
  * 纯数值、零依赖，表现层 gait.ts 消费；不进入 Core 快照。
  */
 export type GaitViewConfig = {
-  /** 摆幅随速度增益：amp = min(maxAmp, speed/moveSpeed × strideGain) */
+  /**
+   * v9e：脚前伸距离 = 步幅 × reachRatio（米 / 米）。
+   * 支撑相脚随身体等速后退（世界坐标静止）的条件是 reach = stride / 4，
+   * 即 reachRatio = 0.25 —— 此时低速也不会滑步。改大 = 步子更大、脚会往后蹭。
+   */
+  reachRatio: number;
+  /** 摆幅随速度增益：仅在拿不到 stride（攻击等效驱动等回退路径）时使用 */
   strideGain: number;
-  /** 摆幅上限（rad），防止冲刺时腿甩过头 */
+  /** 摆幅上限（rad），防止冲刺时腿甩过头（超出即钳制，钳制段会有轻微滑步） */
   maxAmp: number;
   /** 侧向步幅相对前后步幅的比例 */
   sideWeight: number;
@@ -782,7 +790,11 @@ export type GaitViewConfig = {
   crossStep: number;
   /** 摆动相抬膝幅度 */
   kneeLift: number;
-  /** 脚落地锁定强度 0..1：支撑相把脚往身后压，抵消髋部前移（脚不打滑） */
+  /**
+   * 支撑相曲线形状 0..1：
+   *   0 = 纯余弦（脚在中段最快，必然滑步）；
+   *   1 = 线性后移 + C¹ 摆动回摆（支撑相脚的世界速度恒等于 0，理论零滑步）。
+   */
   plantLock: number;
   /** 骨盆左右重心转移（米） */
   comSway: number;
@@ -1196,6 +1208,12 @@ export type CharacterState = {
   grounded: boolean;
   sprinting: boolean;
   gaitPhase: number;
+  /**
+   * v9e：当前步幅（米 / 一个完整步态周期），由 movement 每帧写入。
+   * 表现层据此反推「脚应该前伸多远」= stride × reachRatio，使支撑相脚的
+   * 世界位移恒为零（不打滑）。Core 不知道腿长，所以只给物理步幅，几何换算留给表现层。
+   */
+  stride: number;
   distance: number;
   coyoteTime: number;
   jumpBuffer: number;

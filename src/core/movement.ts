@@ -30,6 +30,7 @@ export function resetCharacter(world: World): void {
   c.grounded = true;
   c.sprinting = false;
   c.gaitPhase = 0;
+  c.stride = world.config.strideLength;
   c.distance = 0;
   c.coyoteTime = world.config.coyoteTime;
   c.jumpBuffer = 0;
@@ -194,6 +195,9 @@ export function movementUpdate(world: World, dt: number, intents: Intents): void
   const stepSpeed = lengthXZ(v.x, v.z);
   const u = Math.min(cfg.strideSpeedCap, stepSpeed / Math.max(cfg.moveSpeed, EPS));
   const stride = Math.max(cfg.strideLength * (1 + u * cfg.strideSpeedGain), EPS);
+  // v9e：把步幅写进状态，表现层据此反推脚前伸距离（stride × reachRatio）→ 支撑脚零滑步。
+  // 相位推进与步幅严格配套：一帧推进 frameDist / stride 个周期，脚正好后退同样的距离。
+  c.stride = stride;
   // 取模防止长时间运行浮点精度下降；sin/cos 周期连续，跨 TAU→0 不产生视觉跳变
   c.gaitPhase = (c.gaitPhase + (frameDist / stride) * TAU) % TAU;
 }

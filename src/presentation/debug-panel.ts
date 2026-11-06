@@ -73,12 +73,15 @@ export function createDebugPanel(
 
   // 程序化步态（v8）：全部热改即时生效，侧移 / 后退手感可直接在这里调
   const gaitF = gui.addFolder('程序化步态 (v8)');
-  gaitF.add(view.gait, 'strideGain', 0.1, 2, 0.05).name('摆幅随速度增益');
+  // v9e：脚前伸 = 步幅 × 该比例；0.25 = 支撑脚世界静止（零滑步）。调大 = 步子更大、会往后蹭。
+  gaitF.add(view.gait, 'reachRatio', 0.05, 0.6, 0.01).name('脚前伸 / 步幅比');
   gaitF.add(view.gait, 'maxAmp', 0.2, 2.5, 0.05).name('摆幅上限 (rad)');
   gaitF.add(view.gait, 'sideWeight', 0, 2, 0.05).name('侧向步幅比例');
   gaitF.add(view.gait, 'crossStep', 0, 1.5, 0.05).name('交叉步强度');
   gaitF.add(view.gait, 'kneeLift', 0, 2, 0.05).name('抬膝幅度');
-  gaitF.add(view.gait, 'plantLock', 0, 1, 0.05).name('脚落地锁定');
+  // 0 = 旧余弦曲线（中段滑步）、1 = 线性支撑相（零滑步），拖到 0 可直接对照
+  gaitF.add(view.gait, 'plantLock', 0, 1, 0.05).name('零滑步支撑相 0..1');
+  gaitF.add(view.gait, 'strideGain', 0.1, 2, 0.05).name('摆幅回退增益(攻击用)');
   gaitF.add(view.gait, 'comSway', 0, 0.2, 0.005).name('重心侧移 (m)');
   gaitF.add(view.gait, 'comBob', 0, 0.2, 0.005).name('重心起伏 (m)');
   gaitF.add(view.gait, 'hipLean', 0, 0.6, 0.01).name('侧移侧倾 (rad)');

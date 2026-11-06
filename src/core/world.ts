@@ -29,6 +29,7 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
       grounded: true,
       sprinting: false,
       gaitPhase: 0,
+      stride: core.strideLength,
       distance: 0,
       coyoteTime: core.coyoteTime,
       jumpBuffer: 0,

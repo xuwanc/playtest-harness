@@ -274,6 +274,7 @@ export function createDummyRig(
         localForward: s.velocity.x * fwdX + s.velocity.z * fwdZ,
         localRight: s.velocity.x * rightX + s.velocity.z * rightZ,
         legLength: v.legLength,
+        stride: s.stride,
         grounded: true,
       }, gaitCfg);
 

@@ -92,6 +92,30 @@ describe('步态相位（v7c 修复「步频抽动」）', () => {
     expect(ratio).toBeLessThan(makeWorld().config.sprintMultiplier * 0.95);
   });
 
+  it('v9e 步幅写入状态，且一个步态周期的里程正好等于 stride（相位与步幅严格配套）', () => {
+    const w = makeWorld();
+    const i = intent({ moveZ: -1 });
+    for (let k = 0; k < 40; k++) step(w, w.config.fixedDt, i);  // 预热到速度稳态
+    const stride = w.character.stride;
+    const cfg = w.config;
+    const u = Math.min(cfg.strideSpeedCap, Math.hypot(w.character.velocity.x, w.character.velocity.z) / cfg.moveSpeed);
+    expect(stride).toBeCloseTo(cfg.strideLength * (1 + u * cfg.strideSpeedGain), 6);
+
+    const z0 = w.character.position.z;
+    let acc = 0;
+    let prev = w.character.gaitPhase;
+    let frames = 0;
+    while (acc < Math.PI * 2 - 0.25 && frames < 600) {
+      step(w, w.config.fixedDt, i);
+      acc += unwrapDelta(prev, w.character.gaitPhase);
+      prev = w.character.gaitPhase;
+      frames += 1;
+    }
+    const dist = Math.abs(w.character.position.z - z0);
+    // 走了 acc 个周期 → 里程应为 acc/TAU × stride
+    expect(dist / (acc / (Math.PI * 2))).toBeCloseTo(stride, 1);
+  });
+
   it('步幅增益参数生效：gain=0 时高速步频按速度比线性增长', () => {
     const measureWithGain = (gain: number, i: Intents): number => {
       const w = makeWorld();

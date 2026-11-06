@@ -81,29 +81,31 @@ describe('v8e 输入层集成：捏合 → zoomScale，摇杆 / tap / UI 隔离�
     input.dispose();
   });
 
-  it('两指张开 → zoomScale>1、捏合 → <1；期间摇杆冻结、无 tap；抬一指后摇杆无缝接续', () => {
+  it('两指张开 → zoomScale>1、捏合 → <1；v9e 摇杆不被冻结；抬一指后仍可继续走', () => {
     const { win, input } = setup();
     down(win, 1, 100, 100);
-    down(win, 2, 200, 100);       // 进入双指，基准距离 100
-    move(win, 2, 260, 100);      // 张开
+    down(win, 2, 200, 100);      // 进入双指，基准距离 100
+    move(win, 2, 260, 100);      // +60px ≥ 18 → 确认手势（重置基准 260）
+    expect(input.sample().zoomScale).toBe(1);
+    move(win, 2, 320, 100);      // 张开
     let f = input.sample();
     expect(f.zoomScale).toBeGreaterThan(1);
-    expect(f.intents.moveX).toBe(0);
-    expect(f.intents.moveZ).toBe(0);
     expect(f.tap).toBeNull();
 
-    move(win, 2, 220, 100);      // 捏合
+    // v9e：捏合期间摇杆照常工作（旧版会清 stickId → 按按钮/蹭屏幕时移动失灵）
+    move(win, 1, 160, 100);
     f = input.sample();
-    expect(f.zoomScale).toBeLessThan(1);
+    expect(f.intents.moveX).toBeGreaterThan(0);
 
-    up(win, 2, 220, 100);        // 退出双指，剩余单指接续为摇杆
+    move(win, 2, 260, 100);      // 捏合
+    expect(input.sample().zoomScale).toBeLessThan(1);
+
+    up(win, 2, 260, 100);        // 退出双指：摇杆那根仍在，方向不被重置
     f = input.sample();
     expect(f.zoomScale).toBe(1);  // 无残留跳变
     expect(f.tap).toBeNull();
+    expect(f.intents.moveX).toBeGreaterThan(0);   // 没有「抬手瞬间方向归零」
 
-    move(win, 1, 160, 100);      // 接续后的摇杆从新原点算方向
-    f = input.sample();
-    expect(f.intents.moveX).toBeGreaterThan(0);
     up(win, 1, 160, 100);
     input.dispose();
   });
@@ -115,11 +117,28 @@ describe('v8e 输入层集成：捏合 → zoomScale，摇杆 / tap / UI 隔离�
     down(win, 3, 100, 0);        // pair = (2, 3)，距离 100
     move(win, 1, 50, 80);        // 只动第一根
     expect(input.sample().zoomScale).toBe(1);
-    move(win, 3, 160, 0);        // 动最后一根 → 距离变 160
+    move(win, 3, 160, 0);        // +60px 越过阈值 → 确认手势，本帧不缩放
+    expect(input.sample().zoomScale).toBe(1);
+    move(win, 3, 200, 0);        // 继续张开 → 缩放
     expect(input.sample().zoomScale).toBeGreaterThan(1);
-    up(win, 3, 160, 0);
+    up(win, 3, 200, 0);
     up(win, 2, 0, 0);
     up(win, 1, 50, 80);
+    input.dispose();
+  });
+
+  it('v9e 第二指轻触（<18px）不缩放、不影响摇杆：按按钮时手掌蹭屏不再搅动镜头', () => {
+    const { win, input } = setup();
+    down(win, 1, 100, 100);
+    move(win, 1, 150, 100);
+    expect(input.sample().intents.moveX).toBeGreaterThan(0);
+    down(win, 2, 300, 400);      // 蹭到屏幕第二点
+    move(win, 2, 310, 404);      // 只动了 10px
+    const f = input.sample();
+    expect(f.zoomScale).toBe(1);
+    expect(f.intents.moveX).toBeGreaterThan(0);
+    up(win, 2, 310, 404);
+    up(win, 1, 150, 100);
     input.dispose();
   });
 
@@ -149,15 +168,17 @@ describe('v8e 输入层集成：捏合 → zoomScale，摇杆 / tap / UI 隔离�
     input.dispose();
   });
 
-  it('dispose 清理全部监听 + iOS gesturestart 兜底（空白区阻止、UI 放行）', () => {
+  it('dispose 清理全部监听 + iOS gesturestart 一律阻止（含 UI 区域）', () => {
     const { win, input } = setup();
     expect(win.count('pointerdown')).toBe(1);
     expect(win.count('wheel')).toBe(1);
     expect(win.count('gesturestart')).toBe(1);
     let blocked = 0;
+    // v9e：UI 区域也拦。手指同时落在「摇杆 + 按钮」时系统捏合会被接管，
+    // 进而给已按下的手指补 pointercancel，表现就是移动方向被掐断。
     win.emit('gesturestart', { target: blank, preventDefault: () => { blocked += 1; } });
     win.emit('gesturestart', { target: ui, preventDefault: () => { blocked += 1; } });
-    expect(blocked).toBe(1);
+    expect(blocked).toBe(2);
     input.dispose();
     expect(win.count('pointerdown')).toBe(0);
     expect(win.count('wheel')).toBe(0);

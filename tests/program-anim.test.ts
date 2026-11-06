@@ -12,9 +12,10 @@ const raw = JSON.parse(
 ) as AppConfig;
 const landCfg = raw.view.animation.landing;
 
+// v9e：stride=0 = 回退到「摆幅随速度」路径（攻击等效驱动走这条），本篇断言的都是该路径
 const pose = solveGait({
   phase: 0.7, speed: 3, moveSpeed: raw.core.moveSpeed,
-  localForward: 3, localRight: 0, legLength: raw.view.voxel.legLength, grounded: true,
+  localForward: 3, localRight: 0, legLength: raw.view.voxel.legLength, stride: 0, grounded: true,
 }, raw.view.gait);
 
 describe('v8c 落地缓冲曲线：两端归零、峰值可控、C¹ 连续', () => {
@@ -135,7 +136,7 @@ function gaitFrom(d: { speed: number; phase: number; localForward: number; local
   return solveGait({
     phase: d.phase, speed: d.speed, moveSpeed: raw.core.moveSpeed,
     localForward: d.localForward, localRight: d.localRight,
-    legLength: raw.view.voxel.legLength, grounded: true,
+    legLength: raw.view.voxel.legLength, stride: 0, grounded: true,
   }, raw.view.gait);
 }
 

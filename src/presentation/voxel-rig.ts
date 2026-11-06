@@ -836,6 +836,9 @@ export function createVoxelRig(
         localForward: drive.localForward,
         localRight: drive.localRight,
         legLength: v.legLength,
+        // v9e：正常移动用 Core 写的物理步幅（脚落地零滑步）；
+        // 攻击等效驱动没有物理步幅，传 0 让它走「摆幅随速度」的回退路径，观感保持 v8d 原样。
+        stride: attacking ? 0 : c.stride,
         grounded: c.grounded,
       };
       // 攻击期间按 gaitScale 平滑淡出步态（gaitWeight=0 时淡出到静止基准）；腿、骨盆、摆臂

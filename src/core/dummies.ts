@@ -62,6 +62,7 @@ export function createDummies(cfg: DummyConfig): DummyState[] {
       bodyYaw: 0,
       headYaw: 0,
       gaitPhase: 0,
+      stride: 1,
       distance: 0,
       targetX: home.x,
       targetZ: home.z,
@@ -108,6 +109,7 @@ export function resetDummies(world: World): void {
     s.bodyYaw = 0;
     s.headYaw = 0;
     s.gaitPhase = 0;
+    s.stride = 1;
     s.distance = 0;
     s.targetX = home.x;
     s.targetZ = home.z;
@@ -306,6 +308,8 @@ function updateOne(world: World, dt: number, s: DummyState, cfg: DummyConfig): v
   const dummyStepSpeed = Math.hypot(s.velocity.x, s.velocity.z);
   const u = Math.min(world.config.strideSpeedCap, dummyStepSpeed / Math.max(world.config.moveSpeed, EPS));
   const stride = Math.max(world.config.strideLength * (1 + u * world.config.strideSpeedGain), EPS);
+  // v9e：与主角同构 —— 步幅写进状态，表现层据此让支撑脚钉在地上不打滑
+  s.stride = stride;
   s.gaitPhase = (s.gaitPhase + (frameDist / stride) * TAU) % TAU;
 }
 
