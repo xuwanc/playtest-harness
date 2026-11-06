@@ -15,6 +15,7 @@ function frame(p: Partial<InputFrame> = {}): InputFrame {
   return {
     intents: intent(),
     stickX: 0, stickY: 0, stickRawX: 0, stickRawY: 0, stickHeld: false,
+    stickId: null, stickOriginX: 0, stickOriginY: 0, stickPxX: 0, stickPxY: 0, stickBad: 0, stickVpTop: 0, stickVpAge: -1,
     aimDX: 0, aimDY: 0,
     source: 'idle', tap: null, zoomScale: 1, gestures: [], lastGesture: null,
     ...p,
@@ -259,6 +260,55 @@ describe('飞行记录仪：异常标记', () => {
     rec.suspend(1000);
     for (let i = 0; i < 3; i++) { advance(w); rec.sample(w, frame(), 220); }
     expect(rec.dump().stats.spikes).toBe(1);
+  });
+
+  it('手指没动、原点被挪 → stickJump（真机「松手瞬间方向跳掉」的判据，v9l）', () => {
+    const w = makeWorld();
+    const rec = mk();
+    const at = (ox: number, oy: number) => frame({
+      stickHeld: true, stickId: 7, source: 'pointer',
+      stickOriginX: ox, stickOriginY: oy, stickPxX: 60, stickPxY: 660,
+      stickX: -0.7, stickY: 0.7, stickRawX: -0.7, stickRawY: 0.7,
+      intents: intent({ moveX: -0.7, moveZ: 0.7 }),
+    });
+    advance(w);
+    rec.sample(w, at(120, 600), 16.7);
+    advance(w);
+    rec.sample(w, at(145, 660), 16.7); // 手指一动不动，原点被挪了 60px
+    const a = rec.dump().anomalies.find((x) => x.kind === 'stickJump');
+    expect(a).toBeTruthy();
+    expect(a!.detail).toContain('原点位移');
+    expect(a!.detail).toContain('o(120,600)→(145,660)');
+    expect(rec.dump().stats.stickJumps).toBe(1);
+  });
+
+  it('手指真的沿圆弧转过去 → 不算 stickJump', () => {
+    const w = makeWorld();
+    const rec = mk();
+    const at = (px: number, py: number) => frame({
+      stickHeld: true, stickId: 7, source: 'pointer',
+      stickOriginX: 120, stickOriginY: 600, stickPxX: px, stickPxY: py,
+      stickX: -0.7, stickY: 0.7, stickRawX: -0.7, stickRawY: 0.7,
+      intents: intent({ moveX: -0.7, moveZ: 0.7 }),
+    });
+    advance(w);
+    rec.sample(w, at(60, 660), 16.7);
+    advance(w);
+    rec.sample(w, at(35, 600), 16.7); // 同一个原点，手指走了 78px 才转了 45°
+    expect(rec.dump().anomalies.some((x) => x.kind === 'stickJump')).toBe(false);
+  });
+
+  it('被丢弃的幻影指针事件会单独计数并报警（v9l 守卫是否真的在干活）', () => {
+    const w = makeWorld();
+    const rec = mk();
+    advance(w);
+    rec.sample(w, frame({ stickHeld: true, stickId: 7, stickBad: 0 }), 16.7);
+    advance(w);
+    rec.sample(w, frame({ stickHeld: true, stickId: 7, stickBad: 2 }), 16.7);
+    const a = rec.dump().anomalies.find((x) => x.kind === 'stickBad');
+    expect(a).toBeTruthy();
+    expect(a!.detail).toContain('拦截 2 条');
+    expect(rec.dump().stats.stickBads).toBe(1);
   });
 
   it('状态位文本可读，未知位被忽略', () => {

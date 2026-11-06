@@ -14,6 +14,13 @@ export type GroundBasis = {
 
 export type Tap = { x: number; y: number };
 
+/** 当前视口原点（诊断用：iOS 地址栏收放会让 offsetTop 整体移动） */
+function currentViewportOrigin(): { left: number; top: number } | null {
+  const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+  if (vv) return { left: vv.offsetLeft, top: vv.offsetTop };
+  return typeof window !== 'undefined' ? { left: 0, top: 0 } : null;
+}
+
 export type InputOptions = {
   /** 用 getter 而不是数值快照：调试面板改「满推行程」时无需重建输入适配器即可热生效 */
   maxRadiusPx: () => number;
@@ -37,6 +44,22 @@ export type InputFrame = {
   stickRawY: number;
   stickHeld: boolean;
   /**
+   * v9l：摇杆的「身份 + 原点 + 手指当前位置」（都是 CSS px）。
+   * 真机上出现过「手指没动、输入方向却变了」——只有把这三个量同时记下来，
+   * 才能分辨到底是手指真的动了（硬件 / 系统手势），还是原点被挪了（代码）。
+   */
+  stickId: number | null;
+  stickOriginX: number;
+  stickOriginY: number;
+  stickPxX: number;
+  stickPxY: number;
+  /** v9l：累计被拦截的可疑指针事件数（幻影 (0,0) / 单帧坐标跳变） */
+  stickBad: number;
+  /** v9l：本帧起「视口刚变化过」的毫秒数（-1 = 从未变化），诊断用 */
+  stickVpAge: number;
+  /** v9l：本帧 visualViewport.offsetTop（地址栏收放会让它整体移动，诊断用） */
+  stickVpTop: number;
+  /**
    * v9j：辅助瞄准的原始屏幕向量（相对按钮按下点，单位 CSS px）。
    * 诊断用：日志里能直接看出「这个方向是从哪个基准量出来的」——
    * 若长度像几百 px，说明基准被污染（如 pointerdown 给 (0,0)），而不是玩家真拖了那么远。
@@ -56,6 +79,11 @@ export type InputFrame = {
 
 export type InputAdapter = {
   sample(): InputFrame;
+  /** v9l：只读摇杆的「身份 / 原点 / 手指位置 / 被丢弃的可疑事件数」，诊断用 */
+  peekStick(): {
+    id: number | null; held: boolean; originX: number; originY: number;
+    x: number; y: number; dx: number; dy: number; radius: number; badMoves: number;
+  };
   /** v9d：只读当前辅助瞄准状态（不消费边沿），供调试面板 / 自动化验收 / 技能层查询 */
   peekAim(): { active: boolean; holding: boolean; x: number; z: number; dx: number; dy: number };
   dispose(): void;
@@ -103,6 +131,20 @@ function isUiTarget(t: EventTarget | null): boolean {
 }
 
 /**
+ * v9l：按坐标再确认一次「这一点是不是 UI」。
+ * 少数 WebView / 指针捕获场景里 `e.target` 会被重定向成 canvas，
+ * 于是按在按钮上的手指会被当成摇杆起点（接着整只手都在漂，方向就跟着乱）。
+ * 命中 UI 就以 UI 为准 —— 按钮只可能更「UI」，不存在误判成不 UI 的风险。
+ */
+function isUiPoint(x: number, y: number): boolean {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+  // 单测里的极简 DOM 没有 elementFromPoint：退化为「按 target 判定」即可
+  if (typeof document.elementFromPoint !== 'function') return false;
+  const el = document.elementFromPoint(x, y);
+  return el instanceof Element && isUiTarget(el);
+}
+
+/**
  * 输入适配层：全屏隐形摇杆 + 按钮区 + 桌面键盘便利键 + 轻点拾取 + 双指捏合缩放。
  * 输出只有世界空间 Intents、一个屏幕 tap 坐标与本帧缩放比例；Core 不知道屏幕、按键、相机的存在。
  *
@@ -118,6 +160,17 @@ export function createInput(opts: InputOptions): InputAdapter {
   let originY = 0;
   let rawDX = 0;
   let rawDY = 0;
+  /** 最近一次「被接受」的手指坐标（用于识别幻影事件 / 瞬移） */
+  let stickPxX = 0;
+  let stickPxY = 0;
+  let lastMoveAt = 0;
+  /** v9l：最近一次视口变化（地址栏收放 / 转屏 / 键盘）的时刻 */
+  let vpChangedAt = -1;
+  /** v9l：上一帧的屏幕（物理）坐标，用来辨别 client 坐标系是否整体平移 */
+  let lastScreenX: number | null = null;
+  let lastScreenY: number | null = null;
+  /** v9l：被丢弃的可疑指针事件数（幻影 (0,0) / 物理上不可能的瞬移），进诊断摘要 */
+  let badMoves = 0;
 
   // tap 判定：非 UI 区域按下后几乎不移动地抬起，视为一次点击
   let tapId: number | null = null;
@@ -199,6 +252,9 @@ export function createInput(opts: InputOptions): InputAdapter {
         originY = p.y;
         rawDX = 0;
         rawDY = 0;
+        stickPxX = p.x;
+        stickPxY = p.y;
+          lastMoveAt = performance.now();
         tapId = null;
         tapMoved = true;
         pendingTap = null;
@@ -241,6 +297,8 @@ export function createInput(opts: InputOptions): InputAdapter {
     stickId = null;
     rawDX = 0;
     rawDY = 0;
+    stickPxX = 0;
+    stickPxY = 0;
     tapId = null;
     tapMoved = false;
     pendingTap = null;
@@ -257,7 +315,7 @@ export function createInput(opts: InputOptions): InputAdapter {
 
   const onPointerDown = (e: PointerEvent): void => {
     // UI 区域：只登记 id，绝不启动摇杆、不设 tap、不参与捏合
-    if (isUiTarget(e.target)) {
+    if (isUiTarget(e.target) || isUiPoint(e.clientX, e.clientY)) {
       uiPointers.add(e.pointerId);
       return;
     }
@@ -271,6 +329,11 @@ export function createInput(opts: InputOptions): InputAdapter {
       originY = e.clientY;
       rawDX = 0;
       rawDY = 0;
+      stickPxX = e.clientX;
+      stickPxY = e.clientY;
+      lastMoveAt = performance.now();
+      lastScreenX = typeof e.screenX === 'number' && (e.screenX !== 0 || e.screenY !== 0) ? e.screenX : null;
+      lastScreenY = lastScreenX === null ? null : e.screenY;
       tapId = e.pointerId;
       tapStartX = e.clientX;
       tapStartY = e.clientY;
@@ -313,11 +376,52 @@ export function createInput(opts: InputOptions): InputAdapter {
     }
     if (uiPointers.has(e.pointerId)) return;
     if (e.pointerId !== stickId) return;
+    const nowMove = performance.now();
+    const ptX = e.clientX;
+    const ptY = e.clientY;
+    // v9l：两类「物理上不可能」的坐标一律不进 raw：
+    //  ① 幻影 (0,0)：部分 WebView / 合成事件在松手、切手势时补发坐标为 0 的 move。
+    //     摇杆原点不可能在屏幕左上角，直接判假（v9j 已对瞄准做过同样的防御）。
+    //  ② 单帧跳变：手指在一帧里「跑」出按 4px/ms 上限都到不了的距离。
+    //     真机上的成因是坐标系整体平移（iOS 地址栏收起/展开时，同一根手指的 clientY
+    //     会整体平移几十像素 ≈ 一个摇杆半径），表现就是「手指没动、方向凭空多了半个向量，
+    //     再按一次又好了」。这里不丢这一帧，而是把它当成坐标系平移：**原点跟着平移同样的量**，
+    //     于是 d = 手指 - 原点 保持原值 —— 方向一点都不跳；后续事件回到同一坐标系后照常工作。
+    const phantom = ptX === 0 && ptY === 0 && (originX !== 0 || originY !== 0);
+    if (phantom) {
+      badMoves++;
+      return;
+    }
+    const px = ptX - stickPxX;
+    const py = ptY - stickPxY;
+    // 坐标跳变的两个独立证据（都不依赖「手指最大速度」这种拍脑袋阈值）：
+    //  A. 跳变发生在视口刚变化之后（地址栏收放 / 键盘弹出 / 转屏都会先发 resize / scroll）；
+    //  B. 物理屏幕上几乎没动（screenX/Y），但 client 坐标跑了几十像素 —— 典型就是坐标系平移。
+    // 命中任一条就把它当成坐标系平移：原点跟着平移同样的量，d = 手指 - 原点 保持原值。
+    const jumpLen = Math.hypot(px, py);
+    const sinceVp = vpChangedAt < 0 ? Number.POSITIVE_INFINITY : nowMove - vpChangedAt;
+    const sx = typeof e.screenX === 'number' ? e.screenX : 0;
+    const sy = typeof e.screenY === 'number' ? e.screenY : 0;
+    const haveScreen = sx !== 0 || sy !== 0;
+    const screenMoved = haveScreen && lastScreenX !== null
+      ? Math.hypot(sx - lastScreenX, sy - (lastScreenY ?? lastScreenX))
+      : Infinity;
+    const coordsShifted = jumpLen > 28 && (sinceVp < 200 || screenMoved < jumpLen * 0.4);
+    if (coordsShifted) {
+      originX += px;
+      originY += py;
+      badMoves++;
+    }
+    lastMoveAt = nowMove;
+    stickPxX = ptX;
+    stickPxY = ptY;
+    lastScreenX = haveScreen ? sx : null;
+    lastScreenY = haveScreen ? sy : null;
     if (e.pointerId === tapId && Math.hypot(e.clientX - tapStartX, e.clientY - tapStartY) > TAP_SLOP_PX) {
       tapMoved = true;
     }
-    let dx = e.clientX - originX;
-    let dy = e.clientY - originY;
+    let dx = ptX - originX;
+    let dy = ptY - originY;
     const len = Math.hypot(dx, dy);
     const r = radius();
     if (len > r) {
@@ -378,6 +482,10 @@ export function createInput(opts: InputOptions): InputAdapter {
       stickId = null;
       rawDX = 0;
       rawDY = 0;
+      stickPxX = 0;
+      stickPxY = 0;
+      lastScreenX = null;
+      lastScreenY = null;
     }
   };
 
@@ -495,6 +603,16 @@ export function createInput(opts: InputOptions): InputAdapter {
     e.preventDefault();
   };
 
+  // v9l：地址栏收放 / 转屏 / 键盘弹出都会先发视口变化事件，摇杆据此识别坐标系平移
+  const markVpChange = (): void => { vpChangedAt = performance.now(); };
+  window.addEventListener('resize', markVpChange);
+  window.addEventListener('orientationchange', markVpChange);
+  const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+  if (vv) {
+    vv.addEventListener('resize', markVpChange);
+    vv.addEventListener('scroll', markVpChange);
+  }
+
   window.addEventListener('pointerdown', onPointerDown);
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
@@ -507,6 +625,18 @@ export function createInput(opts: InputOptions): InputAdapter {
   window.addEventListener('gesturestart', onGestureStart);
 
   return {
+    peekStick() {
+      return {
+        id: stickId,
+        held: stickId !== null,
+        originX, originY,
+        x: stickPxX, y: stickPxY,
+        dx: stickPxX - originX, dy: stickPxY - originY,
+        radius: radius(),
+        badMoves,
+      };
+    },
+
     peekAim() {
       const now = performance.now();
       const len = Math.hypot(aimDX, aimDY);
@@ -636,6 +766,10 @@ export function createInput(opts: InputOptions): InputAdapter {
       return {
         intents, stickX: sx, stickY: sy,
         stickRawX: rawSx, stickRawY: rawSy, stickHeld: stickId !== null,
+        stickId, stickOriginX: originX, stickOriginY: originY, stickPxX, stickPxY,
+        stickBad: badMoves,
+        stickVpTop: currentViewportOrigin()?.top ?? 0,
+        stickVpAge: vpChangedAt < 0 ? -1 : Math.round(performance.now() - vpChangedAt),
         aimDX, aimDY,
         source, tap, zoomScale, gestures, lastGesture,
       };
@@ -651,6 +785,12 @@ export function createInput(opts: InputOptions): InputAdapter {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('wheel', onWheel);
+      window.removeEventListener('resize', markVpChange);
+      window.removeEventListener('orientationchange', markVpChange);
+      if (vv) {
+        vv.removeEventListener('resize', markVpChange);
+        vv.removeEventListener('scroll', markVpChange);
+      }
       window.removeEventListener('gesturestart', onGestureStart);
       gestureTracker.reset();
       for (const fn of cleanups) fn();

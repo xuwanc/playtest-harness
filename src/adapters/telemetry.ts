@@ -50,6 +50,8 @@ export function flagsToText(flags: number): string {
 export const ROW_COLUMNS = [
   't', 'tick', 'dt', 'st', 'sy', 'rs', 'ry', 'held', 'src',
   'mx', 'mz', 'px', 'pz', 'vx', 'vz', 'yaw', 'body', 'fl', 'stride', 'inYaw',
+  // v9l：摇杆的「身份 + 原点 + 手指当前位置」。只加在末尾，旧 dump 仍可按位置读。
+  'pid', 'ox', 'oy', 'fx', 'fy', 'bad', 'vvt',
 ] as const;
 const COL_T = 0;
 const COL_YAW = 15;
@@ -60,6 +62,13 @@ const COL_STRIDE = 18;
  * 出现过「摘要显示输入在变、判定却说 inΔ=0」的对不上。
  */
 const COL_INYAW = 19;
+/** v9l：原点 / 手指位置 / 丢弃计数，异常行里要把它们原样打出来 */
+const COL_OX = 21;
+const COL_OY = 22;
+const COL_FX = 23;
+const COL_FY = 24;
+const COL_BAD = 25;
+const COL_VVT = 26;
 
 export type TelemetryRow = (number | string)[];
 
@@ -85,7 +94,15 @@ export type AnomalyKind =
   /** 手指按住摇杆、曾有大读数，却持续读到 0（摇杆被第二指冻结） */
   | 'stickLost'
   /** 单帧耗时尖峰（切后台、GC、首帧编译着色器） */
-  | 'frameSpike';
+  | 'frameSpike'
+  /**
+   * v9l：手指几乎没动，摇杆方向却大幅改变 —— 真机上「松手瞬间输入方向跳掉」的现场特征。
+   * 转动 θ 度、半径 r 的手指至少要走过 r·θ 的弧长；实际位移远小于弧长就说明
+   * 这条读数不是「手指转过去了」，而是原点被挪了 / 坐标被写错了。
+   */
+  | 'stickJump'
+  /** v9l：幻影 (0,0) 或物理上不可能的瞬移被守卫丢掉（有计数就说明真机上确实在发生） */
+  | 'stickBad';
 
 export type TelemetryAnomaly = {
   kind: AnomalyKind;
@@ -128,6 +145,9 @@ export type TelemetryStats = {
   aimDrops: number;
   freezes: number;
   stickLosts: number;
+  /** v9l：手指没动方向却变了 / 被丢弃的可疑指针事件 */
+  stickJumps: number;
+  stickBads: number;
 };
 
 export type TelemetryDump = {
@@ -273,6 +293,7 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
     channels: 0, bolts: 0, rings: 0, bowCharges: 0,
     inTurns: 0, inTurnMax: 0,
     dirJumps: 0, aimDrops: 0, freezes: 0, stickLosts: 0,
+    stickJumps: 0, stickBads: 0,
   };
 
   let enabled = true;
@@ -290,6 +311,9 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
   let lastBlockedT = -1e9;
   let suspendUntil = -1;
   let lastAnomalyAt: Record<string, number> = {};
+  /** v9l：上一帧的摇杆身份 / 原点 / 手指位置，用来判「手指没动方向却变了」 */
+  let prevStick: { id: number | null; ox: number; oy: number; x: number; y: number; dx: number; dy: number; held: boolean } | null = null;
+  let prevBad = 0;
   /** 最近一次 sample 的模拟时间 / tick：手势事件不经过 step，用它们对齐时间轴 */
   let curT = 0;
   let curTick = 0;
@@ -325,6 +349,8 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
     else if (kind === 'aimDrop') stats.aimDrops++;
     else if (kind === 'moveFreeze') stats.freezes++;
     else if (kind === 'stickLost') stats.stickLosts++;
+    else if (kind === 'stickJump') stats.stickJumps++;
+    else if (kind === 'stickBad') stats.stickBads++;
   }
 
   function pushEvent(k: string, d: string, t: number, tick: number): void {
@@ -367,8 +393,9 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
     lines.push(`法杖 引导${s.channels} 飞弹${s.bolts} 电环${s.rings} · 弓蓄力${s.bowCharges} · 当前武器 ${lastWeapon || '-'}`);
     // 数量用「计数」而不是「缓冲条数」：掉帧条目有 6 条上限，用缓冲长度会写出
     // 「异常 3（spike 29）」这种自相矛盾的行。
-    lines.push(`异常 ${s.dirJumps + s.aimDrops + s.freezes + s.stickLosts}`
-      + `（dir ${s.dirJumps} / aim ${s.aimDrops} / freeze ${s.freezes} / stick ${s.stickLosts}）`
+    lines.push(`异常 ${s.dirJumps + s.aimDrops + s.freezes + s.stickLosts + s.stickJumps + s.stickBads}`
+      + `（dir ${s.dirJumps} / aim ${s.aimDrops} / freeze ${s.freezes} / stick ${s.stickLosts}`
+      + ` / stickJump ${s.stickJumps} / 坏指针 ${s.stickBads}）`
       + ` · 掉帧尖峰 ${s.spikes}`
       + (s.inTurns > 0 ? ` · 输入转向 ${s.inTurns} 次（最大 ${s.inTurnMax.toFixed(0)}°）` : ''));
     if (anomalies.length > 0) {
@@ -378,6 +405,13 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
         const ins = a.ctx.map((r) => (r[COL_INYAW] === '' || r[COL_INYAW] == null ? '.' : String(r[COL_INYAW]))).join(' ');
         lines.push(`  yaw ${yaws}`);
         lines.push(`  in  ${ins}`);
+        // v9l：摇杆类异常把原点 / 手指轨迹也打出来，一眼分辨「手指动了」还是「原点被挪了」
+        if (a.kind === 'stickJump' || a.kind === 'stickBad' || a.kind === 'stickLost') {
+          const org = a.ctx.map((r) => `${r[COL_OX]},${r[COL_OY]}`).join(' ');
+          const fin = a.ctx.map((r) => `${r[COL_FX]},${r[COL_FY]}`).join(' ');
+          lines.push(`  o   ${org}`);
+          lines.push(`  p   ${fin}`);
+        }
       }
     }
     if (events.length > 0) {
@@ -424,6 +458,10 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
         r3(c.velocity.x), r3(c.velocity.z),
         deg1(yaw), deg1(c.bodyYaw), flags, r3(c.stride),
         inYaw === null ? '' : deg1(inYaw),
+        frame.stickId === null ? '' : frame.stickId,
+        Math.round(frame.stickOriginX), Math.round(frame.stickOriginY),
+        Math.round(frame.stickPxX), Math.round(frame.stickPxY),
+        frame.stickBad, Math.round(frame.stickVpTop),
       ];
       pushRow(row, false);
 
@@ -514,6 +552,45 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
         stickLostStart = -1;
       }
 
+      // 5) v9l：摇杆读数自洽性 —— 手指几乎没动，方向却转了
+      const sdx = frame.stickPxX - frame.stickOriginX;
+      const sdy = frame.stickPxY - frame.stickOriginY;
+      if (frame.stickHeld && frame.stickId !== null) {
+        const p = prevStick;
+        if (p && p.held && p.id === frame.stickId) {
+          const len0 = Math.hypot(p.dx, p.dy);
+          const len1 = Math.hypot(sdx, sdy);
+          const base = Math.max(len0, len1);
+          const dMove = Math.hypot(frame.stickPxX - p.x, frame.stickPxY - p.y);
+          const dAng = Math.abs(deg1(wrapPi(Math.atan2(sdy, sdx) - Math.atan2(p.dy, p.dx))));
+          // 转过 dAng 度、半径 base 的手指至少要走过 base·dAng 的弧长
+          const arc = (base * dAng * Math.PI) / 180;
+          const originMoved = Math.hypot(frame.stickOriginX - p.ox, frame.stickOriginY - p.oy);
+          if (base > 18 && dAng > 35 && dMove < Math.max(5, arc * 0.35)) {
+            pushAnomaly('stickJump', t, world.tick, 0,
+              `Δ${dAng.toFixed(0)}° 手指只动${dMove.toFixed(0)}px(弧长应${arc.toFixed(0)}px)`
+              + ` o(${Math.round(p.ox)},${Math.round(p.oy)})→(${Math.round(frame.stickOriginX)},${Math.round(frame.stickOriginY)})`
+              + ` 原点位移${originMoved.toFixed(0)}px p(${Math.round(frame.stickPxX)},${Math.round(frame.stickPxY)})`
+              + ` raw(${Math.round(sdx)},${Math.round(sdy)}) id${frame.stickId}`
+              + ` vvt${Math.round(frame.stickVpTop)}`, row);
+          }
+        }
+        prevStick = {
+          id: frame.stickId, ox: frame.stickOriginX, oy: frame.stickOriginY,
+          x: frame.stickPxX, y: frame.stickPxY, dx: sdx, dy: sdy, held: true,
+        };
+      } else {
+        prevStick = null;
+      }
+      // 6) v9l：幻影 / 瞬移守卫是否真的在丢事件
+      if (frame.stickBad > prevBad) {
+        const lost = frame.stickBad - prevBad;
+        pushAnomaly('stickBad', t, world.tick, 0,
+          `拦截 ${lost} 条可疑指针事件（幻影丢弃 / 坐标平移吸收，共${frame.stickBad}）o(${Math.round(frame.stickOriginX)},${Math.round(frame.stickOriginY)})`
+          + ` p(${Math.round(frame.stickPxX)},${Math.round(frame.stickPxY)}) id${frame.stickId ?? '-'}`, row);
+      }
+      prevBad = frame.stickBad;
+
       prevYaw = yaw;
       prevMoveYaw = c.moveYaw;
       prevFlags = flags;
@@ -549,6 +626,7 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
       enabled = on;
       if (!on) {
         prevYaw = null;
+        prevStick = null;
         freezeStart = -1;
         stickLostStart = -1;
       }
@@ -589,12 +667,18 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
       stats.inTurnMax = 0;
       stats.freezes = 0;
       stats.stickLosts = 0;
+      stats.stickJumps = 0;
+      stats.stickBads = 0;
+      prevStick = null;
+      prevBad = 0;
       for (const k of Object.keys(stats.gestures)) delete stats.gestures[k];
     },
 
     status(): RecorderStatus {
       const now = stats.simS;
-      const alert = anomalies.some((a) => now - a.t < 8 && (a.kind === 'dirJump' || a.kind === 'aimDrop' || a.kind === 'moveFreeze' || a.kind === 'stickLost'));
+      const alert = anomalies.some((a) => now - a.t < 8
+        && (a.kind === 'dirJump' || a.kind === 'aimDrop' || a.kind === 'moveFreeze'
+          || a.kind === 'stickLost' || a.kind === 'stickJump' || a.kind === 'stickBad'));
       return {
         durationS: stats.wallMs / 1000,
         frames: stats.frames,
