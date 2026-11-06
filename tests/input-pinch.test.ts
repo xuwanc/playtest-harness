@@ -112,19 +112,53 @@ describe('v8e 输入层集成：捏合 → zoomScale，摇杆 / tap / UI 隔离�
 
   it('三指（摇杆 + 双指捏合）只取最后两根：摇杆那根移动不改缩放', () => {
     const { win, input } = setup();
-    down(win, 1, 0, 0);
-    down(win, 2, 0, 0);
-    down(win, 3, 100, 0);        // pair = (2, 3)，距离 100
-    move(win, 1, 50, 80);        // 只动第一根
+    // v9n：模拟坐标整体平移 20px，避开 (0,0) 幻影起点防御（真机上 (0,0) 会被丢弃）
+    down(win, 1, 20, 20);
+    down(win, 2, 20, 20);
+    down(win, 3, 120, 20);       // pair = (2, 3)，距离仍为 100
+    move(win, 1, 70, 100);       // 只动第一根
     expect(input.sample().zoomScale).toBe(1);
-    move(win, 3, 160, 0);        // +60px 越过阈值 → 确认手势，本帧不缩放
+    move(win, 3, 180, 20);       // +60px 越过阈值 → 确认手势，本帧不缩放
     expect(input.sample().zoomScale).toBe(1);
-    move(win, 3, 200, 0);        // 继续张开 → 缩放
+    move(win, 3, 220, 20);       // 继续张开 → 缩放
     expect(input.sample().zoomScale).toBeGreaterThan(1);
-    up(win, 3, 200, 0);
-    up(win, 2, 0, 0);
-    up(win, 1, 50, 80);
+    up(win, 3, 220, 20);
+    up(win, 2, 20, 20);
+    up(win, 1, 70, 100);
     input.dispose();
+  });
+
+  it('v9n：pointerup 换了 pointerId（WebView 行为）也要释放摇杆', () => {
+    const { win, input } = setup();
+    down(win, 1, 100, 100);
+    move(win, 1, 150, 120);
+    expect(Math.abs(input.sample().intents.moveX)).toBeGreaterThan(0.3);
+    // 抬起事件的 id 与按下时不一致：旧逻辑会残留 stickId，方向一直挂在旧向量上
+    up(win, 99, 150, 120);
+    const f = input.sample();
+    expect(f.stickHeld).toBe(false);
+    expect(f.intents.moveX).toBe(0);
+    expect(f.intents.moveZ).toBe(0);
+  });
+
+  it('v9n：(0,0) 假 pointerdown 不建摇杆原点', () => {
+    const { win, input } = setup();
+    down(win, 1, 0, 0);
+    move(win, 1, 100, 100);
+    const f = input.sample();
+    expect(f.stickHeld).toBe(false);
+    expect(f.intents.moveX).toBe(0);
+  });
+
+  it('v9n：UI 指抬起不会误释放仍在按住的摇杆', () => {
+    const { win, input } = setup();
+    down(win, 1, 100, 100);
+    move(win, 1, 150, 120);
+    down(win, 2, 300, 400, ui);       // 技能按钮指
+    up(win, 2, 300, 400, ui);
+    const f = input.sample();
+    expect(f.stickHeld).toBe(true);
+    expect(Math.abs(f.intents.moveX)).toBeGreaterThan(0.3);
   });
 
   it('v9e 第二指轻触（<18px）不缩放、不影响摇杆：按按钮时手掌蹭屏不再搅动镜头', () => {

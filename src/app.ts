@@ -149,6 +149,8 @@ export function startApp(): void {
     // v9k：方向调试盘（控制台 / 自动化可读当前三个角，或直接开关）
     dirDebug,
     dirAngles: () => dirDebug.last(),
+    // v9n：停步收相 / 侧移偏转 / 双腿姿态读数（验收用手感诊断）
+    gaitDebug: () => view.gaitDebug(),
   };
 
   let last = performance.now();

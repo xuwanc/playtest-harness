@@ -185,6 +185,9 @@ export function createInput(opts: InputOptions): InputAdapter {
   let vpChangedAt = -1;
   /** v9l：被丢弃的可疑指针事件数（幻影 (0,0) / 物理上不可能的瞬移），进诊断摘要 */
   let badMoves = 0;
+  /** v9n：最近一次摇杆释放的 id / 时刻（松手瞬间的幽灵事件防御） */
+  let releasedId: number | null = null;
+  let releasedAt = -1;
 
   // ---- v9m 摇杆坐标源 ----
   /** 按下瞬间的物理屏幕坐标（与 client 原点各存一套） */
@@ -346,6 +349,8 @@ export function createInput(opts: InputOptions): InputAdapter {
     originSY = 0;
     stickPosSX = 0;
     stickPosSY = 0;
+    releasedId = null;
+    releasedAt = -1;
     tapId = null;
     tapMoved = false;
     pendingTap = null;
@@ -361,6 +366,9 @@ export function createInput(opts: InputOptions): InputAdapter {
   };
 
   const onPointerDown = (e: PointerEvent): void => {
+    // v9n：部分 WebView 在松手 / 切手势时补发坐标为 (0,0) 的 pointerdown。
+    // 拿它当摇杆原点会立刻造出「屏幕左上角 → 手指」的巨大向量，方向必然跳。
+    if (e.clientX === 0 && e.clientY === 0) { badMoves++; return; }
     // UI 区域：只登记 id，绝不启动摇杆、不设 tap、不参与捏合
     if (isUiTarget(e.target) || isUiPoint(e.clientX, e.clientY)) {
       uiPointers.add(e.pointerId);
@@ -371,6 +379,9 @@ export function createInput(opts: InputOptions): InputAdapter {
     activePointers.set(e.pointerId, { id: e.pointerId, x: e.clientX, y: e.clientY });
     // 双指捏合期间不启动摇杆：第二根以后的手指只参与缩放
     if (stickId === null && !pinchActive) {
+      // 这是一次真正的新按下，解除上一次松手的幽灵事件窗口
+      releasedId = null;
+      releasedAt = -1;
       stickId = e.pointerId;
       originX = e.clientX;
       originY = e.clientY;
@@ -433,6 +444,9 @@ export function createInput(opts: InputOptions): InputAdapter {
     if (uiPointers.has(e.pointerId)) return;
     if (e.pointerId !== stickId) return;
     const nowMove = performance.now();
+    // v9n：松手后 150ms 内同 id 的补发 move 一律不采信（部分 WebView 会在 up 之后
+    // 补一条带旧坐标的合成事件，正好落在「松手一瞬间」）。新按下会解除这个窗口。
+    if (releasedId === e.pointerId && nowMove - releasedAt < 150) { badMoves++; return; }
     const ptX = e.clientX;
     const ptY = e.clientY;
     // v9l：两类「物理上不可能」的坐标一律不进 raw：
@@ -520,6 +534,23 @@ export function createInput(opts: InputOptions): InputAdapter {
       dx *= r / len;
       dy *= r / len;
     }
+    // v9n 最后一次防御：方向突变必须由真实手指位移支撑。
+    // 遥测是 30Hz 抽样，松手那一两帧的尖峰可能整个漏采（真机摘要「异常 0」却仍看到跳变）；
+    // 这里在事件层逐帧守门，不依赖坐标源是否可信：手指几乎没动却要大幅转向 → 保持上一帧。
+    const prevLen = Math.hypot(rawDX, rawDY);
+    const nextLen = Math.hypot(dx, dy);
+    if (prevLen > 10 && nextLen > 10) {
+      const dAng = Math.abs(Math.atan2(rawDX * dy - rawDY * dx, rawDX * dx + rawDY * dy));
+      const arc = Math.max(prevLen, nextLen) * dAng;
+      const moved = Math.max(
+        Math.hypot(cpx, cpy),
+        Math.hypot(spx, spy) / Math.max(0.2, screenScale),
+      );
+      if (dAng > 0.6 && moved < Math.max(6, arc * 0.5)) {
+        badMoves++;
+        return; // 坐标状态已更新，只是不改写方向
+      }
+    }
     rawDX = dx;
     rawDY = dy;
   };
@@ -530,6 +561,26 @@ export function createInput(opts: InputOptions): InputAdapter {
     if (k === 'attack') edge.attackReleased = true;
     const el = document.getElementById(`btn-${k}`);
     el?.classList.remove('is-down');
+  }
+
+  /** v9n：把摇杆状态清干净（id 匹配或所有非 UI 指都已抬起时都要执行） */
+  function releaseStick(): void {
+    if (stickId === null) return;
+    releasedId = stickId;
+    releasedAt = performance.now();
+    stickId = null;
+    rawDX = 0;
+    rawDY = 0;
+    stickPxX = 0;
+    stickPxY = 0;
+    screenOk = false;
+    screenStale = 0;
+    screenScale = 1;
+    scaleSamples = 0;
+    originSX = 0;
+    originSY = 0;
+    stickPosSX = 0;
+    stickPosSY = 0;
   }
 
   const onPointerUp = (e: PointerEvent): void => {
@@ -563,27 +614,21 @@ export function createInput(opts: InputOptions): InputAdapter {
       }
     }
 
+    // v9n：某些 WebView（鸿蒙自带浏览器）给 pointerup 的 pointerId 与 pointerdown 不一致，
+    // 旧逻辑只按 id 匹配清摇杆 → 松手后 stickId 残留、方向一直挂在旧向量上，
+    // 直到下一次按下才被重建（真机「松手一瞬间方向变了、再按又回到 45°」）。
+    // 三种情况都释放：① id 匹配；② 所有非 UI 指都抬起了；③ 收到一条「身份不明的
+    // 非 UI 抬起」，而此时只剩摇杆这一根在册 —— 基本就是它的 up 被换了 id。
+    const mismatchedRelease = !wasActivePointer && !wasUi
+      && activePointers.size <= 1 && stickId !== null;
+    if (e.pointerId === stickId || activePointers.size === 0 || mismatchedRelease) releaseStick();
+
     // UI 指针到此为止：不影响摇杆原点 / 方向，也不产生 tap
     if (wasUi) return;
 
     if (e.pointerId === tapId) {
       if (!tapMoved && !isUiTarget(e.target)) pendingTap = { x: e.clientX, y: e.clientY };
       tapId = null;
-    }
-    if (e.pointerId === stickId) {
-      stickId = null;
-      rawDX = 0;
-      rawDY = 0;
-      stickPxX = 0;
-      stickPxY = 0;
-      screenOk = false;
-      screenStale = 0;
-      screenScale = 1;
-      scaleSamples = 0;
-      originSX = 0;
-      originSY = 0;
-      stickPosSX = 0;
-      stickPosSY = 0;
     }
   };
 

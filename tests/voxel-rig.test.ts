@@ -114,7 +114,9 @@ describe('voxel-rig 攻击时上半身不会飞出去', () => {
       expect(Math.abs(roll)).toBeLessThan(2); // 每帧重新赋值，不会逐帧累积
     }
     expect(maxRoll).toBeGreaterThan(0.05);   // 确实在侧向摆腿（解算器已接线）
-    expect(maxPitch).toBeLessThan(maxRoll); // 侧移时前后摆应明显小于侧摆
+    // v9n：下盘朝侧移方向带转后，速度在腿局部有了前向分量 ——
+    // 纯侧移不再只有左右摆（双腿平行拖行），而是出现明显的前后迈步。
+    expect(maxPitch).toBeGreaterThan(0.05);
     expect(changed).toBeGreaterThan(60);   // 随步态相位连续变化，不是定值
     expect(Math.abs(w.character.bodyYaw - w.character.moveYaw)).toBeGreaterThan(0.3); // 确实朝向分离
   });

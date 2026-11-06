@@ -827,6 +827,14 @@ export type GaitViewConfig = {
   hipLean: number;
   /** 手臂对侧摆幅度 */
   armSwing: number;
+  /** v9n：停步收相时长（秒）。0 = 关闭（旧行为：卡在最后一个步相直到速度归零） */
+  stopBlendSec: number;
+  /** v9n：纯侧移时下盘偏航的额外增益（0 = 关闭；1.1 ≈ 侧移时多带转一倍） */
+  strafeHipBoost: number;
+  /** v9n：假人下盘偏转的基准比例（玩家沿用 orientation.legYawScale） */
+  strafeHipScale: number;
+  /** v9n：假人下盘偏航上限（度；玩家沿用 orientation.hipYawMaxDeg） */
+  strafeHipMaxDeg: number;
 };
 
 /* ---------------- 程序动画分层 / 落地缓冲（v8c，纯表现层） ---------------- */

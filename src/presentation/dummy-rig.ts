@@ -4,7 +4,8 @@ import type {
   ColorConfig, DummyMode, DummyState, DummyViewConfig, GaitViewConfig, HurtViewConfig,
   IKViewConfig, LeanViewConfig, VoxelConfig,
 } from '../core';
-import { solveGait } from './gait';
+import { solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw } from './gait';
+import type { GaitInput } from './gait';
 import { solveHurtPose } from './hurt-pose';
 import { solveInertiaPose } from './inertia';
 import { applyFootIK, captureIKBase, EMPTY_IK_DIAGNOSTICS } from './rig-ik';
@@ -225,6 +226,17 @@ export function createDummyRig(
   let crouchSmooth = 0;
   let lastIK: IKDiagnostics = { ...EMPTY_IK_DIAGNOSTICS };
 
+  // ---- v9n：停步收相状态（纯表现层，不进 Core / 快照）----
+  let stopT = -1;
+  let stopPhase0 = 0;
+  let stopPhaseEnd = 0;
+  let stopSpeed0 = 0;
+  let stopStride0 = 0;
+  let stopFwd = 0;
+  let stopRight = 0;
+  /** 下盘侧移偏转的平滑状态（与主角同构，避免单帧跳变） */
+  let sideYaw = 0;
+
   return {
     group: root,
     update(s, frameDt): void {
@@ -259,24 +271,79 @@ export function createDummyRig(
       upper.rotation.set(0, 0, 0);
       lower.position.set(0, 0, 0);
       lower.rotation.z = 0;
+      // v9n：下盘侧移偏转在 gait 计算时写入（见下），此处先不复位以免被 IK 基准读到旧值
 
       // 与玩家共用同一套程序化步态解算器（v8）：怪物侧移 / 后退时也有方向自适应
       // 的腿摆、交叉步与抬膝，承接 #9「怪物也要像主角一样的动画机制」。
       const speed = Math.hypot(s.velocity.x, s.velocity.z);
-      const fwdX = Math.sin(s.bodyYaw);
-      const fwdZ = Math.cos(s.bodyYaw);
-      const rightX = Math.cos(s.bodyYaw);
-      const rightZ = -Math.sin(s.bodyYaw);
-      const gait = solveGait({
+
+      // ---- v9n · 侧移下盘偏转 ----
+      // 「KEEP DIST / FOLLOW 时与玩家保持距离横移」是纯侧移：两腿只有左右摆、
+      // 没有前后迈步，看起来像双脚平行拖着走。把下半身朝移动方向带转一点，
+      // 步态投影就有了前向分量，腿自然变成斜向迈步；用平方增益保证前进/后退不受影响。
+      const bodyRightX = Math.cos(s.bodyYaw);
+      const bodyRightZ = -Math.sin(s.bodyYaw);
+      const latRatio = speed > 1e-6
+        ? clamp((s.velocity.x * bodyRightX + s.velocity.z * bodyRightZ) / speed, -1, 1)
+        : 0;
+      const targetSide = strafeHipYaw(
+        latRatio, gaitCfg.strafeHipScale, gaitCfg.strafeHipMaxDeg, gaitCfg.strafeHipBoost,
+      );
+      sideYaw += (targetSide - sideYaw) * (1 - Math.exp(-12 * Math.max(0, frameDt)));
+      lower.rotation.y = sideYaw;
+
+      const gaitYaw = s.bodyYaw + sideYaw;
+      const fwdX = Math.sin(gaitYaw);
+      const fwdZ = Math.cos(gaitYaw);
+      const rightX = Math.cos(gaitYaw);
+      const rightZ = -Math.sin(gaitYaw);
+      const localForward = s.velocity.x * fwdX + s.velocity.z * fwdZ;
+      const localRight = s.velocity.x * rightX + s.velocity.z * rightZ;
+
+      // ---- v9n · 停步收相（与主角同构）----
+      const stopSec = Math.max(0, gaitCfg.stopBlendSec || 0);
+      const stopOn = stopSec > 0;
+      const resume = speed > referenceSpeed * 0.78;
+      if (!stopOn || resume) {
+        stopT = -1;
+      } else if (speed > 1e-6 && speed < referenceSpeed * 0.5) {
+        if (stopT < 0) {
+          stopT = 0;
+          stopPhase0 = s.gaitPhase;
+          stopPhaseEnd = nextFeetTogetherPhase(s.gaitPhase);
+          stopSpeed0 = speed;
+          stopStride0 = Math.max(s.stride, 1e-6);
+          stopFwd = localForward;
+          stopRight = localRight;
+        }
+      }
+      const inStop = stopOn && stopT >= 0;
+      if (inStop) stopT = Math.min(1, stopT + frameDt / stopSec);
+
+      const gaitInput: GaitInput = inStop ? {
+        phase: stopPhase0,
+        speed: stopSpeed0,
+        moveSpeed: referenceSpeed,
+        localForward: stopFwd,
+        localRight: stopRight,
+        legLength: v.legLength,
+        stride: stopStride0,
+        grounded: true,
+      } : {
         phase: s.gaitPhase,
         speed,
         moveSpeed: referenceSpeed,
-        localForward: s.velocity.x * fwdX + s.velocity.z * fwdZ,
-        localRight: s.velocity.x * rightX + s.velocity.z * rightZ,
+        localForward,
+        localRight,
         legLength: v.legLength,
         stride: s.stride,
         grounded: true,
-      }, gaitCfg);
+      };
+      const gait = inStop
+        ? solveStopGait(gaitInput, gaitCfg, {
+            progress: stopT, phase0: stopPhase0, phaseEnd: stopPhaseEnd,
+          })
+        : solveGait(gaitInput, gaitCfg);
 
       legL.root.rotation.x = gait.legL.pitchX;
       legR.root.rotation.x = gait.legR.pitchX;

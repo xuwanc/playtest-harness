@@ -565,7 +565,11 @@
       "comSway": 0.05,
       "comBob": 0.045,
       "hipLean": 0.16,
-      "armSwing": 0.6
+      "armSwing": 0.6,
+      "stopBlendSec": 0.3,
+      "strafeHipBoost": 0.6,
+      "strafeHipScale": 0.7,
+      "strafeHipMaxDeg": 62
     },
     "animation": {
       "attack": {

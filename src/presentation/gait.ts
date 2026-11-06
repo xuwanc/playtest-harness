@@ -201,3 +201,71 @@ export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
     backward: dirF < 0 ? wF : 0,
   };
 }
+
+/* -------------------------------------------------------------------------- *
+ * v9n · 停步收相：让最后一个步相自然走到「双脚并拢」再淡入待机
+ * -------------------------------------------------------------------------- *
+ * Core 的 gaitPhase 只在有位移时推进（frameDist / stride）。松手后速度指数衰减，
+ * 位移趋近 0 → 相位冻结；但 solveGait 只要 speed >= EPS 就仍按这个冻结相位输出姿态，
+ * 于是角色会「卡在最后一个跨步 pose」一小段时间，然后突然弹回待机。
+ *
+ * 修法不是立刻归零（更突兀），也不是继续用 Core 相位（不会动）：
+ * 接管一小段时间，把相位从冻结值推进到**下一个双脚并拢点**，同时把步幅 / 速度
+ * 一起淡到 0 —— 两脚会各走完最后半步、自然收拢，抬膝与重心同步消退。
+ *
+ * 并拢点：footOffset(p)=0 出现在 p=π/2 与 p=3π/2；两腿相位差 π，
+ * 所以其中任意一个点都让左右脚**同时**回到髋正下方，正好是待机姿态。
+ */
+
+export type StopBlend = {
+  /** 0 = 刚停步，1 = 已完全收拢到待机 */
+  progress: number;
+  /** 停步瞬间被冻结的步相 */
+  phase0: number;
+  /** 收拢目标相位（双脚同时并拢） */
+  phaseEnd: number;
+};
+
+/** 求「phase 之后的第一个双脚并拢相位」；若已经并拢也走完半步，避免相位瞬切。 */
+export function nextFeetTogetherPhase(phase: number): number {
+  const p = ((phase % TAU) + TAU) % TAU;
+  // 严格取 p 之后的第一个并拢点（floor+1），最多走半步（π）。
+  // 若停步时脚本来就快并拢了，直接淡出即可 —— 不必为了「走满半步」再跨一大步。
+  const k = Math.floor((p - Math.PI / 2) / Math.PI + 1e-9) + 1;
+  return Math.PI / 2 + k * Math.PI;
+}
+
+/**
+ * 停步过渡姿态：纯函数，输入仍是 GaitInput + 显式过渡状态，不引入本地时间 / 随机。
+ * 相位用 smoothstep 推进（两端速度为 0，与待机无缝衔接）；
+ * speed 与 stride 同系数淡出 → reach / amp / 抬膝 / 重心全部同步收拢。
+ */
+export function solveStopGait(input: GaitInput, cfg: GaitViewConfig, stop: StopBlend): GaitPose {
+  const t = clamp(stop.progress, 0, 1);
+  if (t >= 1 || input.speed < EPS) return idle();
+  const e = t * t * (3 - 2 * t);
+  const fade = 1 - e;
+  return solveGait({
+    ...input,
+    phase: stop.phase0 + (stop.phaseEnd - stop.phase0) * e,
+    speed: input.speed * fade,
+    stride: input.stride * fade,
+  }, cfg);
+}
+
+/**
+ * v9n · 侧移下盘偏转：把「纯侧移」的一部分转成斜向前进，避免双腿平行滑行。
+ *
+ * 纯侧移时 wS≈1、wF≈0 → 两腿 pitchX≈0，只有左右摆，看起来像两脚平行拖着走
+ * （真机上「假人和角色保持距离横移」最明显）。把下半身朝移动方向多带转一点，
+ * 速度在腿局部坐标系里就有了前向分量，步态自然变成斜向迈步。
+ *
+ * 用连续侧向占比的平方做增益，前进/后退（lat≈0）完全不受影响，
+ * 没有 atan2 / wrapAngle，任何朝向都不会跳变。返回值是弧度（带符号）。
+ */
+export function strafeHipYaw(latRatio: number, baseScale: number, maxDeg: number, boost: number): number {
+  const lat = clamp(latRatio, -1, 1);
+  const a = Math.abs(lat);
+  const scale = Math.min(1, baseScale * (1 + Math.max(0, boost) * a * a));
+  return clamp(scale * lat, -1, 1) * ((maxDeg * Math.PI) / 180);
+}

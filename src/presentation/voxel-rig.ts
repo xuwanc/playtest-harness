@@ -5,7 +5,7 @@ import type {
   IKViewConfig, LeanViewConfig, LinkState, LinkViewConfig, OrientationViewConfig,
   ProgramAnimViewConfig, VoxelConfig, WeaponId, WeaponMountConfig,
 } from '../core';
-import { solveGait } from './gait';
+import { solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw } from './gait';
 import type { GaitInput } from './gait';
 import {
   attackBlendStep, attackGaitDrive, attackStridePose, landingImpactScale,
@@ -57,6 +57,11 @@ export type VoxelRig = {
   ik(): IKDiagnostics;
   /** 下盘相对身体的连续偏航（v8b），供验收「引导/后退时跨朝向不跳变」。 */
   hipYaw(): number;
+  /** v9n：停步收相进度（-1 = 未接管）与本帧双腿姿态，供浏览器验收过渡是否平滑。 */
+  gaitDebug(): {
+    stopT: number; hipYaw: number;
+    legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
+  };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
    *  供验收「腿摆动方向」：投影基准必须与腿所在坐标系一致，否则非正前方时方向被歪。 */
   gaitYaw(): number;
@@ -417,6 +422,16 @@ export function createVoxelRig(
   /** 本帧 gait 投影基准（诊断用，等于 bodyYaw + hipYaw），随 update 刷新 */
   let lastGaitYaw = 0;
 
+  // ---- v9n 停步收相状态（纯表现层，不进 Core / 快照）----
+  /** <0 = 未接管；0..1 = 收相进度；=1 后保持输出待机，直到重新起跑 */
+  let stopT = -1;
+  let stopPhase0 = 0;
+  let stopPhaseEnd = 0;
+  let stopSpeed0 = 0;
+  let stopStride0 = 0;
+  let stopFwd = 0;
+  let stopRight = 0;
+
   // ---- v8c 程序动画分层状态（全部纯表现，不进入 Core / 快照）----
   /** 攻击姿态混合系数 0..1：指数平滑进出攻击，避免下盘姿态单帧跳变 */
   let attackBlend = 0;
@@ -426,6 +441,8 @@ export function createVoxelRig(
   let lastGaitScale = 1;
   /** 本帧喂给 solveGait 的四个等效驱动量（诊断用） */
   let lastDrive: GaitDrive = { speed: 0, phase: 0, localForward: 0, localRight: 0 };
+  /** v9n：本帧实际写入双腿的姿态（诊断用） */
+  let lastLegs = { lp: 0, lr: 0, rp: 0, rr: 0 };
   /** 不传 coreTime 时（单测）使用的本地时间累加器 */
   let localTime = 0;
   /** 本帧使用的 Core 时间（诊断 remaining 用） */
@@ -800,8 +817,11 @@ export function createVoxelRig(
       const bRightZ = -Math.sin(c.bodyYaw);
       const bodyLocalRight = c.velocity.x * bRightX + c.velocity.z * bRightZ;
       const latRatio = speed > EPS ? clamp(bodyLocalRight / speed, -1, 1) : 0;
-      const hipMax = (ori.hipYawMaxDeg * Math.PI) / 180;
-      const targetHipYaw = ori.legYawScale * latRatio * hipMax;
+      // v9n：纯侧移（|latRatio|→1）时多带转一点下盘，把一部分侧移分量变成前后迈步，
+      // 避免两腿只有左右摆、看起来「双脚平行拖着走」。前进/后退 lat≈0 时增益为 0，完全不变。
+      const targetHipYaw = strafeHipYaw(
+        latRatio, ori.legYawScale, ori.hipYawMaxDeg, gaitCfg.strafeHipBoost,
+      );
       hipYaw += (targetHipYaw - hipYaw) * (1 - Math.exp(-ori.hipYawSmoothing * dt));
 
       // ---- 程序化步态（v8 / v8b）----
@@ -829,7 +849,40 @@ export function createVoxelRig(
         ? attackGaitDrive(realDrive, combat.attackProgress, combat.comboIndex, attackBlend, animCfg.stride)
         : realDrive;
       lastDrive = drive;
-      const gaitInput: GaitInput = {
+
+      // ---- v9n 停步收相 ----
+      // Core 的 gaitPhase 只在有位移时推进；松手后位移趋零 → 相位冻结，而 solveGait
+      // 只要 speed>=EPS 就仍按该相位输出，角色于是「卡在最后一个跨步 pose」一小段时间。
+      // 这里在减速尾段接管：把相位推进到最近的双脚并拢点、摆幅同步淡到 0。
+      const stopSec = Math.max(0, gaitCfg.stopBlendSec || 0);
+      const stopOn = stopSec > 0 && !attacking && c.grounded;
+      const resume = speed > moveSpeed * 0.78;
+      if (!stopOn || resume) {
+        stopT = -1;
+      } else if (speed > EPS && speed < moveSpeed * 0.5) {
+        if (stopT < 0) {
+          stopT = 0;
+          stopPhase0 = c.gaitPhase;
+          stopPhaseEnd = nextFeetTogetherPhase(c.gaitPhase);
+          stopSpeed0 = speed;
+          stopStride0 = Math.max(c.stride, EPS);
+          stopFwd = realDrive.localForward;
+          stopRight = realDrive.localRight;
+        }
+      }
+      const inStop = stopOn && stopT >= 0;
+      if (inStop) stopT = Math.min(1, stopT + dt / stopSec);
+
+      const gaitInput: GaitInput = inStop ? {
+        phase: stopPhase0,
+        speed: stopSpeed0,
+        moveSpeed,
+        localForward: stopFwd,
+        localRight: stopRight,
+        legLength: v.legLength,
+        stride: stopStride0,
+        grounded: true,
+      } : {
         phase: drive.phase,
         speed: drive.speed,
         moveSpeed,
@@ -843,7 +896,16 @@ export function createVoxelRig(
       };
       // 攻击期间按 gaitScale 平滑淡出步态（gaitWeight=0 时淡出到静止基准）；腿、骨盆、摆臂
       // 共用同一系数，保证上下半身同步，不会只淡出一半而出现错位。
-      const gait = scaleGaitPose(solveGait(gaitInput, gaitCfg), weights.gaitScale);
+      const gaitPose = inStop
+        ? solveStopGait(gaitInput, gaitCfg, {
+            progress: stopT, phase0: stopPhase0, phaseEnd: stopPhaseEnd,
+          })
+        : solveGait(gaitInput, gaitCfg);
+      const gait = scaleGaitPose(gaitPose, weights.gaitScale);
+      lastLegs = {
+        lp: gait.legL.pitchX, lr: gait.legL.rollZ,
+        rp: gait.legR.pitchX, rr: gait.legR.rollZ,
+      };
 
       // 1) 基础步态：两腿各自俯仰 / 侧摆 / 抬膝，骨盆重心转移与起伏
       if (!c.grounded) {
@@ -1035,6 +1097,13 @@ export function createVoxelRig(
     },
     hipYaw(): number {
       return hipYaw;
+    },
+    gaitDebug() {
+      return {
+        stopT, hipYaw,
+        legLPitch: lastLegs.lp, legLRoll: lastLegs.lr,
+        legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,
+      };
     },
     gaitYaw(): number {
       return lastGaitYaw;

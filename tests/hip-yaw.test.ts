@@ -145,7 +145,7 @@ describe('v8b 腿摆动方向：投影基准与下盘朝向自洽', () => {
     expect(sawNonZeroHip).toBe(true); // 确实发生了下盘带转（否则等于没测到方向变化）
   });
 
-  it('纯侧移时腿仍以侧向摆（rollZ）为主，未被歪成前后摆', () => {
+  it('纯侧移时下盘带转，腿既有侧摆也有前后迈步（v9n 不再双腿平行）', () => {
     const w = makeWorld();
     w.modules.targeting = false;
     const rig = makeRig(w.config.moveSpeed);
@@ -161,6 +161,7 @@ describe('v8b 腿摆动方向：投影基准与下盘朝向自洽', () => {
       maxPitch = Math.max(maxPitch, Math.abs(hipL(rig).rotation.x));
     }
     expect(maxRoll).toBeGreaterThan(0.05);
-    expect(maxPitch).toBeLessThan(maxRoll); // 侧向摆仍是主导，方向没被歪
+    // v9n：侧向摆仍在，但下盘带转让前后迈步也出现了 —— 这正是「避开双腿平行区间」的目的
+    expect(maxPitch).toBeGreaterThan(0.05);
   });
 });
