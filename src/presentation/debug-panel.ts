@@ -95,6 +95,15 @@ export function createDebugPanel(
   v9oF.add(view.gait, 'chestYawScale', 0, 1.5, 0.05).name('胸随下盘偏转比例');
   v9oF.add(view.gait, 'chestYawMaxDeg', 0, 90, 1).name('胸偏转上限 (度)');
 
+  // v9p：停步惯性 —— 最后一步踩出去 + 身体跟着惯性微前移，再收回待机；全部拉 0 = v9o 行为
+  const v9pF = gui.addFolder('停步惯性 (v9p)');
+  v9pF.add(view.gait, 'stopStepPitch', 0, 0.8, 0.02).name('前脚踩出 (rad)');
+  v9pF.add(view.gait, 'stopTrailPitch', 0, 0.5, 0.02).name('跟随腿后蹬 (rad)');
+  v9pF.add(view.gait, 'stopStepKnee', 0, 0.5, 0.02).name('前脚抬膝 (rad)');
+  v9pF.add(view.gait, 'stopBodyShift', 0, 0.25, 0.005).name('身体惯性前移 (m)');
+  v9pF.add(view.gait, 'stopChestPitch', 0, 0.4, 0.01).name('上身惯性前倾 (rad)');
+  v9pF.add(view.gait, 'stopPeakRatio', 0.05, 0.95, 0.02).name('惯性峰值位置');
+
   // v8c/v8d：攻击下半身两条路径 + 跳跃 / 落地蓄力缓冲，热改即时生效，方便 0↔1 直接对比效果
   //   gw=1 / lw=0（默认）：过滤掉挥击跨步，下盘由「攻击等效步态」接管并持续摆动
   //   gw=0 / lw=1：只叠加单次挥击跨步，连击左右脚交替
@@ -105,6 +114,8 @@ export function createDebugPanel(
   pa.add(view.animation.attack, 'blendRate', 1, 40, 1).name('进出攻击平滑速率');
   const st = view.animation.stride;
   pa.add(st, 'strideSpeed', 0, 8, 0.1).name('攻击等效步速 (m/s)');
+  // v9p：攻击跨步改走物理步幅路径，0 = 旧「摆幅随速度」回退路径，1.3 ≈ 默认放大
+  pa.add(st, 'strideScale', 0, 2.5, 0.05).name('攻击步幅系数 (0=旧)');
   pa.add(st, 'forwardBias', 0, 1, 0.01).name('前冲 / 侧跨占比');
   pa.add(st, 'cycles', 1, 3, 1).name('每段跨步周期数');
   pa.add(st, 'stepPitch', 0, 1.5, 0.02).name('跨步腿前后摆 (rad)');
@@ -212,6 +223,10 @@ export function createDebugPanel(
   const sep = gui.addFolder('角色间分离');
   sep.add(sp, 'iterations', 1, 8, 1).name('迭代次数');
   sep.add(sp, 'slop', 0, 0.05, 0.002).name('额外分离量 (m)');
+  // v9p：主动挤人的阻力。minScale 拉到 1 = 关闭，回到「推着走畅通无阻」的旧行为
+  sep.add(sp.crowd, 'contactBand', 0, 1.5, 0.05).name('挤压接触带 (m)');
+  sep.add(sp.crowd, 'minScale', 0, 1, 0.02).name('正面顶住时速度保留');
+  sep.add(sp.crowd, 'approachDot', 0, 0.9, 0.05).name('主动挤判定方向阈值');
 
   const ds = cfg.dash;
   const dash = gui.addFolder('冲刺 / 闪避');

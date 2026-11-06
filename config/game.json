@@ -175,7 +175,12 @@
     },
     "separation": {
       "iterations": 3,
-      "slop": 0.002
+      "slop": 0.002,
+      "crowd": {
+        "contactBand": 0.45,
+        "minScale": 0.32,
+        "approachDot": 0.25
+      }
     },
     "links": {
       "enabled": true,
@@ -573,7 +578,13 @@
       "stopEnterRatio": 0.08,
       "stopExitRatio": 0.18,
       "chestYawScale": 0.45,
-      "chestYawMaxDeg": 32
+      "chestYawMaxDeg": 32,
+      "stopStepPitch": 0.26,
+      "stopTrailPitch": 0.09,
+      "stopStepKnee": 0.14,
+      "stopBodyShift": 0.075,
+      "stopChestPitch": 0.1,
+      "stopPeakRatio": 0.34
     },
     "animation": {
       "attack": {
@@ -584,6 +595,7 @@
       "stride": {
         "cycles": 1,
         "strideSpeed": 2.4,
+        "strideScale": 1.3,
         "forwardBias": 0.72,
         "stepPitch": 0.55,
         "stepKnee": 0.5,

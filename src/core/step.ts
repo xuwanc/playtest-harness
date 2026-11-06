@@ -7,7 +7,7 @@ import { decayLinks, linksUpdate } from './links';
 import { dummiesUpdate } from './dummies';
 import { movementUpdate } from './movement';
 import { orientationUpdate } from './orientation';
-import { separationUpdate } from './separation';
+import { crowdResistanceUpdate, separationUpdate } from './separation';
 import { targetingUpdate } from './targeting';
 import { EMPTY_INTENTS } from './types';
 import type { Intents, World } from './types';
@@ -30,7 +30,7 @@ import { resetWorld } from './world';
  *   8 decayHurt / decayLinks  受击计时与派生招窗口 / 冷却衰减（独立于模块开关）
  *   9 abilities    法杖技能：引导飞弹 / 电环推进 + 命中结算（读本帧假人新位置）
  *  10 hits         消费 attack-active / dummy-hit + 派生招扫掠命中，写受击状态与击退
- *  11 separation   角色间分离，只推假人，保证不重叠
+ *  11 separation   角色间分离（只推假人）+ 主动挤人的速度阻力（只改玩家速度，不改位置）
  *  12 camera       威胁权重 → 构图意图（纯数据，表现层做指数平滑后消费）
  *
  * 与假人相关的模块统一以 modules.dummies 为总闸：关闭后假人（含受击/分离）完全冻结。
@@ -71,7 +71,11 @@ export function step(world: World, dt: number, intents: Intents): World {
   if (world.modules.abilities) abilitiesUpdate(world, dt, intents);
   if (world.modules.dummies) {
     hitsUpdate(world, dt);
-    if (world.modules.separation) separationUpdate(world);
+    if (world.modules.separation) {
+      separationUpdate(world);
+      // v9p：分离完成后再给「主动挤人」的一方施加阻力（只衰减玩家速度，不改位置）
+      crowdResistanceUpdate(world);
+    }
   }
 
   // 相机意图放最后：读的是本帧所有模块结束后的最终玩家 / 假人位置。

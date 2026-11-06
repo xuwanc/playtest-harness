@@ -469,6 +469,24 @@ export type SeparationConfig = {
   iterations: number;
   /** 额外分离量（米），避免两实体恰好贴边时抖动 */
   slop: number;
+  /** v9p：主动挤人的一方受到的阻力（只衰减施压方的速度，绝不修改其位置） */
+  crowd: CrowdResistanceConfig;
+};
+
+/**
+ * v9p · 挤压阻力配置：旧版「玩家 ↔ 假人」分离把玩家当不可推动的锚点（权重 0），
+ * 假人全量让开，于是玩家顶着假人能一路畅通地推着走。现在给**主动朝对方推进**的
+ * 一方按「贴近程度 × 正对程度」衰减水平速度，推得越正、贴得越紧越费劲；
+ * 背对远离或侧向擦过完全不受影响。纯数值、Core 消费、确定性。
+ * minScale = 1 等价于关闭（回到旧行为），调试面板可热调对照。
+ */
+export type CrowdResistanceConfig = {
+  /** 接触缓冲带（米）：距「两圆最小间距」多远开始产生阻力，越大越早开始减速 */
+  contactBand: number;
+  /** 正面顶住时的最小速度保留系数 0..1（越小阻力越大；0.3 ≈ 明显推不动） */
+  minScale: number;
+  /** 判定「主动挤」的方向点积阈值 0..1：速度方向 · 指向对方的单位向量 大于此值才算 */
+  approachDot: number;
 };
 
 /* ---------------- 冲刺 / 闪避契约 ---------------- */
@@ -846,6 +864,20 @@ export type GaitViewConfig = {
   chestYawScale: number;
   /** v9o：胸偏航上限（度），防止下盘大角度带转时上半身被拧过头。 */
   chestYawMaxDeg: number;
+  /* ---- v9p · 停步惯性：最后一步踩出去 + 身体跟着惯性微前移，再收回待机 ----
+   * 全部为 0 时精确回到 v9o 的「只收拢相位」行为，调试面板可逐项拉 0 对照。 */
+  /** 前脚（停步相位里更靠前那条腿）额外前伸（rad，正值） */
+  stopStepPitch: number;
+  /** 跟随腿轻微后蹬（rad，正值） */
+  stopTrailPitch: number;
+  /** 前脚抬膝（rad，正值） */
+  stopStepKnee: number;
+  /** 身体沿停步瞬间的移动方向微前移（m） */
+  stopBodyShift: number;
+  /** 上身随惯性前倾（rad） */
+  stopChestPitch: number;
+  /** 惯性脉冲峰值位置 0.05..0.95（两端值与导数均为 0，与收相淡出无缝衔接） */
+  stopPeakRatio: number;
 };
 
 /* ---------------- 程序动画分层 / 落地缓冲（v8c，纯表现层） ---------------- */
@@ -880,11 +912,18 @@ export type AttackPoseViewConfig = {
  * 「攻击时保留移动步态」这一路无论权重拉到多少都恒为 0，看起来就是下半身完全不动。
  */
 export type AttackStrideViewConfig = {
-  /** 每段攻击的跨步周期数（整数）。相位 = 真实 gaitPhase + progress × TAU × cycles，
-   *  整数周期保证进出攻击时与真实相位同相，不会跨相位跳变。 */
+  /** v9p：跨步幅度倍率（整数，>=1）。相位在起手锁定的基准上做 0→π×cycles→0 的
+   *  单次往返脉冲（迈出→撑住→收回），两端值与导数都为 0，进出攻击不跳变；
+   *  1 = 半周期一次完整跨步，拉高会重新变碎。 */
   cycles: number;
   /** 攻击期间的等效步速（m/s）：让 solveGait 在 Core 锁速时仍有可见摆幅 */
   strideSpeed: number;
+  /**
+   * v9p：攻击等效步幅系数（相对 Core 当前步幅）。攻击时 Core 锁自主移速 → c.stride
+   * 恒为基准步幅，乘该系数后喂给 solveGait 走「物理步幅」路径（脚前伸 = stride × reachRatio），
+   * 比旧版「stride=0 → 摆幅随速度回退」大得多，步子不再碎。1 = 关闭（旧行为）。
+   */
+  strideScale: number;
   /** 攻击跨步方向中「前冲」占比 0..1，其余给左右交替侧跨 */
   forwardBias: number;
   /** 挥击跨步：腿前后摆幅度（rad，领先腿向前、跟随腿蹬地） */

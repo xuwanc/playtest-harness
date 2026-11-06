@@ -7,7 +7,7 @@ import type {
 } from '../core';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw,
-  stopBlendGate, chestYawFromHip,
+  stopBlendGate, chestYawFromHip, solveStopInertia,
 } from './gait';
 import type { GaitInput } from './gait';
 import {
@@ -64,6 +64,8 @@ export type VoxelRig = {
    *  v9o 追加 chestYaw / speed：验收「低速巡航是否误关步态」与「胸是否跟着下盘带转」。 */
   gaitDebug(): {
     stopT: number; hipYaw: number; chestYaw: number; speed: number;
+    /** v9p：停步惯性脉冲的前脚前伸量（rad）/ 身体前移量（m），未接管时为 0 */
+    stopStep: number; stopShift: number;
     legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
@@ -440,6 +442,14 @@ export function createVoxelRig(
   let prevSpeed = 0;
   /** v9o：本帧胸 / 上半身相对身体的偏航（诊断读数，不进 Core / 快照） */
   let chestYaw = 0;
+
+  // ---- v9p：停步惯性 / 攻击相位基准（全部纯表现，不进 Core / 快照）----
+  /** 进入攻击那一帧锁定的 Core gaitPhase，避免 lunge 位移造成双重相位推进 */
+  let attackPhaseBase = 0;
+  let wasAttacking = false;
+  /** 本帧停步惯性脉冲：前脚额外前伸量 / 身体前移量（诊断用） */
+  let lastStopStep = 0;
+  let lastStopShift = 0;
 
   // ---- v8c 程序动画分层状态（全部纯表现，不进入 Core / 快照）----
   /** 攻击姿态混合系数 0..1：指数平滑进出攻击，避免下盘姿态单帧跳变 */
@@ -853,9 +863,22 @@ export function createVoxelRig(
         phase: c.gaitPhase,
         localForward: c.velocity.x * fwdX + c.velocity.z * fwdZ,
         localRight: c.velocity.x * rightX + c.velocity.z * rightZ,
+        stride: c.stride,
       };
-      const drive = attacking
-        ? attackGaitDrive(realDrive, combat.attackProgress, combat.comboIndex, attackBlend, animCfg.stride)
+      // v9p：相位基准只在「刚进入攻击」那一帧锁定，攻击主体（含连击段切换、
+      // 淡出期）始终保持不变 —— 若退出时把它改成实时 c.gaitPhase，基准本身会
+      // 瞬跳（起手 0 → 结束 2.9 rad），腿就跟着跳一下。相位差改由 attackGaitDrive
+      // 内部的最短弧插值吸收，基准无需再对齐。
+      if (attacking && !wasAttacking) attackPhaseBase = c.gaitPhase;
+      wasAttacking = attacking;
+      // v9p：淡出期（attacking=false 但 attackBlend>0）也继续走等效驱动，让相位 /
+      // 摆幅按 blend 平滑回落到真实步态；旧版在收势那一帧直接切回 realDrive
+      // （speed=0 → idle），步幅放大后这个单帧弹回会非常明显。
+      const drive = attackBlend > 0
+        ? attackGaitDrive(
+          realDrive, combat.attackProgress, combat.comboIndex, attackBlend,
+          animCfg.stride, attackPhaseBase,
+        )
         : realDrive;
       lastDrive = drive;
 
@@ -903,9 +926,9 @@ export function createVoxelRig(
         localForward: drive.localForward,
         localRight: drive.localRight,
         legLength: v.legLength,
-        // v9e：正常移动用 Core 写的物理步幅（脚落地零滑步）；
-        // 攻击等效驱动没有物理步幅，传 0 让它走「摆幅随速度」的回退路径，观感保持 v8d 原样。
-        stride: attacking ? 0 : c.stride,
+        // v9p：攻击时喂「放大的等效步幅」（strideScale），走物理步幅路径让跨步更大；
+        // 拉 0 时 drive.stride=0，精确回到 v8d 的「摆幅随速度」回退路径。
+        stride: drive.stride ?? 0,
         grounded: c.grounded,
       };
       // 攻击期间按 gaitScale 平滑淡出步态（gaitWeight=0 时淡出到静止基准）；腿、骨盆、摆臂
@@ -916,6 +939,33 @@ export function createVoxelRig(
           })
         : solveGait(gaitInput, gaitCfg);
       const gait = scaleGaitPose(gaitPose, weights.gaitScale);
+
+      // ---- v9p 停步惯性：最后一步踩出去 + 身体跟着惯性微前移，再收回待机 ----
+      // 增量全部落在步态层（IK 基准之前）：停步时速度已趋零，短促的整体微移不构成
+      // 滑步；t→1 脉冲归零，与 solveStopGait 的淡出一起平滑接回 idle，不残留姿态。
+      let stopBodyX = 0;
+      let stopBodyZ = 0;
+      let stopChest = 0;
+      if (inStop) {
+        const si = solveStopInertia(stopT, stopPhase0, stopFwd, stopRight, gaitCfg);
+        if (si.leadLeft) {
+          gait.legL.pitchX -= si.leadPitch;   // 负 = 脚向前踩出
+          gait.legL.kneeX += si.leadKnee;
+          gait.legR.pitchX += si.trailPitch;  // 跟随腿轻微后蹬
+        } else {
+          gait.legR.pitchX -= si.leadPitch;
+          gait.legR.kneeX += si.leadKnee;
+          gait.legL.pitchX += si.trailPitch;
+        }
+        stopBodyZ = si.bodyShift * si.fwdN;
+        stopBodyX = si.bodyShift * si.rightN;
+        stopChest = si.chestPitch;
+        lastStopStep = si.leadPitch;
+        lastStopShift = si.bodyShift;
+      } else {
+        lastStopStep = 0;
+        lastStopShift = 0;
+      }
       lastLegs = {
         lp: gait.legL.pitchX, lr: gait.legL.rollZ,
         rp: gait.legR.pitchX, rr: gait.legR.rollZ,
@@ -951,8 +1001,10 @@ export function createVoxelRig(
         armR.root.rotation.z = 0;
         // 骨盆起伏 / 左右重心转移 / 侧倾统一写在共享 pelvis 上：
         // 上下半身由层级自动联动，不必再分别给两个并列组手动对齐同一份位移。
-        pelvis.position.x = gait.pelvisX;
+        pelvis.position.x = gait.pelvisX + stopBodyX;
         pelvis.position.y = legLen + gait.pelvisY;
+        // v9p：停步惯性让骨盆沿停步方向微前移（每帧开头已把 z 归零）
+        pelvis.position.z = stopBodyZ;
         pelvis.rotation.z = gait.pelvisRoll;
       }
 
@@ -1015,7 +1067,8 @@ export function createVoxelRig(
       // 2.6) 移动惯性倾斜叠加：启动前倾 / 刹车后仰 / 绕圈侧倾。
       //      受击时减半，避免与受击后仰打架；攻击时速度差分很小，倾斜自然趋零。
       const leanScale = hurt.type === 'none' ? 1 : 0.4;
-      upper.rotation.x += leanForward * leanScale;
+      // v9p：停步惯性让上身跟着微微前倾，随脉冲两端归零
+      upper.rotation.x += leanForward * leanScale + stopChest;
       // 侧移时的程序化身体侧倾（v8）与惯性侧倾叠加；受击时同样减半
       upper.rotation.z += (leanSide + gait.sideLean) * leanScale;
 
@@ -1121,6 +1174,7 @@ export function createVoxelRig(
       return {
         stopT, hipYaw, chestYaw,
         speed: prevSpeed,   // update 末尾已刷新为本帧速度，供线上验收低速巡航
+        stopStep: lastStopStep, stopShift: lastStopShift,
         legLPitch: lastLegs.lp, legLRoll: lastLegs.lr,
         legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,
       };

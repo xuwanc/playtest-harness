@@ -153,13 +153,18 @@ describe('v8d 攻击等效步态驱动：绕过 Core 锁速、两端同相、方
     expect(oldPose.legR.kneeX).toBe(0);
   });
 
-  it('progress=0/1 两端相位与真实相位相差整数个 TAU（进出攻击不跨相位跳变）', () => {
+  it('v9p：progress=0/1 两端相位回到同一基准（单次往返跨步，进出攻击不跳变）', () => {
     const a = attackGaitDrive(locked, 0, 1, 1, stCfg);
     const b = attackGaitDrive(locked, 1, 1, 1, stCfg);
     expect(a.phase).toBeCloseTo(locked.phase, 12);
-    expect((b.phase - locked.phase) / (Math.PI * 2)).toBeCloseTo(Math.round(stCfg.cycles), 12);
-    // 整数周期差 → 两端解算出的姿态完全一致
+    // v9p：不再是「差整数个 TAU」——那个差值在 blend 淡出时会让相位绕一整圈、
+    // 收势腿抽一下；现在精确回到基准，淡出时相位差 0。
+    expect(b.phase).toBeCloseTo(locked.phase, 12);
     expect(gaitFrom(a).legL.pitchX).toBeCloseTo(gaitFrom(b).legL.pitchX, 10);
+    // 中段确实走出去过（不是恒为静止），峰值 = π × 四舍五入后的 cycles。
+    // 相位差经最短弧折叠，±π 边界上符号可能为负，姿态等价，故取绝对值。
+    const mid = attackGaitDrive(locked, 0.5, 1, 1, stCfg);
+    expect(Math.abs(mid.phase - locked.phase)).toBeCloseTo(Math.PI * Math.round(stCfg.cycles), 10);
   });
 
   it('blend=0 原样返回真实输入；中间值四个量都有限且单调插值', () => {
@@ -184,8 +189,11 @@ describe('v8d 攻击等效步态驱动：绕过 Core 锁速、两端同相、方
 
   it('cycles 非整数被四舍五入为 >=1 的整数，strideSpeed 负值夹到 0', () => {
     const d = attackGaitDrive(locked, 1, 1, 1, { ...stCfg, cycles: 0.2, strideSpeed: -5 });
-    expect((d.phase - locked.phase) / (Math.PI * 2)).toBeCloseTo(1, 12);
+    expect(d.phase).toBeCloseTo(locked.phase, 12);
     expect(d.speed).toBe(0);
+    // 峰值幅度仍由四舍五入后的 cycles 决定（最短弧折叠后取绝对值）
+    const mid = attackGaitDrive(locked, 0.5, 1, 1, { ...stCfg, cycles: 0.2 });
+    expect(Math.abs(mid.phase - locked.phase)).toBeCloseTo(Math.PI, 10);
   });
 });
 

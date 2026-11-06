@@ -6,7 +6,7 @@ import type {
 } from '../core';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw,
-  stopBlendGate, chestYawFromHip,
+  stopBlendGate, chestYawFromHip, solveStopInertia,
 } from './gait';
 import type { GaitInput } from './gait';
 import { solveHurtPose } from './hurt-pose';
@@ -355,6 +355,26 @@ export function createDummyRig(
           })
         : solveGait(gaitInput, gaitCfg);
 
+      // ---- v9p 停步惯性（与主角同构）：最后一步踩出去 + 身体微前移，再收回待机 ----
+      let stopBodyX = 0;
+      let stopBodyZ = 0;
+      let stopChest = 0;
+      if (inStop) {
+        const si = solveStopInertia(stopT, stopPhase0, stopFwd, stopRight, gaitCfg);
+        if (si.leadLeft) {
+          gait.legL.pitchX -= si.leadPitch;   // 负 = 脚向前踩出
+          gait.legL.kneeX += si.leadKnee;
+          gait.legR.pitchX += si.trailPitch;
+        } else {
+          gait.legR.pitchX -= si.leadPitch;
+          gait.legR.kneeX += si.leadKnee;
+          gait.legL.pitchX += si.trailPitch;
+        }
+        stopBodyZ = si.bodyShift * si.fwdN;
+        stopBodyX = si.bodyShift * si.rightN;
+        stopChest = si.chestPitch;
+      }
+
       legL.root.rotation.x = gait.legL.pitchX;
       legR.root.rotation.x = gait.legR.pitchX;
       legL.root.rotation.z = gait.legL.rollZ;
@@ -367,8 +387,10 @@ export function createDummyRig(
       armL.joint.rotation.x = -0.18;
       armR.joint.rotation.x = -0.18;
       // 骨盆起伏 / 重心转移 / 侧倾统一驱动上下半身；程序化身体侧倾在受击时减半
-      pelvis.position.x = gait.pelvisX;
+      pelvis.position.x = gait.pelvisX + stopBodyX;
       pelvis.position.y = legLen + gait.pelvisY;
+      // v9p：停步惯性让骨盆沿停步方向微前移（每帧开头已归零 z）
+      pelvis.position.z = stopBodyZ;
       pelvis.rotation.z = gait.pelvisRoll;
       upper.rotation.z = gait.sideLean * (pose.intensity > 0 ? 0.4 : 1);
 
@@ -396,7 +418,8 @@ export function createDummyRig(
           { leanForward: leanF, leanSide: leanS, speedRatio: crouchSmooth }, leanCfg,
         );
         // 上身保留完整惯性倾斜；盆骨只带小比例 + 小幅重心平移 + 移动略微下沉
-        upper.rotation.x += leanF;
+        // v9p：停步惯性让上身跟着微微前倾，随脉冲两端归零
+        upper.rotation.x += leanF + stopChest;
         upper.rotation.z += leanS;
         pelvis.rotation.x += inertia.pelvisPitch;
         pelvis.rotation.z += inertia.pelvisRoll;

@@ -15,6 +15,11 @@ export function clamp01(v: number): number {
 
 const TAU = Math.PI * 2;
 
+/** 把角度差折到 (-π, π]：sin/cos 完全等价，但插值时只走最短弧，不会绕一整圈。 */
+function wrapPi(a: number): number {
+  return ((a + Math.PI) % TAU + TAU) % TAU - Math.PI;
+}
+
 /** 与 GaitPose 同构的全零姿态，作为跨步叠加的基线。 */
 function zeroPose(): GaitPose {
   return {
@@ -25,12 +30,14 @@ function zeroPose(): GaitPose {
   };
 }
 
-/** 步态解算器中会被攻击等效驱动替换的四个量（与 GaitInput 同名同义）。 */
+/** 步态解算器中会被攻击等效驱动替换的量（与 GaitInput 同名同义）。
+ *  v9p 追加可选 stride：攻击时喂放大的等效步幅，让 solveGait 走「物理步幅」路径。 */
 export type GaitDrive = {
   speed: number;
   phase: number;
   localForward: number;
   localRight: number;
+  stride?: number;
 };
 
 /**
@@ -41,13 +48,16 @@ export type GaitDrive = {
  * 连 gaitPhase 都因无位移而冻结 —— 于是「攻击时保留移动步态」这一路
  * 无论权重拉到多少都恒为全零姿态，表现上就是下半身完全不动。
  *
- * 这里不碰 Core，只在表现层把 gaitInput 的四个量按 attackBlend 平滑替换成
+ * 这里不碰 Core，只在表现层把 gaitInput 的量按 attackBlend 平滑替换成
  * 由 attackProgress 派生的「攻击跨步」驱动：
- *  - phase: 真实相位 + progress × TAU × cycles（cycles 取整数 → progress=0/1
- *    两端与真实相位同相，进出攻击不跨相位跳变；progress 推进保证整段攻击腿持续摆动）。
+ *  - phase: 起手锁定基准 + 单次往返跨步脉冲 0→π×cycles→0（两段 smoothstep，
+ *    两端值与导数都为 0）。v9p 起不再随 progress 单向累加，也不叠加实时 Core
+ *    gaitPhase —— 旧版两者叠加会让 active 段步频翻倍、整段摆近 1.5 个周期（碎步），
+ *    且淡出时相位差一整圈、收势腿会抽一下；现在只做一次干净的大跨步。
  *  - speed: 等效步速 strideSpeed，让 solveGait 输出可见摆幅。
  *  - 方向: 前冲为主（forwardBias）+ 连击左右交替侧跨（comboIndex 奇偶）。
- * 四个量都按 blend 与真实输入线性插值，进出攻击连续；全部由 Core 量派生，
+ *  - stride: v9p 追加放大的等效步幅（strideScale），让跨步走物理步幅路径、步子更大。
+ * 全部量都按 blend 与真实输入线性插值，进出攻击连续；全部由 Core 量派生，
  * 无本地时间、无随机，暂停 / 时间缩放下仍同步且确定。
  */
 export function attackGaitDrive(
@@ -56,6 +66,7 @@ export function attackGaitDrive(
   comboIndex: number,
   blend: number,
   cfg: AttackStrideViewConfig,
+  phaseBase: number = real.phase,
 ): GaitDrive {
   const b = clamp01(blend);
   if (b <= 0) return real;
@@ -64,17 +75,46 @@ export function attackGaitDrive(
   const speed = Math.max(0, cfg.strideSpeed);
   const lead = comboIndex % 2 === 0 ? 1 : -1;
   const fb = clamp01(cfg.forwardBias);
+  // v9p：攻击跨步改走「物理步幅」路径。strideScale=0 → stride=0（旧回退路径，
+  // 摆幅随速度）；拉大时连续放大脚前伸距离（stride × reachRatio），步子不再碎。
+  // 攻击时 Core 锁自主移速 → real.stride 恒为基准步幅，乘积稳定不抖。
+  const realStride = Math.max(0, real.stride ?? 0);
+  const stride = Math.max(0, cfg.strideScale ?? 0) * realStride;
+  // v9p：相位改为「起手锁定基准 + 单次往返跨步脉冲」，不再随 progress 单向累加。
+  // 旧版 p×TAU×cycles 让整段攻击腿来回摆近 1.5 个周期，active 段还叠加 Core
+  // gaitPhase 的双重推进（步频翻倍 = 真机「步子太碎」）；现在只做 0→π×cycles→0
+  // 一次完整跨步（迈出去、撑住、收回），两段 smoothstep 使两端值与导数都为 0：
+  //   - 进出攻击相位回到同一基准，不跨相位跳变；
+  //   - 淡出时 drive.phase 与 real.phase 差 0，不再绕一整圈（收势腿不抽）；
+  //   - 连击段切换 p 重置为 0 时相位连续。
+  // 不传 phaseBase 时退化为 real.phase，保持既有纯函数语义可单测。
+  const q = p <= 0.5 ? p * 2 : (p - 0.5) * 2;
+  const sm = q * q * (3 - 2 * q);
+  const bump = p <= 0.5 ? sm : 1 - sm;
   const drive: GaitDrive = {
     speed,
-    phase: real.phase + p * TAU * cycles,
+    phase: phaseBase + ((TAU * cycles) / 2) * bump,
     localForward: speed * fb,
     localRight: speed * (1 - fb) * lead,
+    stride,
   };
+  // v9p：相位插值走「最短等价弧」。旧版线性插值整个 (drive.phase - real.phase)，
+  // 攻击结束时会扫过半圈到一整圈，收势腿明显抽一下（实测单帧 1.1 rad）。wrapPi 后
+  // b=1 时姿态与 drive.phase 完全等价（差整数个 TAU，sin/cos 相同），b=0 精确回到
+  // real.phase，中间只扫 ≤π 且连续，进出攻击都不跳。
+  // 再用 smoothstep(b) 而非线性 b：端点导数为 0，淡出第一帧（b 1→0.79）相位
+  // 几乎不动，配合放大的步幅也不会出现可见的单帧抽动。
+  const phaseArc = wrapPi(drive.phase - real.phase);
+  const phaseBlend = b * b * (3 - 2 * b);
   return {
     speed: real.speed + (drive.speed - real.speed) * b,
-    phase: real.phase + (drive.phase - real.phase) * b,
+    phase: real.phase + phaseArc * phaseBlend,
     localForward: real.localForward + (drive.localForward - real.localForward) * b,
     localRight: real.localRight + (drive.localRight - real.localRight) * b,
+    // v9p：等效步幅从 0 按 b² 淡入（b=0 精确回到旧「stride=0」回退路径）。
+    // 平方淡入让起手 / 收势的过渡帧几乎拿不到放大步幅，只有攻击稳定态（b→1）
+    // 才是满跨步 —— 静止基准与单帧跳变都不被撑大。
+    stride: stride * b * b,
   };
 }
 

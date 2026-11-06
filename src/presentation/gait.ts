@@ -325,3 +325,67 @@ export function chestYawFromHip(hipYaw: number, scale: number, maxDeg: number): 
   const max = Math.max(0, maxDeg) * (Math.PI / 180);
   return clamp(hipYaw * clamp(scale, 0, 2), -max, max);
 }
+
+/* -------------------------------------------------------------------------- *
+ * v9p · 停步惯性：最后一步踩出去 + 身体跟着惯性微前移，再收回待机
+ * -------------------------------------------------------------------------- *
+ * v9n/v9o 的收相只是把相位推到「双脚并拢」并淡出摆幅 —— 两脚纯往回收，
+ * 看着像「站定前先把腿抽回去」，没有急停时「再撑一步、上身被惯性带一下」的感觉。
+ *
+ * 这里叠加一个两端值 / 导数都为 0 的脉冲（0 → 1 → 0，C¹）：
+ *   - 领先腿（停步相位里更靠前的那条）额外前伸并抬膝，跟随腿轻微后蹬；
+ *   - 身体沿停步瞬间的移动方向微前移，上身同步前倾；
+ *   - t→1 时脉冲归零，与 solveStopGait 的淡出一起平滑接回 idle，不残留姿态。
+ * 全部是表现层增量，不改 Core 的 position / velocity，也不进快照。
+ * 所有幅度由 GaitViewConfig 外置，拉 0 即精确回到 v9o 行为。
+ */
+
+export type StopInertia = {
+  /** 领先腿额外前伸（rad，正值；骨架里按「脚向前」取负号叠加） */
+  leadPitch: number;
+  /** 跟随腿轻微后蹬（rad，正值） */
+  trailPitch: number;
+  /** 领先腿抬膝（rad，正值） */
+  leadKnee: number;
+  /** 身体沿停步方向微前移（m） */
+  bodyShift: number;
+  /** 上身随惯性前倾（rad） */
+  chestPitch: number;
+  /** 停步相位里更靠前的是不是左腿 */
+  leadLeft: boolean;
+  /** 移动方向单位向量的前 / 右分量，供骨架把 bodyShift 投影到骨盆局部轴 */
+  fwdN: number;
+  rightN: number;
+  /** 诊断：当前脉冲强度 0..1 */
+  env: number;
+};
+
+export function solveStopInertia(
+  progress: number,
+  phase0: number,
+  fwd: number,
+  right: number,
+  cfg: GaitViewConfig,
+): StopInertia {
+  const t = clamp(progress, 0, 1);
+  const peak = clamp(cfg.stopPeakRatio, 0.05, 0.95);
+  // 两段 smoothstep：t=0 / peak / 1 处值与导数都连续，端点精确为 0
+  const q = t <= peak ? t / peak : (t - peak) / (1 - peak);
+  const s = q * q * (3 - 2 * q);
+  const env = t <= peak ? s : 1 - s;
+
+  const dirLen = Math.hypot(fwd, right);
+  const fwdN = dirLen > EPS ? fwd / dirLen : 1;   // 几乎静止时默认朝身体前方
+  const rightN = dirLen > EPS ? right / dirLen : 0;
+  // solveGait 里 legL 用 p、legR 用 p+π；footOffset(p)>0 表示 legL 的脚在最前
+  const leadLeft = footOffset(phase0, 1) > 0;
+
+  return {
+    leadPitch: Math.max(0, cfg.stopStepPitch) * env,
+    trailPitch: Math.max(0, cfg.stopTrailPitch) * env,
+    leadKnee: Math.max(0, cfg.stopStepKnee) * env,
+    bodyShift: Math.max(0, cfg.stopBodyShift) * env,
+    chestPitch: Math.max(0, cfg.stopChestPitch) * env,
+    leadLeft, fwdN, rightN, env,
+  };
+}

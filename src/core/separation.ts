@@ -1,5 +1,5 @@
 import { resolveHorizontal } from './collision';
-import type { Vec3, World } from './types';
+import type { CrowdResistanceConfig, Vec3, World } from './types';
 
 const EPS = 1e-6;
 /** 黄金角：给「完全重合」的实体分配确定性且互相错开的分离方向，无需任何随机源。 */
@@ -99,4 +99,63 @@ export function separationUpdate(world: World): void {
     s.position.x = clamp(s.position.x, b.minX, b.maxX);
     s.position.z = clamp(s.position.z, b.minZ, b.maxZ);
   }
+}
+
+/* -------------------------------------------------------------------------- *
+ * v9p · 主动挤人的阻力：推着走不再畅通无阻
+ * -------------------------------------------------------------------------- *
+ * 旧版「玩家 ↔ 假人」分离把玩家当不可推动的锚点（wa=0 / wb=1），假人全量让开。
+ * 玩家只要按住摇杆朝假人走，就能以满速把假人一路推着走，毫无「撞到人」的阻滞感。
+ *
+ * 这里不修改任何 position（保住「假人从不修改 character」与逐字节确定性契约），
+ * 只按「主动朝对方推进」的程度衰减施压方的**水平速度**：
+ *   - 主动 = 速度方向指向对方（v̂·n > approachDot）；背对远离 / 侧向擦过完全不减速。
+ *   - 强度 = 贴近程度（距 minD 越近越强）× 正对程度，多个假人取最强的一个，不连乘。
+ * 速度被衰减后，下一帧 accel 会重新把它拉回目标速度，于是稳态是「缓慢顶着走」；
+ * 每帧产生的新重叠也随之变小，假人被推开得明显更慢 —— 就是「推不动」的手感。
+ * 全部纯函数、只写 velocity、minScale=1 时精确回到旧行为。
+ * 对应 C# 形态：static float CrowdResistance(...)
+ */
+
+/** 求施压方的水平速度保留系数（floor..1），纯函数、无副作用。 */
+export function crowdResistance(
+  px: number, pz: number, vx: number, vz: number, pr: number,
+  dummies: readonly { readonly position: Vec3 }[], dr: number,
+  cfg: CrowdResistanceConfig,
+): number {
+  const sp = Math.hypot(vx, vz);
+  const band = Math.max(0, cfg.contactBand);
+  const floor = clamp(cfg.minScale, 0, 1);
+  if (sp < EPS || band <= 0 || floor >= 1) return 1;
+  const minD = pr + dr;
+  const dotMin = clamp(cfg.approachDot, 0, 0.99);
+  let resist = 0;
+  for (const d of dummies) {
+    const dx = d.position.x - px;
+    const dz = d.position.z - pz;
+    const dist = Math.hypot(dx, dz);
+    if (dist >= minD + band) continue;
+    // 完全重合时方向不可判定，按最强正面挤压处理（同帧分离会立即把它推开）
+    if (dist < EPS) { resist = 1; continue; }
+    const approach = (vx * dx + vz * dz) / (sp * dist);
+    if (approach <= dotMin) continue;
+    const closeness = clamp(1 - (dist - minD) / band, 0, 1);
+    const facing = clamp((approach - dotMin) / (1 - dotMin), 0, 1);
+    resist = Math.max(resist, closeness * facing);
+  }
+  return 1 - (1 - floor) * clamp(resist, 0, 1);
+}
+
+/** 应用到玩家速度：只写 velocity.x/z，绝不改 position，也不碰假人。 */
+export function crowdResistanceUpdate(world: World): void {
+  const cfg = world.config.separation.crowd;
+  if (!cfg) return;
+  const c = world.character;
+  const k = crowdResistance(
+    c.position.x, c.position.z, c.velocity.x, c.velocity.z,
+    world.config.characterRadius, world.dummies, world.config.dummies.radius, cfg,
+  );
+  if (k >= 1) return;
+  c.velocity.x *= k;
+  c.velocity.z *= k;
 }
