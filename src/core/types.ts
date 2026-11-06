@@ -652,6 +652,21 @@ export type OrientationConfig = {
   headTurnRate: number;
   /** 头部相对身体的最大偏转角（度），防止扭头过度 */
   maxHeadTurnDeg: number;
+  /**
+   * v9g：小幅推杆时的面朝向平滑速率（1/s）。
+   * 摇杆推到 35% 以下时，几像素的抖动就能让 atan2 偏 60°+，直接跟随会让角色来回抽；
+   * 这个速率约等于 70ms 到位，大幅推杆（≥35%）仍瞬时跟随，不影响转身手感。
+   */
+  facingSmoothRate: number;
+  /** 低于该幅值不更新面朝向（摇杆回中 / 死区边缘的微抖） */
+  facingDeadZone: number;
+  /**
+   * v9g：小幅推杆时的朝向死区（度）。输入方向与当前面朝向夹角小于它就不转身，
+   * 让「拇指在原点附近微颤」不会把角色摇得来回转；超过则按 facingSmoothRate 平滑跟上。
+   */
+  facingDeadbandDeg: number;
+  /** 低于该幅度视为「拇指微颤」，完全不改面朝向（0.18 ≈ 半径 56px 上的 10px） */
+  facingMinMagnitude: number;
 };
 
 export type CoreConfig = {

@@ -128,3 +128,58 @@ describe('程序化朝向：面朝向 / 身体朝向 / 移动方向分离', () =
     expect(snapshot(a)).toBe(snapshot(b));
   });
 });
+
+describe('v9g：小幅推杆的朝向抗抖', () => {
+  it('推杆 < 35% 时方向突变不会一帧跳完（逐帧平滑），收敛到死区内', () => {
+    const w = makeWorld();
+    w.character.facing = 0;
+    run(w, 1, intent({ moveX: 0.25, moveZ: -0.001 }));
+    const first = w.character.facing;
+    // 目标约 +90°，一帧只走一小段（14/s、1/60s ≈ 21%）
+    expect(first).toBeGreaterThan(0.05);
+    expect(first).toBeLessThan(HALF_PI * 0.5);
+    run(w, 30, intent({ moveX: 0.25, moveZ: -0.001 }));
+    // 死区 22° 内停止（轻推不追求精确对齐，避免微颤把朝向摇来摇去）
+    const band = (w.config.orientation.facingDeadbandDeg * Math.PI) / 180 + 1e-3;
+    expect(Math.abs(wrapAngle(w.character.facing - HALF_PI))).toBeLessThan(band + 0.02);
+  });
+
+  it('幅度低于 facingMinMagnitude 的微颤完全不改朝向', () => {
+    const w = makeWorld();
+    run(w, 8, intent({ moveX: 1, moveZ: 0 }));
+    const held = w.character.facing;
+    for (let i = 0; i < 30; i++) {
+      run(w, 1, intent({ moveX: i % 2 === 0 ? 0.15 : -0.15, moveZ: 0.02 }));
+    }
+    expect(Math.abs(wrapAngle(w.character.facing - held))).toBeLessThan(1e-9);
+  });
+
+  it('推杆 >= 35% 时方向突变瞬时跟随，不被平滑拖慢', () => {
+    const w = makeWorld();
+    w.character.facing = 0;
+    run(w, 1, intent({ moveX: 0.8, moveZ: 0 }));
+    expect(Math.abs(wrapAngle(w.character.facing - HALF_PI))).toBeLessThan(1e-6);
+  });
+
+  it('低于 facingDeadZone 的微抖不改变面朝向', () => {
+    const w = makeWorld();
+    run(w, 6, intent({ moveX: 0.7, moveZ: 0 }));      // 先朝 +X
+    const held = w.character.facing;
+    for (let i = 0; i < 10; i++) {
+      run(w, 1, intent({ moveX: i % 2 === 0 ? 0.1 : -0.1, moveZ: 0 }));
+    }
+    expect(Math.abs(wrapAngle(w.character.facing - held))).toBeLessThan(1e-9);
+  });
+
+  it('小幅推杆反复反向：面朝向每秒转角被限速，不出现逐帧 180° 跳变', () => {
+    const w = makeWorld();
+    let maxStep = 0;
+    for (let i = 0; i < 30; i++) {
+      const before = w.character.facing;
+      run(w, 1, intent({ moveX: i % 2 === 0 ? 0.25 : -0.25 }));
+      maxStep = Math.max(maxStep, Math.abs(wrapAngle(w.character.facing - before)));
+    }
+    // 14/s 指数趋近：180° 反向时单帧最多 21% ≈ 38°，5 帧内转完，且不再瞬移
+    expect(maxStep).toBeLessThan(0.7);
+  });
+});

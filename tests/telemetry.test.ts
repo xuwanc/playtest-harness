@@ -127,6 +127,32 @@ describe('飞行记录仪：异常标记', () => {
     expect(rec.dump().anomalies.some((x) => x.kind === 'dirJump')).toBe(false);
   });
 
+  it('玩家快速拨杆转身不算 dirJump（moveYaw 有滞后，不能当判据）', () => {
+    const w = makeWorld();
+    const rec = mk();
+    advance(w);
+    rec.sample(w, frame({ intents: intent({ moveX: 1, moveZ: 0 }) }), 16.7);
+    // 输入方向从 +X 拨到 +Z（90°），朝向同一帧跟过去：这是正常转身
+    w.character.facing = Math.PI / 2;
+    advance(w);
+    rec.sample(w, frame({ intents: intent({ moveX: 0, moveZ: 1 }) }), 16.7);
+    expect(rec.dump().anomalies.some((x) => x.kind === 'dirJump')).toBe(false);
+  });
+
+  it('输入几乎没变、朝向却大跳 → 仍然报 dirJump（真 bug 不漏）', () => {
+    const w = makeWorld();
+    const rec = mk();
+    const f = frame({ intents: intent({ moveX: 0.35, moveZ: 0.9 }) });
+    advance(w);
+    rec.sample(w, f, 16.7);
+    w.character.facing = -1.4;
+    advance(w);
+    rec.sample(w, f, 16.7);
+    const a = rec.dump().anomalies.find((x) => x.kind === 'dirJump');
+    expect(a).toBeTruthy();
+    expect(a!.detail).toContain('inΔ');
+  });
+
   it('拖拽松手瞬间朝向翻掉 → aimDrop（v9d 老问题的回归监控）', () => {
     const w = makeWorld();
     const rec = mk();

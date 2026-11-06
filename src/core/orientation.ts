@@ -52,8 +52,21 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   } else if (bowAim) {
     // 按住弓蓄力时持续面向锁定目标（覆盖摇杆方向），松手/换武器即恢复
     c.facing = world.targeting.targetYaw;
-  } else if (inputLen > EPS) {
-    c.facing = Math.atan2(intents.moveX, intents.moveZ);
+  } else if (inputLen > Math.max(o.facingDeadZone, EPS)) {
+    const target = Math.atan2(intents.moveX, intents.moveZ);
+    // v9g：小幅推杆（< 35%）时方向对像素极敏感，7px 半径上转一圈就能让 atan2 扫 360°，
+    // 直接跟随会让角色原地来回抽（真机 10 次 dirJump 里大半是这种）。
+    // 两道闸：① 与当前朝向夹角小于 deadband 就不动（拇指微颤不转身）；
+    //        ② 超过则按 facingSmoothRate 指数趋近（≈70ms 到位），不是瞬移。
+    // 大幅推杆（>= 35%）仍瞬时跟随，转身手感不变。
+    if (inputLen >= 0.35) {
+      c.facing = target;
+    } else if (inputLen >= o.facingMinMagnitude) {
+      const diff = Math.abs(wrapAngle(target - c.facing));
+      if (diff > (o.facingDeadbandDeg * Math.PI) / 180) {
+        c.facing = approach(c.facing, target, o.facingSmoothRate, dt);
+      }
+    }
   }
   // 无输入且非攻击：保持上一帧面朝向
 

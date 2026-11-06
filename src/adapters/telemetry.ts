@@ -52,6 +52,8 @@ export const ROW_COLUMNS = [
   'mx', 'mz', 'px', 'pz', 'vx', 'vz', 'yaw', 'body', 'fl', 'stride',
 ] as const;
 const COL_T = 0;
+const COL_MX = 9;
+const COL_MZ = 10;
 const COL_YAW = 15;
 
 export type TelemetryRow = (number | string)[];
@@ -107,6 +109,11 @@ export type TelemetryStats = {
   linkHits: number;
   rolls: number;
   blinks: number;
+  /** 法杖引导起手（「攻击 0」时靠这些字段区分「没按」和「按了但不是近战」） */
+  channels: number;
+  bolts: number;
+  rings: number;
+  bowCharges: number;
   jumps: number;
   resets: number;
   dirJumps: number;
@@ -255,6 +262,7 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
     stickActiveMs: 0, gestures: {},
     attacks: 0, hits: 0, hurts: 0, links: 0, linkHits: 0,
     rolls: 0, blinks: 0, jumps: 0, resets: 0,
+    channels: 0, bolts: 0, rings: 0, bowCharges: 0,
     dirJumps: 0, aimDrops: 0, freezes: 0, stickLosts: 0,
   };
 
@@ -263,7 +271,11 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
   let lastRowT = -1e9;
   let prevYaw: number | null = null;
   let prevMoveYaw = 0;
+  /** 上一帧的移动输入方向（无输入时为 null）—— 判断「朝向跳」还是「玩家真的转了」 */
+  let prevInYaw: number | null = null;
   let prevFlags = 0;
+  /** 最近一帧的武器：回答「攻击 0 次」到底是没按，还是按在法杖 / 弓上 */
+  let lastWeapon = '';
   let freezeStart = -1;
   let freezeQuietUntil = -1;
   let stickLostStart = -1;
@@ -322,6 +334,10 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
       case 'link-hit': stats.linkHits++; break;
       case 'roll': stats.rolls++; break;
       case 'blink': stats.blinks++; break;
+      case 'channel-start': stats.channels++; break;
+      case 'projectile-fire': stats.bolts++; break;
+      case 'ring-place': stats.rings++; break;
+      case 'charge-start': stats.bowCharges++; break;
       case 'jumped': stats.jumps++; break;
       case 'reset': stats.resets++; break;
       case 'blocked': lastBlockedT = e.tick; break;
@@ -339,14 +355,21 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
     const lines: string[] = [];
     lines.push(`# ${meta.version} · ${meta.startedAt} · ${meta.screen}@${meta.dpr} ${meta.orientation === 'portrait' ? '竖' : '横'} · ${meta.cores}核`);
     lines.push(`运行 ${dur.toFixed(1)}s / ${s.frames} 帧 · ${s.fps.toFixed(1)}fps · 最大 ${s.dtMax.toFixed(0)}ms · 尖峰 ${s.spikes} · 步 ${s.steps}`);
-    lines.push(`摇杆活跃 ${dur > 0 ? Math.round((s.stickActiveMs / 1000 / dur) * 100) : 0}% · 手势 press ${gsum('press')} / release ${gsum('release')} / tap ${gsum('tap')} / dtap ${gsum('doubleTap')} / long ${gsum('longPress')} / drag ${gsum('drag')} / cancel ${gsum('cancel')}`);
+    lines.push(`摇杆活跃 ${dur > 0 ? Math.round((s.stickActiveMs / 1000 / dur) * 100) : 0}% · 手势 按下 ${gsum('press')}（单击 ${gsum('tap')} / 双击 ${gsum('doubleTap')} / 拖拽 ${gsum('drag')} / 长按 ${gsum('longPress')} / 打断 ${gsum('cancel')} / 拖放 ${gsum('release')}）`);
     lines.push(`攻击 ${s.attacks}(中${s.hits}) · 受击 ${s.hurts} · 派生 ${s.links}(中${s.linkHits}) · 翻滚 ${s.rolls} 闪现 ${s.blinks} · 跳 ${s.jumps} · 复位 ${s.resets}`);
+    lines.push(`法杖 引导${s.channels} 飞弹${s.bolts} 电环${s.rings} · 弓蓄力${s.bowCharges} · 当前武器 ${lastWeapon || '-'}`);
     lines.push(`异常 ${anomalies.length}（dir ${s.dirJumps} / aim ${s.aimDrops} / freeze ${s.freezes} / stick ${s.stickLosts} / spike ${s.spikes}）`);
     if (anomalies.length > 0) {
       for (const a of anomalies.slice(-6)) {
         lines.push(`· ${a.kind} @t${a.t.toFixed(2)} tick${a.tick} ${a.ms > 0 ? `${a.ms}ms ` : ''}${a.detail}`);
         const yaws = a.ctx.map((r) => String(r[COL_YAW])).join(' ');
+        const ins = a.ctx.map((r) => {
+          const mx = r[COL_MX] as number;
+          const mz = r[COL_MZ] as number;
+          return Math.hypot(mx, mz) > 0.05 ? String(Math.round((Math.atan2(mx, mz) * 180) / Math.PI)) : '.';
+        }).join(' ');
         lines.push(`  yaw ${yaws}`);
+        lines.push(`  in  ${ins}`);
       }
     }
     if (events.length > 0) {
@@ -375,8 +398,11 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
       const c = world.character;
       const mag = Math.hypot(frame.stickX, frame.stickY);
       const speed = Math.hypot(c.velocity.x, c.velocity.z);
+      lastWeapon = world.combat.weapon;
       const flags = buildFlags(world, frame);
       const yaw = c.facing;
+      const inLen = Math.hypot(frame.intents.moveX, frame.intents.moveZ);
+      const inYaw = inLen > 0.05 ? Math.atan2(frame.intents.moveX, frame.intents.moveZ) : null;
 
       if (mag > 0.2) stats.stickActiveMs += dtMs;
 
@@ -405,13 +431,18 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
       if (prevYaw !== null && !quiet) {
         const deltaDeg = Math.abs(deg1(wrapPi(yaw - prevYaw)));
         const moveDelta = Math.abs(deg1(wrapPi(c.moveYaw - prevMoveYaw)));
+        // 判据必须看「输入方向」而不是 moveYaw：moveYaw 由速度反推，转向时有 0.1~0.2s 滞后，
+        // 用它会把「玩家快速拨杆转身」误报成朝向 bug（v0.9.7 真机 10 次误报全属此类）。
+        const inDelta = inYaw !== null && prevInYaw !== null
+          ? Math.abs(deg1(wrapPi(inYaw - prevInYaw)))
+          : (inYaw === null && prevInYaw === null ? 0 : 999);
         const dropAim = (prevFlags & FLAG_AIM) !== 0 && (flags & FLAG_AIM) === 0;
         if (deltaDeg > opt.aimDropDeg && dropAim) {
           pushAnomaly('aimDrop', t, world.tick, 0,
             `${deltaDeg.toFixed(0)}° @aim→none stick(${frame.stickX.toFixed(2)},${frame.stickY.toFixed(2)}) fl=${flagsToText(flags)}`, row);
-        } else if (deltaDeg > opt.dirJumpDeg && moveDelta < 18 && (flags & (FLAG_ATTACK | FLAG_DASH | FLAG_LINK | FLAG_HURT)) === 0 && !dropAim) {
+        } else if (deltaDeg > opt.dirJumpDeg && inDelta < 15 && (flags & (FLAG_ATTACK | FLAG_DASH | FLAG_LINK | FLAG_HURT)) === 0 && !dropAim) {
           pushAnomaly('dirJump', t, world.tick, 0,
-            `${deltaDeg.toFixed(0)}° moveΔ${moveDelta.toFixed(0)}° yaw ${deg1(prevYaw)}→${deg1(yaw)} fl=${flagsToText(prevFlags)}→${flagsToText(flags)}`, row);
+            `${deltaDeg.toFixed(0)}° inΔ${inDelta === 999 ? '无输入' : `${inDelta.toFixed(0)}°`} mvΔ${moveDelta.toFixed(0)}° yaw ${deg1(prevYaw)}→${deg1(yaw)} fl=${flagsToText(prevFlags)}→${flagsToText(flags)}`, row);
         }
       }
 
@@ -451,6 +482,7 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
 
       prevYaw = yaw;
       prevMoveYaw = c.moveYaw;
+      prevInYaw = inYaw;
       prevFlags = flags;
     },
 
@@ -512,6 +544,10 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
       stats.linkHits = 0;
       stats.rolls = 0;
       stats.blinks = 0;
+      stats.channels = 0;
+      stats.bolts = 0;
+      stats.rings = 0;
+      stats.bowCharges = 0;
       stats.jumps = 0;
       stats.resets = 0;
       stats.dirJumps = 0;
