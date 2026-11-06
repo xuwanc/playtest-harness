@@ -1,0 +1,28 @@
+# 依赖（90M，绝不入库）
+node_modules/
+
+# 说明：dist/ 有意保留入库，供 GitHub Pages 直接部署
+# 说明：preview-*.png 有意保留入库，README 正文引用了这些截图
+
+# 本地环境与密钥
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 日志 / 缓存 / 覆盖率
+*.log
+npm-debug.log*
+.vite/
+coverage/
+*.tsbuildinfo

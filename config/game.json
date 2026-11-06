@@ -1,0 +1,443 @@
+{
+  "_note": "全部数值外置。core 段只被 Core 读取；view 段只被表现层读取；scene 段由 scene.ts 生成碰撞白盒。热改 core/view 数值无需重编译，调试面板可直接写入。",
+
+  "core": {
+    "fixedDt": 0.0166666667,
+    "maxStepsPerFrame": 5,
+    "moveSpeed": 4.2,
+    "sprintMultiplier": 1.75,
+    "acceleration": 16,
+    "friction": 14,
+    "gravity": 24,
+    "jumpSpeed": 8,
+    "stepHeight": 0.45,
+    "characterRadius": 0.3,
+    "characterHeight": 1.2,
+    "coyoteTime": 0.1,
+    "jumpBufferTime": 0.12,
+    "strideLength": 1,
+    "strideSpeedGain": 0.45,
+    "strideSpeedCap": 1.8,
+    "fallTolerance": 0.6,
+    "spawn": { "x": 0, "y": 0, "z": 8 },
+    "worldBounds": { "minX": -13.5, "maxX": 13.5, "minZ": -13.5, "maxZ": 13.5 },
+    "orientation": {
+      "bodyTurnRate": 7,
+      "headTurnRate": 20,
+      "maxHeadTurnDeg": 55
+    },
+    "combat": {
+      "comboWindow": 0.65,
+      "settle": 0.16,
+      "attackMoveScale": 0,
+      "settleMoveScale": 0.32,
+      "cancelWindow": 0.45,
+      "minLungeScale": 0.4,
+      "autoCombo": true,
+      "weapons": {
+        "sword-shield": { "moveMultiplier": 1, "windup": 0.09, "active": 0.13, "recovery": 0.24, "lunge": [0.45, 0.6, 0.95], "comboCount": 3 },
+        "dual-swords": { "moveMultiplier": 1.08, "windup": 0.07, "active": 0.1, "recovery": 0.18, "lunge": [0.4, 0.55, 0.85], "comboCount": 3 },
+        "greatsword": { "moveMultiplier": 0.85, "windup": 0.16, "active": 0.18, "recovery": 0.36, "lunge": [0.7, 0.9, 1.4], "comboCount": 3 },
+        "staff": { "moveMultiplier": 0.95, "windup": 0, "active": 0, "recovery": 0, "lunge": [0, 0, 0], "comboCount": 0 },
+        "bow": { "moveMultiplier": 1, "windup": 0, "active": 0, "recovery": 0, "lunge": [0, 0, 0], "comboCount": 0 }
+      },
+      "bow": {
+        "maxChargeTime": 1.4,
+        "minChargeToFire": 0.18,
+        "chargeMoveMultiplier": 0.55,
+        "release": { "windup": 0.04, "active": 0.12, "recovery": 0.26, "lunge": 0.12 }
+      }
+    },
+    "abilities": {
+      "arcane": {
+        "fireInterval": 0.28,
+        "speed": 11,
+        "life": 1.1,
+        "radius": 0.42,
+        "hurtType": "light",
+        "hurtDuration": 0.2,
+        "knockback": 0.12,
+        "moveScale": 0.82
+      },
+      "ring": {
+        "radius": 2.4,
+        "duration": 1.2,
+        "pulseInterval": 0.34,
+        "stun": 0.45,
+        "knockback": 0.35
+      }
+    },
+    "targeting": {
+      "range": 7,
+      "maxAngleDeg": 90,
+      "frontBias": 1.2,
+      "idealRange": 1.35,
+      "maxLungeScale": 1.6,
+      "targetAssist": true
+    },
+    "hits": {
+      "arcDeg": 65,
+      "reach": {
+        "sword-shield": 1.6,
+        "dual-swords": 1.5,
+        "greatsword": 2,
+        "staff": 2.6,
+        "bow": 9
+      },
+      "hurtLight": 0.2,
+      "hurtHeavy": 0.32,
+      "hurtKnock": 0.42,
+      "knockback": {
+        "sword-shield": 0,
+        "dual-swords": 0,
+        "greatsword": 0.75,
+        "staff": 0.2,
+        "bow": 0
+      },
+      "knockbackDecay": 9,
+      "dummyReach": 1.8,
+      "noDamageToPlayer": true,
+      "dummyKnockback": 0.18
+    },
+    "separation": { "iterations": 3, "slop": 0.002 },
+    "links": {
+      "enabled": true,
+      "windows": { "roll": 0.3, "blink": 0.55, "sprint": 0.5 },
+      "sharedCooldown": 0.85,
+      "triggerWhileSprinting": true,
+      "search": { "range": 6.5, "maxAngleDeg": 85, "stopDistance": 1.25 },
+      "noTargetFallback": true,
+      "moves": {
+        "sword-shield": {
+          "enabled": true, "kind": "shield-charge", "distance": 3.4,
+          "windup": 0.08, "active": 0.22, "recovery": 0.26,
+          "hit": {
+            "shape": "capsule", "radius": 1.25, "arcDeg": 75, "width": 0.85,
+            "type": "heavy", "duration": 0.34, "knockback": 0.7,
+            "pulseInterval": 0, "liftHeight": 0, "freeze": 0
+          }
+        },
+        "dual-swords": {
+          "enabled": false, "kind": "thrust", "distance": 4.2,
+          "windup": 0.07, "active": 0.2, "recovery": 0.24,
+          "hit": {
+            "shape": "capsule", "radius": 0.9, "arcDeg": 40, "width": 0.55,
+            "type": "heavy", "duration": 0.28, "knockback": 0.35,
+            "pulseInterval": 0, "liftHeight": 0, "freeze": 0
+          }
+        },
+        "greatsword": {
+          "enabled": false, "kind": "whirlwind", "distance": 1.4,
+          "windup": 0.12, "active": 0.5, "recovery": 0.34,
+          "hit": {
+            "shape": "circle", "radius": 2.4, "arcDeg": 180, "width": 0.9,
+            "type": "knock", "duration": 0.4, "knockback": 0.6,
+            "pulseInterval": 0.16, "liftHeight": 0, "freeze": 0
+          }
+        },
+        "staff": {
+          "enabled": false, "kind": "frost-ring", "distance": 0,
+          "windup": 0.1, "active": 0.18, "recovery": 0.3,
+          "hit": {
+            "shape": "circle", "radius": 2.6, "arcDeg": 180, "width": 0.9,
+            "type": "heavy", "duration": 0.3, "knockback": 0.12,
+            "pulseInterval": 0.2, "liftHeight": 0, "freeze": 1.2
+          }
+        }
+      },
+      "landing": {
+        "enabled": false,
+        "maxAirTime": 1.2,
+        "moves": {
+          "sword-shield": {
+            "enabled": false, "kind": "shield-slam", "distance": 0,
+            "windup": 0.06, "active": 0.16, "recovery": 0.24,
+            "hit": {
+              "shape": "cone", "radius": 2, "arcDeg": 100, "width": 0.8,
+              "type": "heavy", "duration": 0.3, "knockback": 0.3,
+              "pulseInterval": 0, "liftHeight": 0, "freeze": 0
+            }
+          },
+          "dual-swords": {
+            "enabled": false, "kind": "cross-slam", "distance": 0,
+            "windup": 0.06, "active": 0.18, "recovery": 0.24,
+            "hit": {
+              "shape": "cone", "radius": 1.8, "arcDeg": 85, "width": 0.7,
+              "type": "heavy", "duration": 0.26, "knockback": 0.2,
+              "pulseInterval": 0, "liftHeight": 0, "freeze": 0
+            }
+          },
+          "greatsword": {
+            "enabled": false, "kind": "shockwave", "distance": 0,
+            "windup": 0.08, "active": 0.2, "recovery": 0.3,
+            "hit": {
+              "shape": "cone", "radius": 3, "arcDeg": 140, "width": 1,
+              "type": "knock", "duration": 0.42, "knockback": 0.25,
+              "pulseInterval": 0, "liftHeight": 0.9, "freeze": 0
+            }
+          }
+        }
+      }
+    },
+    "dash": {
+      "rollDistance": 3.2,
+      "rollDuration": 0.36,
+      "rollCooldown": 0.7,
+      "blinkDistance": 5,
+      "blinkStep": 0.22,
+      "blinkCooldown": 1.1,
+      "blinkClearVelocity": true
+    },
+    "camera": {
+      "radius": 9,
+      "nearDistance": 1.5,
+      "modeWeight": {
+        "idle": 0.2,
+        "wander": 0.45,
+        "follow": 0.8,
+        "keep-distance": 0.7,
+        "attack": 1.5
+      },
+      "attackBoost": 0.6,
+      "saturation": 2.6,
+      "pushIn": 0.12,
+      "maxPullback": 0.38,
+      "maxOffset": 2.6,
+      "maxPitchDelta": 7,
+      "framingBias": 0.55
+    },
+    "dummies": {
+      "count": 4,
+      "spawn": [
+        { "x": -6, "z": 5 },
+        { "x": -2, "z": 5 },
+        { "x": 2, "z": 5 },
+        { "x": 6, "z": 5 }
+      ],
+      "initialModes": ["wander", "follow", "keep-distance", "attack"],
+      "radius": 0.3,
+      "height": 1.2,
+      "moveSpeed": 2.6,
+      "acceleration": 10,
+      "wanderRadius": 3,
+      "wanderInterval": 2.2,
+      "followStopDistance": 1.2,
+      "keepDistance": 4,
+      "keepDeadZone": 0.6,
+      "keepStrafe": 0.35,
+      "attackRange": 1.6,
+      "attackInterval": 1.6,
+      "attackWindup": 0.34,
+      "attackActive": 0.18,
+      "attackRecovery": 0.4
+    }
+  },
+
+  "scene": {
+    "ground": { "size": 28, "thickness": 0.4 },
+    "steps": [
+      { "id": "step-025", "x": -7.5, "z": 2, "width": 2.4, "depth": 2.4, "height": 0.25 },
+      { "id": "step-040", "x": -4.5, "z": 2, "width": 2.4, "depth": 2.4, "height": 0.4 },
+      { "id": "step-060", "x": -1.5, "z": 2, "width": 2.4, "depth": 2.4, "height": 0.6 },
+      { "id": "step-090", "x": 1.5, "z": 2, "width": 2.4, "depth": 2.4, "height": 0.9 },
+      { "id": "step-120", "x": 4.5, "z": 2, "width": 2.4, "depth": 2.4, "height": 1.2 }
+    ],
+    "doorways": [
+      {
+        "id": "door-wide",
+        "x": -3,
+        "z": -3,
+        "openingWidth": 2.4,
+        "openingHeight": 1.7,
+        "wallThickness": 0.6,
+        "wallSpan": 3.2,
+        "wallHeight": 2.4
+      },
+      {
+        "id": "door-narrow",
+        "x": 4,
+        "z": -3,
+        "openingWidth": 0.5,
+        "openingHeight": 1.7,
+        "wallThickness": 0.6,
+        "wallSpan": 2.4,
+        "wallHeight": 2.4
+      }
+    ],
+    "obstacles": [
+      { "id": "wall-a", "x": 7.5, "z": 1, "width": 3.5, "depth": 0.6, "height": 2 },
+      { "id": "pillar-a", "x": -8, "z": -7, "width": 1.2, "depth": 1.2, "height": 2.2 }
+    ],
+    "grid": { "cellSize": 0.5, "minX": -14, "maxX": 14, "minZ": -14, "maxZ": 14 }
+  },
+
+  "view": {
+    "camera": {
+      "pitchDeg": 50,
+      "yawDeg": 0,
+      "distance": 17,
+      "smoothing": 6.5,
+      "fov": 45
+    },
+    "smartCamera": { "smoothing": 3.2 },
+    "zoom": {
+      "min": 0.45,
+      "max": 2.4,
+      "smoothing": 12,
+      "pinchGain": 1,
+      "maxStepRatio": 1.25,
+      "wheelStep": 1.12,
+      "keyStep": 1.12
+    },
+    "links": {
+      "chargeColor": "#7fd4ff",
+      "ringRadius": 1.25,
+      "fxDuration": 0.42,
+      "leanDeg": 16,
+      "shieldPitchDeg": 42,
+      "pelvisReach": 0.12
+    },
+    "joystick": { "maxRadiusPx": 56, "deadZone": 0.08 },
+    "showGrid": true,
+    "showColliders": false,
+    "voxel": {
+      "headSize": 0.4,
+      "bodyWidth": 0.46,
+      "bodyHeight": 0.4,
+      "limbThickness": 0.14,
+      "legLength": 0.4,
+      "armLength": 0.36
+    },
+    "orientation": {
+      "legYawScale": 0.35,
+      "hipYawMaxDeg": 90,
+      "hipYawSmoothing": 12,
+      "headPivotHeight": 0.4
+    },
+    "gait": {
+      "strideGain": 0.8,
+      "maxAmp": 1.35,
+      "sideWeight": 0.85,
+      "crossStep": 0.65,
+      "kneeLift": 0.75,
+      "plantLock": 0.7,
+      "comSway": 0.05,
+      "comBob": 0.045,
+      "hipLean": 0.16,
+      "armSwing": 0.6
+    },
+    "animation": {
+      "attack": {
+        "lowerBodyWeight": 0,
+        "gaitWeight": 1,
+        "blendRate": 14
+      },
+      "stride": {
+        "cycles": 1,
+        "strideSpeed": 2.4,
+        "forwardBias": 0.72,
+        "stepPitch": 0.55,
+        "stepKnee": 0.5,
+        "stepSide": 0.3,
+        "stepDip": 0.07,
+        "stepSway": 0.05,
+        "stepReach": 0.12,
+        "stepSideReach": 0.09,
+        "stepDipReach": 0.035,
+        "heavyScale": 0.7
+      },
+      "landing": {
+        "enabled": true,
+        "duration": 0.34,
+        "compressRatio": 0.18,
+        "crouchDepth": 0.13,
+        "kneeBend": 0.62,
+        "hipPitch": 0.3,
+        "upperPitch": 0.16,
+        "armTuck": 0.22,
+        "lowerScale": 0.45,
+        "impactSpeed": 9,
+        "minScale": 0.45,
+        "jumpAnticipation": 0.32,
+        "anticipationDuration": 0.13
+      }
+    },
+    "weaponMount": {
+      "swordPitchDeg": 68,
+      "swordYawDeg": 16,
+      "greatswordPitchDeg": 58,
+      "greatswordYawDeg": 10,
+      "staffPitchDeg": 16,
+      "shieldPitchDeg": 8,
+      "bowPitchDeg": 6
+    },
+    "lean": {
+      "accelGain": 0.02,
+      "turnGain": 0.05,
+      "maxForwardDeg": 13,
+      "maxSideDeg": 11,
+      "smoothing": 8,
+      "pelvisTiltGain": 0.35,
+      "pelvisShift": 0.018,
+      "moveCrouch": 0.035,
+      "crouchSmoothing": 8
+    },
+    "ik": {
+      "enabled": true,
+      "weight": 0.9,
+      "attackScale": 0.65,
+      "maxCorrectionDeg": 70
+    },
+    "dash": {
+      "rollColor": "#bfe8ff",
+      "blinkColor": "#a98bff",
+      "fxDuration": 0.42,
+      "ringRadius": 0.55
+    },
+    "hurt": {
+      "flashColor": "#ff6a52",
+      "flashStrength": 0.9,
+      "leanLight": 0.28,
+      "leanHeavy": 0.5,
+      "leanKnock": 0.82,
+      "enabled": true,
+      "hitHeight": { "light": 0.2, "heavy": 0.6, "knock": 0.9 },
+      "forceHitHeight": -1,
+      "pulseRatio": 0.16,
+      "comShift": 0.06,
+      "lowerScale": 0.45,
+      "upperShiftScale": 0.45,
+      "maxUpperShift": 0.1,
+      "abdomen": {
+        "upperPitch": 0.85, "upperRoll": 0.5, "upperYaw": 0.12, "fold": 0.42,
+        "shift": 0.26, "drop": 0.14, "back": 0.16, "knee": 0.9, "hip": 0.42, "arm": 0.5
+      },
+      "shoulder": {
+        "upperPitch": 1.0, "upperRoll": 1.0, "upperYaw": 0.55, "fold": 0,
+        "shift": 0.34, "drop": 0.07, "back": 0.09, "knee": 0.42, "hip": 0.2, "arm": -0.35
+      }
+    },
+    "targeting": { "ringColor": "#ffd166", "ringRadius": 0.58 },
+    "colors": {
+      "ground": "#2b3440",
+      "step": "#4a6d8c",
+      "wall": "#6b7280",
+      "lintel": "#c08442",
+      "obstacle": "#9c5a5a",
+      "body": "#4ea1de",
+      "head": "#f2c98a",
+      "limb": "#2f6fa8",
+      "shoe": "#1d2733",
+      "blade": "#d8e6f2",
+      "bladeEdge": "#ffffff",
+      "metal": "#8fa6bb",
+      "wood": "#8b5e3c",
+      "glow": "#7fe3ff"
+    },
+    "dummies": {
+      "colors": ["#e2a45c", "#6fc9a0", "#b58fe0", "#e26d6d"],
+      "labelBg": "rgba(12,18,26,0.82)",
+      "attackArcColor": "#ff6b5e"
+    }
+  }
+}

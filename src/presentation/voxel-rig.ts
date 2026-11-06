@@ -1,0 +1,1060 @@
+import * as THREE from 'three';
+import { wrapAngle } from '../core';
+import type {
+  CharacterState, ColorConfig, CombatState, GaitViewConfig, HurtState, HurtViewConfig,
+  IKViewConfig, LeanViewConfig, LinkState, LinkViewConfig, OrientationViewConfig,
+  ProgramAnimViewConfig, VoxelConfig, WeaponId, WeaponMountConfig,
+} from '../core';
+import { solveGait } from './gait';
+import type { GaitInput } from './gait';
+import {
+  attackBlendStep, attackGaitDrive, attackStridePose, landingImpactScale,
+  poseWeights, pulseValue, scaleGaitPose,
+} from './program-anim';
+import type { GaitDrive } from './program-anim';
+import { emptyHurtPose, solveHurtPose } from './hurt-pose';
+import type { HurtPose } from './hurt-pose';
+import { solveInertiaPose } from './inertia';
+import { applyFootIK, captureIKBase, EMPTY_IK_DIAGNOSTICS } from './rig-ik';
+import type { IKDiagnostics, IKLimb } from './rig-ik';
+
+export type VoxelRig = {
+  group: THREE.Group;
+  /** 步态、握持、朝向与受击完全由 Core 状态驱动；frameDt 仅用于表现层惯性倾斜的平滑。
+   *  channeling = 法杖是否正在引导奥术飞弹（v7c #12），用于叠加举杖 / 法球发光姿态。
+   *  coreTime = Core 的 world.time（可选）：落地缓冲脉冲用它计时，暂停 / 时间缩放 / 单步
+   *  都与逻辑同步；不传时（单测）退化为按 frameDt 累加的本地时间。 */
+  update(
+    c: CharacterState, combat: CombatState, hurt: HurtState, frameDt: number,
+    channeling?: boolean, coreTime?: number, link?: LinkState,
+  ): void;
+  /** 表现层诊断读数（弧度），供实验台观测，不进入 Core / 快照。 */
+  lean(): { forward: number; side: number };
+  /** v8c：跳跃 / 落地缓冲脉冲的实时读数（纯表现，不进 Core）。 */
+  landing(): {
+    /** 当前脉冲强度 0..1（0 = 无缓冲） */
+    pulse: number;
+    /** 剩余时长（秒） */
+    remaining: number;
+    kind: 'none' | 'land' | 'jump';
+    /** 触发落地时读到的落地前垂直速度（m/s，负 = 下落） */
+    impactVy: number;
+  };
+  /** v8c：攻击姿态混合系数 0..1（0 = 完全由步态 / 静止基准接管）。 */
+  attackBlend(): number;
+  /** v8d：两个下半身权重与本帧攻击等效驱动读数，供验收「权重是否真的生效」。 */
+  attackWeights(): {
+    gaitScale: number;
+    attackLegWeight: number;
+    /** 本帧喂给 solveGait 的等效速度（>0 才会解算出姿态，Core 锁速时为 0 是旧 bug） */
+    driveSpeed: number;
+    /** 本帧喂给 solveGait 的相位 */
+    stridePhase: number;
+  };
+  /** v8f：本帧分层受击姿态的诊断读数（不进 Core / 快照）。 */
+  hurt(): HurtPose;
+  /** v8g：本帧足部 IK 锚定读数（是否生效 / 权重 / 钳制数 / 钉地残差）。 */
+  ik(): IKDiagnostics;
+  /** 下盘相对身体的连续偏航（v8b），供验收「引导/后退时跨朝向不跳变」。 */
+  hipYaw(): number;
+  /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
+   *  供验收「腿摆动方向」：投影基准必须与腿所在坐标系一致，否则非正前方时方向被歪。 */
+  gaitYaw(): number;
+  /** 箭（局部 +Z）在世界空间的单位方向，用于验收「弓箭朝正前方」。 */
+  arrowDirection(): { x: number; y: number; z: number };
+  dispose(): void;
+};
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+const EPS = 1e-6;
+
+type Limb = { root: THREE.Group; joint: THREE.Group; hand: THREE.Group };
+/** 腿额外带一个末端标记，供 IK 取世界锚点（小腿末端，不含鞋的视觉偏移）。 */
+type Leg = Limb & { tip: THREE.Object3D };
+
+type WeaponParts = {
+  right: THREE.Object3D;
+  left: THREE.Object3D;
+  orb?: THREE.Mesh;
+  arrow?: THREE.Group;
+  drawString?: THREE.Mesh;
+};
+
+function makeBox(w: number, h: number, d: number, color: string): THREE.Mesh {
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshLambertMaterial({ color }),
+  );
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function group(): THREE.Group {
+  return new THREE.Group();
+}
+
+/**
+ * 体素剑：柄 + 护手 + 刃 + 刃口亮边 + 尖，沿局部 +Y 伸出。
+ *
+ * 刃面竖直：挂点会把局部 +Y 前倒 swordPitchDeg（约 68°）指向 +Z 前方，
+ * 此时局部 +Z 被转到世界「近似竖直」，局部 +X 仍水平。
+ * 因此刀身必须「薄在 X、宽在 Z」，宽面才落在竖直面内（法线水平朝侧面）；
+ * 若宽面在 X（旧版）则法线朝上，俯视下就是一片「水平躺着的刀刃」。
+ * 刃口亮边贴在 +Z 侧（前倒后朝前下方），明确刀锋方向，不朝肩膀。
+ */
+function makeSword(len: number, width: number, colors: ColorConfig): THREE.Group {
+  const g = group();
+  const grip = makeBox(width * 0.7, 0.12, width * 0.7, colors.wood);
+  grip.position.y = 0.06;
+  g.add(grip);
+  // 护手沿世界水平 X 张开，与竖直刃面垂直
+  const guard = makeBox(width * 2.4, 0.045, width * 0.8, colors.metal);
+  guard.position.y = 0.13;
+  g.add(guard);
+  // 薄在 X、宽在 Z → 刃面竖直
+  const blade = makeBox(width * 0.38, len, width, colors.blade);
+  blade.position.y = 0.13 + len / 2;
+  g.add(blade);
+  const edge = makeBox(width * 0.42, len * 0.96, width * 0.2, colors.bladeEdge);
+  edge.position.set(0, 0.13 + len / 2, width * 0.5);
+  g.add(edge);
+  const tip = makeBox(width * 0.3, 0.09, width * 0.45, colors.blade);
+  tip.position.y = 0.13 + len + 0.045;
+  g.add(tip);
+  return g;
+}
+
+/**
+ * 大剑：与体素剑同构，但更长更宽，并额外加一段向下的「下段握柄」，
+ * 让左手也能双手持握（右手握上段护手、左手握下段柄）。
+ */
+function makeGreatsword(colors: ColorConfig): THREE.Group {
+  const g = makeSword(0.72, 0.15, colors);
+  const lower = makeBox(0.12, 0.46, 0.12, colors.wood);
+  lower.position.y = -0.3;
+  g.add(lower);
+  return g;
+}
+
+function makeShield(colors: ColorConfig): THREE.Group {
+  const g = group();
+  const plate = makeBox(0.32, 0.38, 0.06, colors.metal);
+  plate.position.set(0, 0.02, 0.1);
+  g.add(plate);
+  const boss = makeBox(0.11, 0.11, 0.045, colors.blade);
+  boss.position.set(0, 0.02, 0.145);
+  g.add(boss);
+  return g;
+}
+
+function makeStaff(colors: ColorConfig): { g: THREE.Group; orb: THREE.Mesh } {
+  const g = group();
+  const rod = makeBox(0.055, 0.88, 0.055, colors.wood);
+  rod.position.y = 0.42;
+  g.add(rod);
+  const orb = makeBox(0.15, 0.15, 0.15, colors.glow);
+  orb.position.y = 0.92;
+  const mat = orb.material as THREE.MeshLambertMaterial;
+  mat.emissive = new THREE.Color(colors.glow);
+  mat.emissiveIntensity = 0.85;
+  g.add(orb);
+  return { g, orb };
+}
+
+/**
+ * 体素弓：弓臂在 XY 平面弯曲（正面可见），等价于把旧版 YZ 平面的弓「向前旋转 90°」。
+ * 旧版从 2.5D 俯视相机看只是一条竖边；现在能看到完整弓形。
+ * 弓弦保持在 -Z（弓后），拉弦动画沿 -Z 后拉，语义不变。
+ */
+function makeBow(colors: ColorConfig): { g: THREE.Group; drawString: THREE.Mesh } {
+  const g = group();
+  for (let i = 0; i < 5; i++) {
+    const y = (i - 2) * 0.15;
+    const seg = makeBox(0.055, 0.16, 0.05, colors.wood);
+    // 弓臂中段前凸、两端回收，弯曲幅度足够大才能在俯视下看出完整弓形
+    seg.position.set(0.16 - Math.abs(y) * 0.46, y, 0);
+    g.add(seg);
+  }
+  const drawString = makeBox(0.014, 0.66, 0.014, colors.blade);
+  drawString.position.z = -0.06;
+  g.add(drawString);
+  return { g, drawString };
+}
+
+/** 箭沿局部 +Z 指向正前方；挂点会抵消手臂俯仰，避免蓄力时被抬到朝天 / 朝地。 */
+function makeArrow(colors: ColorConfig): THREE.Group {
+  const g = group();
+  const shaft = makeBox(0.025, 0.025, 0.46, colors.wood);
+  shaft.position.z = 0.23;
+  g.add(shaft);
+  const head = makeBox(0.055, 0.055, 0.09, colors.blade);
+  head.position.z = 0.5;
+  g.add(head);
+  return g;
+}
+
+/**
+ * 3 头身体素角色，纯层级方块（无蒙皮、无骨骼动画资源）。
+ * 总高 = 3 × headSize = legLength + bodyHeight + headSize，与 Core 的 characterHeight 对齐。
+ * 关节：hip → knee（膝）、shoulder → elbow（肘）；武器挂在 hand 下的 weaponMount 上。
+ *
+ * 朝向三段分离（程序动画）：
+ *   root.rotation.y = bodyYaw      （由 three-scene 设置，身体平滑朝向）
+ *   pelvis.position  = 髋部高度 + 重心 / 后坐 / 下沉 / 步态起伏（上下半身共享）
+ *   lower.rotation.y = hipYaw      （下盘绕髋连续带转，可侧移 / 后退）
+ *   upper            = 绕腰倾斜 / 侧倾 / 扭转 + 攻击旋身
+ *   headPivot        = headYaw - bodyYaw - 旋身  （头先于身体转向目标）
+ */
+export function createVoxelRig(
+  v: VoxelConfig,
+  colors: ColorConfig,
+  moveSpeed: number,
+  ori: OrientationViewConfig,
+  gaitCfg: GaitViewConfig,
+  mountCfg: WeaponMountConfig,
+  leanCfg: LeanViewConfig,
+  hurtCfg: HurtViewConfig,
+  animCfg: ProgramAnimViewConfig,
+  /** v8g：足部 IK 配置。省略时默认关闭（旧 FK 姿态，供单测 A/B 对照），
+   *  线上由 three-scene 传入 view.ik 开启。 */
+  ikCfg?: IKViewConfig,
+  /** v9a：派生招举盾前撞姿态参数。省略时用内置缺省值（单测不传也安全）。 */
+  linkCfg?: LinkViewConfig,
+): VoxelRig {
+  const ikConfig: IKViewConfig = ikCfg ?? {
+    enabled: false, weight: 0, attackScale: 1, maxCorrectionDeg: 70,
+  };
+  const linkView: LinkViewConfig = linkCfg ?? {
+    chargeColor: '#7fd4ff', ringRadius: 1.25, fxDuration: 0.42,
+    leanDeg: 16, shieldPitchDeg: 42, pelvisReach: 0.12,
+  };
+  // ---- v8f 合理骨架层级：共享骨盆 → 上 / 下半身分离 ----
+  // 旧结构里 lower 与上半身组都直接挂在 root（原点 = 脚底），于是上半身 rotation.x 是
+  // 「整个人绕脚底刚性倾倒」，腿完全不动 —— 用户反馈的「脚底锚定身体倾斜」。
+  // 新结构把 pelvis 放在髋部高度（legLen），上下半身都是它的子节点：
+  //   upper.rotation 绕腰（腰椎）→ 受击 / 前倾只动上半身，不再掀翻整个人
+  //   lower.rotation  绕髋       → 下盘带转不把脚从地面甩出去
+  //   pelvis.position            → 屁股后坐 / 重心偏离 / 下沉 / 步态起伏，上下半身自动联动
+  // 所有子节点的 y 坐标都改成「相对骨盆」，因此净视觉位置与旧版完全一致，
+  // three-scene 的翻滚枢轴（rollPivot）也不需要改。节点命名供测试按名查找，
+  // 不再依赖脆弱的 children[0]/children[1] 下标。
+  const root = group();
+  const pelvis = group();
+  pelvis.name = 'pelvis';
+  pelvis.position.y = v.legLength;
+  root.add(pelvis);
+  const lower = group();   // 下半身：两腿
+  lower.name = 'lower';
+  const upper = group();  // 上半身：躯干 + 头 + 手臂（绕腰）
+  upper.name = 'upper';
+  pelvis.add(lower);
+  pelvis.add(upper);
+
+  const H = v.headSize;
+  const legLen = v.legLength;
+  const armLen = v.armLength;
+  const t = v.limbThickness;
+  const bodyH = v.bodyHeight;
+  const bodyW = v.bodyWidth;
+
+  const torso = makeBox(bodyW, bodyH, 0.28, colors.body);
+  torso.position.y = bodyH / 2;                 // 相对骨盆
+  upper.add(torso);
+
+  // 头部独立枢轴：绕脖子旋转，实现「头先于身体转向目标方向」
+  const headPivot = group();
+  headPivot.position.y = ori.headPivotHeight;     // 相对骨盆（配置值 = bodyHeight）
+  upper.add(headPivot);
+
+  const head = makeBox(H, H, H, colors.head);
+  head.position.y = H / 2;
+  headPivot.add(head);
+
+  // 眼睛：贴在 +Z 面，跟随头部枢轴，用于验收「面朝向」是否正确
+  const eyeMat = new THREE.MeshLambertMaterial({ color: '#1b2733' });
+  for (const sx of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.07, 0.02), eyeMat);
+    eye.position.set(sx * 0.09, H / 2 + 0.03, H / 2 + 0.011);
+    headPivot.add(eye);
+  }
+
+  const makeLeg = (sx: number): Leg => {
+    const hip = group();
+    hip.name = sx < 0 ? 'hipL' : 'hipR';
+    // v8g：IK 要求「先绕 Z 侧摆、再绕 X 俯仰」共面（R = Rz(roll)·Rx(pitch)）。
+    // THREE 默认 XYZ 是 Rx·Rz，roll≠0 时两骨不共面、余弦定理无解析解；
+    // 改成 ZYX 后 forwardKinematics / solveTwoBoneIK 与真实骨架逐项对应。
+    hip.rotation.order = 'ZYX';
+    hip.position.set(sx * (bodyW / 2 - t / 2), 0, 0); // 相对骨盆：髋骨在腰下原点
+    lower.add(hip);
+
+    const thigh = makeBox(t, legLen / 2, t, colors.limb);
+    thigh.position.y = -legLen / 4;
+    hip.add(thigh);
+
+    const knee = group();
+    knee.name = 'knee';
+    knee.position.y = -legLen / 2;
+    hip.add(knee);
+
+    const shin = makeBox(t, legLen / 2, t, colors.limb);
+    shin.position.y = -legLen / 4;
+    knee.add(shin);
+
+    const shoe = makeBox(t * 1.15, 0.07, t * 1.7, colors.shoe);
+    shoe.position.set(0, -legLen / 2 + 0.035, 0.045); // 脚尖朝 +Z
+    knee.add(shoe);
+
+    // IK 末端锚点：小腿末端（脚踝）。不含鞋的视觉偏移，FK / IK 才能精确互为逆运算。
+    const tip = new THREE.Object3D();
+    tip.name = 'footTip';
+    tip.position.y = -legLen / 2;
+    knee.add(tip);
+
+    return { root: hip, joint: knee, hand: group(), tip };
+  };
+
+  const makeArm = (sx: number): Limb => {
+    const shoulder = group();
+    shoulder.name = sx < 0 ? 'shoulderL' : 'shoulderR';
+    shoulder.position.set(sx * (bodyW / 2 + t / 2), bodyH - 0.04, 0); // 相对骨盆
+    upper.add(shoulder);
+
+    const upperArm = makeBox(t, armLen / 2, t, colors.limb);
+    upperArm.position.y = -armLen / 4;
+    shoulder.add(upperArm);
+
+    const elbow = group();
+    elbow.name = 'elbow';
+    elbow.position.y = -armLen / 2;
+    shoulder.add(elbow);
+
+    const fore = makeBox(t, armLen / 2, t, colors.limb);
+    fore.position.y = -armLen / 4;
+    elbow.add(fore);
+
+    const hand = group();
+    hand.position.y = -armLen / 2;
+    elbow.add(hand);
+
+    const palm = makeBox(t * 1.1, 0.09, t * 1.1, colors.head);
+    palm.position.y = 0.045;
+    hand.add(palm);
+
+    return { root: shoulder, joint: elbow, hand };
+  };
+
+  const legL = makeLeg(-1);
+  const legR = makeLeg(1);
+  const armL = makeArm(-1);
+  const armR = makeArm(1);
+
+  // v8g：两骨 IK 的腿描述（大腿 / 小腿各 legLen/2，膝向后折）。
+  // footTip 是本帧 FK 末端；rig-ik 直接用它取世界锚点，玩家与假人共用同一套解算。
+  const ikLimbs: IKLimb[] = [legL, legR].map((leg) => ({
+    root: leg.root,
+    joint: leg.joint,
+    tip: leg.tip,
+    upperLen: legLen / 2,
+    lowerLen: legLen / 2,
+    bend: 1 as const,
+  }));
+
+  // 握持挂点：给武器一个基础姿态，让它从前臂「斜向前伸出」而不是贴着手臂竖直朝上
+  const mountR = group();
+  const mountL = group();
+  armR.hand.add(mountR);
+  armL.hand.add(mountL);
+
+  // ---- 五套体素武器，全部挂在握持挂点上 ----
+  const staffModel = makeStaff(colors);
+  const bowModel = makeBow(colors);
+  const arrowModel = makeArrow(colors);
+
+  const parts: Record<WeaponId, WeaponParts> = {
+    'sword-shield': { right: makeSword(0.42, 0.075, colors), left: makeShield(colors) },
+    'dual-swords': { right: makeSword(0.42, 0.075, colors), left: makeSword(0.42, 0.075, colors) },
+    greatsword: { right: makeGreatsword(colors), left: makeBox(0.12, 0.2, 0.12, colors.wood) },
+    staff: { right: staffModel.g, left: group(), orb: staffModel.orb },
+    bow: { right: arrowModel, left: bowModel.g, arrow: arrowModel, drawString: bowModel.drawString },
+  };
+
+  for (const id of Object.keys(parts) as WeaponId[]) {
+    mountR.add(parts[id].right);
+    mountL.add(parts[id].left);
+    parts[id].right.visible = false;
+    parts[id].left.visible = false;
+  }
+
+  let currentWeapon: WeaponId | null = null;
+
+  // 移动惯性倾斜：纯表现层本地状态，不进入 Core / 快照。
+  // 由速度差分得到加速度在身体前方的投影（启动前倾 / 刹车后仰），
+  // 由朝向角速度 × 速度得到绕圈离心侧倾，二者都做指数平滑，帧率无关。
+  let prevVx = 0;
+  let prevVz = 0;
+  let prevBodyYaw = 0;
+  let leanForward = 0;
+  let leanSide = 0;
+  /** 大剑移动拖地：剑尖贴近地面的额外俯角，平滑趋近目标（纯表现，不进 Core） */
+  let dragAngle = 0;
+  /** v8f：本帧分层受击姿态（诊断读数，不进 Core / 快照） */
+  let lastHurtPose: HurtPose = emptyHurtPose();
+  /** v8g：本帧足部 IK 诊断（不进 Core / 快照） */
+  let lastIK: IKDiagnostics = { ...EMPTY_IK_DIAGNOSTICS };
+  /** v8g：移动下沉量的平滑状态（纯表现，帧率无关） */
+  let crouchSmooth = 0;
+  /**
+   * 下盘（骨盆）朝移动方向的连续偏航（v8b）：由身体局部侧向速度驱动、指数平滑。
+   * 刻意不用 wrapAngle(moveYaw - bodyYaw) —— 那个角度差在 ±π 处会从 +π 翻到 -π，
+   * 引导飞弹（身体朝瞄准、移动方向任意）时就会造成下盘「跨朝向跳变」。
+   */
+  let hipYaw = 0;
+  /** 本帧 gait 投影基准（诊断用，等于 bodyYaw + hipYaw），随 update 刷新 */
+  let lastGaitYaw = 0;
+
+  // ---- v8c 程序动画分层状态（全部纯表现，不进入 Core / 快照）----
+  /** 攻击姿态混合系数 0..1：指数平滑进出攻击，避免下盘姿态单帧跳变 */
+  let attackBlend = 0;
+  /** 本帧「挥击跨步写腿」的权重 = lowerBodyWeight × attackBlend；默认 0 = 完全过滤 */
+  let attackLegWeight = 0;
+  /** 本帧步态对下盘的权重（诊断用） */
+  let lastGaitScale = 1;
+  /** 本帧喂给 solveGait 的四个等效驱动量（诊断用） */
+  let lastDrive: GaitDrive = { speed: 0, phase: 0, localForward: 0, localRight: 0 };
+  /** 不传 coreTime 时（单测）使用的本地时间累加器 */
+  let localTime = 0;
+  /** 本帧使用的 Core 时间（诊断 remaining 用） */
+  let lastNow = 0;
+  let prevGrounded = true;
+  let prevVy = 0;
+  let pulseKind: 'none' | 'land' | 'jump' = 'none';
+  let pulseStart = 0;
+  let pulseDuration = 0;
+  let pulseStrength = 0;
+  let pulseCompress = 0.3;
+  let lastImpactVy = 0;
+
+  /** 按武器设置握持挂点的 pitch（剑从 +Y 转向 +Z 前方）与 yaw（左右外张，刀锋朝外）。 */
+  function applyMountPose(w: WeaponId): void {
+    const d = Math.PI / 180;
+    const m = mountCfg;
+    let rp = 0;
+    let rz = 0;
+    let lp = 0;
+    let lz = 0;
+    if (w === 'sword-shield') {
+      rp = m.swordPitchDeg * d; rz = -m.swordYawDeg * d;
+      lp = m.shieldPitchDeg * d;
+    } else if (w === 'dual-swords') {
+      rp = m.swordPitchDeg * d; rz = -m.swordYawDeg * d;
+      lp = m.swordPitchDeg * d; lz = m.swordYawDeg * d;
+    } else if (w === 'greatsword') {
+      rp = m.greatswordPitchDeg * d; rz = -m.greatswordYawDeg * d;
+      // 左手握柄沿剑身方向（与右手同 pitch、反向 yaw），双手持握时左手套在下段柄上
+      lp = m.greatswordPitchDeg * d; lz = m.greatswordYawDeg * d;
+    } else if (w === 'staff') {
+      rp = m.staffPitchDeg * d;
+    } else {
+      lp = m.bowPitchDeg * d;
+    }
+    mountR.rotation.set(rp, 0, rz);
+    mountL.rotation.set(lp, 0, lz);
+  }
+
+  function setWeapon(w: WeaponId): void {
+    if (w === currentWeapon) return;
+    currentWeapon = w;
+    for (const id of Object.keys(parts) as WeaponId[]) {
+      parts[id].right.visible = id === w;
+      parts[id].left.visible = id === w;
+    }
+    applyMountPose(w);
+    // 换武器时复位所有一次性姿态
+    bowModel.drawString.position.z = -0.06;
+    arrowModel.position.z = 0;
+    staffModel.orb.scale.setScalar(1);
+    upper.rotation.y = 0;
+  }
+  setWeapon('sword-shield');
+
+  // 受击闪色：一次性收集全部 Lambert 材质引用，避免每帧遍历场景图
+  const flashMats: THREE.MeshLambertMaterial[] = [];
+  root.traverse((obj) => {
+    if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshLambertMaterial) {
+      flashMats.push(obj.material);
+    }
+  });
+  const hurtColor = new THREE.Color(hurtCfg.flashColor);
+
+  /**
+   * v8f 分层受击：把 solveHurtPose 解出的「一层一个量」写到对应骨骼节点。
+   *
+   *  - 上半身（upper）：绕腰倾斜 / 侧倾 / 肩部扭转 + 相对骨盆朝受击方向偏移 → 幅度最大
+   *  - 骨盆（pelvis）：屁股向后（局部 -Z）+ 整体下沉 + 沿受击方向的小幅重心偏离
+   *  - 下盘（lower）：相对骨盆反向补偿，让脚大体留原地；两腿屈膝 + 髋前倾吸收冲击
+   *  - 手臂：打腹收拢护住 / 打肩被甩开
+   *
+   * 「整体重心偏离幅度小于身体反应」由 pose.comShift << pose.upperShift 保证，
+   * 两者都随受击力度线性增长。进度全部由 Core 的 hurt.timer / duration 派生，
+   * 无本地时间累积，暂停 / 时间缩放下也与逻辑同步。
+   */
+  function applyHurt(h: HurtState, bodyYaw: number): void {
+    const pose = solveHurtPose(h, bodyYaw, hurtCfg);
+    lastHurtPose = pose;
+
+    // 上半身：绕腰倾斜（骨架重构后天然绕腰，不再绕脚底掀翻整个人）
+    upper.rotation.x += pose.upperPitch;
+    upper.rotation.z += pose.upperRoll;
+    upper.rotation.y += pose.upperYaw;
+    // v8g：旧版 shift=0.26/0.34 在 knock（大剑重击）时把整个上半身平移约 0.28m，
+    // 躯干下沿直接离开骨盆 —— 用户反馈「大剑重击时身体会离开腿」。
+    // 诊断量 pose.upperShift 保持原值（比例语义不变），只在写节点时缩放 + 单轴限幅，
+    // 让身体反应仍以「绕腰倾斜」为主、位移为辅，躯干始终连在骨盆上。
+    const s = clamp(Number.isFinite(hurtCfg.upperShiftScale) ? hurtCfg.upperShiftScale : 1, 0, 1);
+    const m = Number.isFinite(hurtCfg.maxUpperShift)
+      ? Math.max(0, hurtCfg.maxUpperShift) : Number.POSITIVE_INFINITY;
+    upper.position.x += clamp(pose.upperShiftX * s, -m, m);
+    upper.position.z += clamp(pose.upperShiftZ * s, -m, m);
+
+    // 骨盆：整体重心小幅偏离 + 屁股向后 + 下沉（上下半身由层级自动联动）
+    pelvis.position.x += pose.comX;
+    pelvis.position.z += pose.comZ - pose.pelvisBack;
+    pelvis.position.y -= pose.drop;
+
+    // 下盘反向补偿：屁股后坐 / 下沉时脚少跟一点，避免被拖着走。
+    // legacy 对照路径下 lowerScale 视为 0 → 脚完全不动，精确复现旧版「腿钉死」。
+    const ls = pose.legacy ? 0 : clamp(hurtCfg.lowerScale, 0, 1);
+    lower.position.z += pose.pelvisBack * (1 - ls);
+    lower.position.y += pose.drop * (1 - ls);
+
+    // 腿屈膝 + 髋前倾吸收冲击；legacy 时这些量恒 0
+    legL.joint.rotation.x += pose.knee;
+    legR.joint.rotation.x += pose.knee;
+    legL.root.rotation.x -= pose.hip;
+    legR.root.rotation.x -= pose.hip;
+    armL.root.rotation.x += pose.arm;
+    armR.root.rotation.x += pose.arm * 0.8;
+
+    for (const m of flashMats) m.emissive.copy(hurtColor).multiplyScalar(pose.flash);
+  }
+
+  /** 挥击曲线：蓄势(-1) → 挥出(+1) → 收势(0) */
+  function swingCurve(t: number): number {
+    if (t < 0.3) return -1;
+    if (t < 0.62) return -1 + ((t - 0.3) / 0.32) * 2;
+    return Math.max(0, 1 - (t - 0.62) / 0.38);
+  }
+
+  /** 攻击跨步：每段攻击在挥出时向前跨一步，连击左右腿交替（combo 段奇偶决定方向），
+   * 同时重心下沉，让「每一次前移动画都表现出一个跨步」，且连击节奏连贯而非原地比划。 */
+  function applyStep(combat: CombatState): void {
+    if (combat.phase === 'idle' || combat.charging) return;
+    const p = combat.attackProgress;
+    const swing = swingCurve(p);
+    const forth = Math.max(0, swing);
+    const stepDir = combat.comboIndex % 2 === 0 ? 1 : -1; // 偶数段向右跨、奇数段向左跨
+    // v8g：幅度外置 + 收敛（旧版硬编码 0.17 / 0.14 / 0.05 在重击时推得过远）。
+    // 大剑额外乘 heavyScale：双手大抡配小跨步，脚由 IK 钉地、身体只小幅前移，
+    // 不会再出现「身体离开腿」。数值缺省时回落到旧值，兼容外部构造的配置对象。
+    const cfg = animCfg.stride;
+    const reach = Number.isFinite(cfg.stepReach) ? cfg.stepReach : 0.17;
+    const side = Number.isFinite(cfg.stepSideReach) ? cfg.stepSideReach : 0.14;
+    const dip = Number.isFinite(cfg.stepDipReach) ? cfg.stepDipReach : 0.05;
+    const heavy = combat.weapon === 'greatsword'
+      ? clamp(Number.isFinite(cfg.heavyScale) ? cfg.heavyScale : 1, 0, 1) : 1;
+    pelvis.position.z += reach * forth * heavy;                    // 向前跨步（+Z = 前）
+    pelvis.position.x += stepDir * side * forth * heavy;           // 左右交替跨步
+    pelvis.position.y -= dip * Math.sin(Math.PI * p) * heavy;      // 重心下沉
+  }
+
+  // v8d：攻击姿态对腿的写入不再零散塞在各武器分支里（旧版只有大剑 / 三连击第 3 段
+  // 会写 legX.root.rotation.x，默认剑盾前两段、双剑、弓、法杖完全不碰腿，
+  // 且幅度只有 ±0.24 rad、仅挥出瞬间非零 —— 这是「拉满权重下半身还是不动」的第二个原因）。
+  // 现在统一由 update() 的「挥击跨步层」按 attackLegWeight 叠加 attackStridePose，
+  // applyCombatPose 只负责上半身与武器姿态，职责单一。
+
+  function applyCombatPose(combat: CombatState): void {
+    // 每帧复位可变的武器部件，避免姿态残留
+    bowModel.drawString.position.z = -0.06;
+    arrowModel.position.z = 0;
+    staffModel.orb.scale.setScalar(1);
+    upper.rotation.y = 0;
+
+    if (combat.charging && combat.weapon === 'bow') {
+      // 蓄力：左手持弓前伸，右手拉弦后移，箭随蓄力后拉
+      // v8g：肘关节弯曲方向修正 —— 骨架里手臂沿 -Y 伸出，rotation.x 为正会把前臂
+      // 折向 -Z（身后）变成「反关节」；人体屈肘应朝 +Z（身前），故所有肘角取负。
+      const q = combat.charge;
+      armL.root.rotation.x = -1.25;
+      armL.joint.rotation.x = -0.15;
+      armR.root.rotation.x = 0.35 + q * 0.3;
+      armR.joint.rotation.x = -1.15;
+      bowModel.drawString.position.z = -0.06 - q * 0.22;
+      arrowModel.position.z = -q * 0.3;
+      upper.rotation.y = -0.22;
+      return;
+    }
+
+    if (combat.phase === 'idle') return;
+
+    // settle 停顿阶段：attackProgress 定格为 1，姿态保持收势末态，形成「前移 → 定住」的节奏
+    const swing = swingCurve(combat.attackProgress);
+    const back = Math.max(0, -swing);
+    const forth = Math.max(0, swing);
+
+    // 法杖技能（引导飞弹 / 电环）已抽离到 abilities 模块，法杖不再进入近战 AttackPhase，
+    // 因此这里没有法杖施法姿态；引导姿态由 update() 的 applyChannelPose() 单独覆盖（v7c #12）。
+    if (combat.weapon === 'bow') {
+      armL.root.rotation.x = -1.2;
+      armL.joint.rotation.x = -0.15;
+      armR.root.rotation.x = 0.9 - forth * 0.8;
+      armR.joint.rotation.x = -0.3;
+    } else if (combat.weapon === 'greatsword') {
+      // 大剑：双手持握，双臂前伸收拢于身前，左手套下段柄、右手握上段护手；
+      // 每段攻击双手一起抡（而非单臂），重心下沉、跨步更夸张。
+      // v8g：旋身幅度随 heavyScale 收敛，避免双手大抡时上半身被拧得离开下盘。
+      const both = -1.6 * back + 1.25 * forth;
+      const heavy = clamp(
+        Number.isFinite(animCfg.stride.heavyScale) ? animCfg.stride.heavyScale : 1, 0, 1,
+      );
+      armR.root.rotation.x = both;
+      armR.joint.rotation.x = -(0.25 + back * 0.4);
+      armL.root.rotation.x = both + 0.06;
+      armL.joint.rotation.x = -(0.32 + back * 0.4);
+      armL.root.rotation.z = 0.38; // 左肩内收，双手聚拢身前
+      upper.rotation.y = -0.2 * swing * heavy;
+    } else {
+      // 剑类三连击：段1 右上劈、段2 左横斩、段3 双手大力下劈
+      const seg = combat.comboIndex;
+      if (seg === 1) {
+        armR.root.rotation.x = -1.7 * back + 1.1 * forth;
+        armR.joint.rotation.x = -(0.2 + back * 0.5);
+        armL.root.rotation.x = 0.1;
+        upper.rotation.y = -0.18 * swing;
+      } else if (seg === 2) {
+        armL.root.rotation.x = -1.5 * back + 1.0 * forth;
+        armL.joint.rotation.x = -(0.2 + back * 0.5);
+        armR.root.rotation.x = 0.2;
+        upper.rotation.y = 0.45 * -swing;
+      } else {
+        const both = -1.9 * back + 1.2 * forth;
+        armL.root.rotation.x = both;
+        armR.root.rotation.x = both;
+        armL.joint.rotation.x = -(0.15 + back * 0.4);
+        armR.joint.rotation.x = -(0.15 + back * 0.4);
+        upper.rotation.y = -0.3 * swing;
+      }
+    }
+
+    // 各武器统一的跨步覆盖（在武器姿态之上再叠加前向 / 左右步幅）
+    applyStep(combat);
+  }
+
+  /**
+   * 法杖引导姿态（v7c #12）：按住攻击键时举杖前指、法球放大并轻微脉动。
+   * 只覆盖上半身手臂与法球，保留下半身步态 —— 「按住可移动引导」才成立。
+   * 脉动用 Core 的 gaitPhase 驱动，不引入表现层本地时间，暂停 / 时间缩放下仍同步。
+   */
+  function applyChannelPose(channeling: boolean, gaitPhase: number): void {
+    if (!channeling) return;
+    armR.root.rotation.x = -1.05;
+    armR.joint.rotation.x = -0.35;
+    armL.root.rotation.x = -0.45;
+    armL.joint.rotation.x = -0.2;
+    upper.rotation.y = -0.12;
+    staffModel.orb.scale.setScalar(1.25 + 0.12 * Math.sin(gaitPhase * 2));
+  }
+
+  /**
+   * v9a：剑盾「冲锋盾击」姿态（纯表现）。派生招刻意不进 combat.phase（保持 idle，
+   * 才能与引导 / 普通连击正交），所以 applyCombatPose 会直接 return，这里单独叠加：
+   * 蓄力收盾 → 前撞举盾 → 收势回正，两端自动归零，不残留、不与步态 / IK 打架。
+   */
+  function applyLinkPose(link?: LinkState): void {
+    if (!link || link.phase === 'idle') return;
+    const t = link.progress;
+    const q = t < 0.3 ? -0.35 + (t / 0.3) * 1.35
+      : t < 0.7 ? 1 : Math.max(0, 1 - (t - 0.7) / 0.3);
+    const DEG = Math.PI / 180;
+    upper.rotation.x += linkView.leanDeg * DEG * q;
+    armL.root.rotation.x -= linkView.shieldPitchDeg * DEG * q; // 持盾臂前伸（负 = 朝身前 +Z）
+    armL.joint.rotation.x -= 0.22 * q;
+    armR.root.rotation.x -= 0.3 * q;
+    pelvis.position.z += linkView.pelvisReach * Math.max(0, q);
+  }
+
+  return {
+    group: root,
+    update(
+      c: CharacterState, combat: CombatState, hurt: HurtState, frameDt: number,
+      channeling = false, coreTime?: number, link?: LinkState,
+    ): void {
+      setWeapon(combat.weapon);
+      upper.rotation.x = 0;
+      upper.rotation.z = 0;
+      // 每帧把骨盆复位到髋部基准：applyStep / applyHurt / 落地缓冲 / 挥击跨步
+      // 都用 += / -= 叠加，若不归零会逐帧累积，导致攻击时上半身飞出去（v7a 回归 bug）。
+      // v8f 骨架重构后，跨步 / 下沉 / 后坐 / 重心全部落在共享骨盆上，一次归零即可
+      // 保证上下半身同步，不再需要分别对两个并列组手动对齐。
+      pelvis.position.x = 0;
+      pelvis.position.y = legLen;
+      pelvis.position.z = 0;
+      pelvis.rotation.z = 0;
+      // v8g：盆骨前后倾角由惯性层写入，每帧先归零，否则会逐帧累积
+      pelvis.rotation.x = 0;
+      // upper / lower 相对骨盆的局部偏移每帧归零，之后由受击分层 / 落地 / 跨步重新写入
+      upper.position.x = 0;
+      upper.position.y = 0;
+      upper.position.z = 0;
+      lower.position.x = 0;
+      lower.position.y = 0;
+      lower.position.z = 0;
+      lower.rotation.z = 0;
+
+      // ---- 移动惯性倾斜（纯表现，帧率无关）----
+      // 身体前方单位向量 = (sin(bodyYaw), cos(bodyYaw))；加速度投影 >0 为加速、<0 为刹车。
+      const dt = Math.max(1 / 240, Math.min(frameDt, 0.1));
+
+      // ---- v8c 时间源：优先取 Core 的 world.time ----
+      // 暂停 / 时间缩放 / 单步推进时，落地缓冲与逻辑同步；不传时（单测）按 frameDt 累加。
+      const now = coreTime === undefined ? (localTime += frameDt) : coreTime;
+      lastNow = now;
+      const landCfg = animCfg.landing;
+
+      // ---- v8c 跳跃 / 落地蓄力缓冲：只检测 grounded 边沿，不改任何 Core 状态 ----
+      // 落地那一帧 Core 已把 velocity.y 置 0，故冲击强度取上一帧记录的 prevVy。
+      if (!landCfg.enabled) {
+        pulseKind = 'none';
+        pulseStrength = 0;
+      } else if (prevGrounded && !c.grounded) {
+        // 起跳瞬间的预备下蹲（「蓄力」），强度可热调到 0 只保留落地缓冲
+        pulseKind = 'jump';
+        pulseStart = now;
+        pulseDuration = landCfg.anticipationDuration;
+        pulseStrength = Math.max(0, landCfg.jumpAnticipation);
+        pulseCompress = 0.32;
+      } else if (!prevGrounded && c.grounded) {
+        pulseKind = 'land';
+        pulseStart = now;
+        pulseDuration = landCfg.duration;
+        pulseStrength = landingImpactScale(prevVy, landCfg);
+        pulseCompress = landCfg.compressRatio;
+        lastImpactVy = prevVy;
+      }
+      // 复位会把 world.time 归零：时间倒退时作废当前脉冲，避免负进度
+      if (now < pulseStart) {
+        pulseKind = 'none';
+        pulseStrength = 0;
+      }
+      prevGrounded = c.grounded;
+      prevVy = c.velocity.y;
+      const landPulse = pulseValue(now, pulseStart, pulseDuration, pulseStrength, pulseCompress);
+
+      // ---- v8c/v8d 攻击下半身权重过滤 ----
+      // charging（弓蓄力）时 combat.phase 必为 idle（combat.ts 只在 idle 起蓄力），
+      // 法杖引导也不进近战状态机 —— 两者都保持「可移动」的真实步态，不受攻击分层影响。
+      const attacking = combat.phase !== 'idle';
+      attackBlend = attackBlendStep(attackBlend, attacking, dt, animCfg.attack.blendRate);
+      const weights = poseWeights(
+        attackBlend, animCfg.attack.gaitWeight, animCfg.attack.lowerBodyWeight,
+      );
+      attackLegWeight = weights.attackLegWeight;
+      lastGaitScale = weights.gaitScale;
+
+      const fx = Math.sin(c.bodyYaw);
+      const fz = Math.cos(c.bodyYaw);
+      const rawAx = (c.velocity.x - prevVx) / dt;
+      const rawAz = (c.velocity.z - prevVz) / dt;
+      // 限幅：复位 / 传送 / 受击击退带来的速度突变不应造成抽搐
+      const ax = clamp(rawAx, -60, 60);
+      const az = clamp(rawAz, -60, 60);
+      const along = ax * fx + az * fz;
+      const turnRate = wrapAngle(c.bodyYaw - prevBodyYaw) / dt;
+      const leanSpeed = Math.hypot(c.velocity.x, c.velocity.z);
+      const maxF = (leanCfg.maxForwardDeg * Math.PI) / 180;
+      const maxS = (leanCfg.maxSideDeg * Math.PI) / 180;
+      // 加速前倾（+），刹车后仰（-）；绕圈时向转弯内侧压（turnRate×speed 决定强度）
+      const targetF = clamp(along * leanCfg.accelGain, -maxF, maxF);
+      const targetS = clamp(-turnRate * leanSpeed * leanCfg.turnGain, -maxS, maxS);
+      const k = 1 - Math.exp(-leanCfg.smoothing * dt);
+      leanForward += (targetF - leanForward) * k;
+      leanSide += (targetS - leanSide) * k;
+      prevVx = c.velocity.x;
+      prevVz = c.velocity.z;
+      prevBodyYaw = c.bodyYaw;
+
+      // ---- 下盘偏航（v8b）：连续、限幅、指数平滑，绝不 angle-wrap ----
+      // 旧版 whole-lower 转向用 wrapAngle(moveYaw - bodyYaw)：这个角度差在 ±π 处
+      // 从 +π 翻到 -π，引导飞弹（身体朝瞄准方向、移动方向任意，尤其后退 / 瞄准与移动
+      // 反向）时下盘会瞬间翻转约 2×幅度，观感就是「跨朝向跳变」。
+      // 改用「速度在身体局部的侧向占比」驱动：latRatio ∈[-1,1] 连续，前进/后退≈0
+      // （倒着走下盘不翻转）、纯侧移±1；再乘 legYawScale 限幅到 hipYawMaxDeg，
+      // 最后指数平滑。全链路没有 atan2 / wrapAngle，任何朝向都不可能跳变。
+      const speed = Math.hypot(c.velocity.x, c.velocity.z);
+      const bRightX = Math.cos(c.bodyYaw);
+      const bRightZ = -Math.sin(c.bodyYaw);
+      const bodyLocalRight = c.velocity.x * bRightX + c.velocity.z * bRightZ;
+      const latRatio = speed > EPS ? clamp(bodyLocalRight / speed, -1, 1) : 0;
+      const hipMax = (ori.hipYawMaxDeg * Math.PI) / 180;
+      const targetHipYaw = ori.legYawScale * latRatio * hipMax;
+      hipYaw += (targetHipYaw - hipYaw) * (1 - Math.exp(-ori.hipYawSmoothing * dt));
+
+      // ---- 程序化步态（v8 / v8b）----
+      // 关键：腿挂在 lower 下（lower.rotation.y = hipYaw），所以腿的局部坐标系朝向是
+      // bodyYaw + hipYaw，不是 bodyYaw。gait 必须用「下盘实际朝向」投影速度，否则
+      // 解算器认定的移动方向与腿坐标系差一个 hipYaw，非正前方时腿摆动方向被歪掉
+      // （用户反馈 #2）。统一到同一基准后，下盘转向与腿摆动是协同而非重复叠加：
+      // 下盘朝移动方向带转一点，腿再沿该局部方向迈步，世界方向始终等于真实速度方向。
+      const gaitYaw = c.bodyYaw + hipYaw;
+      lastGaitYaw = gaitYaw;
+      const fwdX = Math.sin(gaitYaw);
+      const fwdZ = Math.cos(gaitYaw);
+      const rightX = Math.cos(gaitYaw);
+      const rightZ = -Math.sin(gaitYaw);
+      // v8d 核心修复：攻击时把 gaitInput 的四个驱动量按 blend 平滑替换成「攻击跨步等效驱动」。
+      // Core 锁速 → real.speed = 0 → solveGait 首行直接返回 idle，且非 active 段因无位移
+      // gaitPhase 也冻结；不补足这一步，gaitWeight 拉到 1 也拿不到任何姿态（旧 bug 根因）。
+      const realDrive: GaitDrive = {
+        speed,
+        phase: c.gaitPhase,
+        localForward: c.velocity.x * fwdX + c.velocity.z * fwdZ,
+        localRight: c.velocity.x * rightX + c.velocity.z * rightZ,
+      };
+      const drive = attacking
+        ? attackGaitDrive(realDrive, combat.attackProgress, combat.comboIndex, attackBlend, animCfg.stride)
+        : realDrive;
+      lastDrive = drive;
+      const gaitInput: GaitInput = {
+        phase: drive.phase,
+        speed: drive.speed,
+        moveSpeed,
+        localForward: drive.localForward,
+        localRight: drive.localRight,
+        legLength: v.legLength,
+        grounded: c.grounded,
+      };
+      // 攻击期间按 gaitScale 平滑淡出步态（gaitWeight=0 时淡出到静止基准）；腿、骨盆、摆臂
+      // 共用同一系数，保证上下半身同步，不会只淡出一半而出现错位。
+      const gait = scaleGaitPose(solveGait(gaitInput, gaitCfg), weights.gaitScale);
+
+      // 1) 基础步态：两腿各自俯仰 / 侧摆 / 抬膝，骨盆重心转移与起伏
+      if (!c.grounded) {
+        legL.root.rotation.x = -0.55;
+        legR.root.rotation.x = -0.25;
+        legL.joint.rotation.x = 0.75;
+        legR.joint.rotation.x = 0.55;
+        armL.root.rotation.x = -0.9;
+        armR.root.rotation.x = -0.7;
+        armL.joint.rotation.x = -0.6;
+        armR.joint.rotation.x = -0.6;
+        legL.root.rotation.z = 0;
+        legR.root.rotation.z = 0;
+        // 空中：骨盆保持髋部基准（update 开头已归零），不做起伏 / 侧倾
+      } else {
+        legL.root.rotation.x = gait.legL.pitchX;
+        legR.root.rotation.x = gait.legR.pitchX;
+        legL.root.rotation.z = gait.legL.rollZ;
+        legR.root.rotation.z = gait.legR.rollZ;
+        legL.joint.rotation.x = gait.legL.kneeX;
+        legR.joint.rotation.x = gait.legR.kneeX;
+        armL.root.rotation.x = gait.armL;
+        armR.root.rotation.x = gait.armR;
+        // v8g：肘朝身前折（负号）；顺手修旧版 armR 误用 gait.armL 的取值
+        armL.joint.rotation.x = -(0.18 + gait.armL * 0.2);
+        armR.joint.rotation.x = -(0.18 + gait.armR * 0.2);
+        // 手臂 roll 每帧归零：applyCombatPose 的大剑双手分支会写 armL.root.rotation.z
+        armL.root.rotation.z = 0;
+        armR.root.rotation.z = 0;
+        // 骨盆起伏 / 左右重心转移 / 侧倾统一写在共享 pelvis 上：
+        // 上下半身由层级自动联动，不必再分别给两个并列组手动对齐同一份位移。
+        pelvis.position.x = gait.pelvisX;
+        pelvis.position.y = legLen + gait.pelvisY;
+        pelvis.rotation.z = gait.pelvisRoll;
+      }
+
+      // ---- v8g IK 基准：步态层刚写完、还没被上层程序动画推走的骨盆 / 下盘 ----
+      // 受击后坐 / 落地缓冲 / 攻击跨步 / 惯性下沉都会改写这些值，末尾的 IK 层
+      // 会把差值吸收进髋 / 膝角，让脚仍踩在步态决定的落点上。
+      const ikBase = captureIKBase(pelvis, lower);
+
+      // 1.5) v8g 惯性分层：盆骨带一点倾斜 + 小幅重心平移 + 移动时略微下沉。
+      // 旧版只把惯性倾到 upper，盆骨完全不动，像「上身自己往前折」。现在同一份惯性
+      // 在盆骨上取小比例（腿只带一点点），并让跑动时重心压低；脚由 IK 钉地。
+      const speedRatio = speed / Math.max(moveSpeed, EPS);
+      const crouchRate = Number.isFinite(leanCfg.crouchSmoothing) ? leanCfg.crouchSmoothing : 8;
+      const kc = 1 - Math.exp(-Math.max(0, crouchRate) * dt);
+      crouchSmooth += (clamp(speedRatio, 0, 1) - crouchSmooth) * kc;
+      const inertia = solveInertiaPose(
+        { leanForward, leanSide, speedRatio: crouchSmooth }, leanCfg,
+      );
+      pelvis.rotation.x += inertia.pelvisPitch;
+      pelvis.rotation.z += inertia.pelvisRoll;
+      pelvis.position.x += inertia.pelvisX;
+      pelvis.position.z += inertia.pelvisZ;
+      pelvis.position.y -= inertia.crouch;
+      // IK 关闭时把下沉量补偿回下盘，脚不穿地；IK 开启时由锚定层吸收（腿自然屈膝）。
+      const ikW = ikConfig.enabled && c.grounded
+        ? clamp(ikConfig.weight, 0, 1) * (attacking ? clamp(ikConfig.attackScale, 0, 1) : 1)
+        : 0;
+      lower.position.y += inertia.crouch * (1 - clamp(ikW, 0, 1));
+
+      // 2) 战斗姿态覆盖（只在攻击 / 蓄力 / 停顿期间生效）
+      applyCombatPose(combat);
+      // 2.05) 法杖引导姿态：不进近战状态机，在基础步态之上单独叠加（v7c #12）
+      applyChannelPose(channeling, c.gaitPhase);
+      // 2.06) v9a 派生招姿态（举盾前撞）：与 combat.phase 正交，按 link.progress 独立驱动
+      applyLinkPose(link);
+
+      // 2.1) 大剑移动拖地：非攻击且正在移动时，把剑身额外俯放，剑尖贴近地面。
+      //      攻击时 dragAngle 平滑归零，剑回到双手持握基准姿态。
+      const gsPitch = (mountCfg.greatswordPitchDeg * Math.PI) / 180;
+      const greatOn = combat.weapon === 'greatsword';
+      const sp = Math.hypot(c.velocity.x, c.velocity.z);
+      const wantDrag = greatOn && combat.phase === 'idle' && sp > 0.5;
+      const dragTarget = wantDrag ? Math.min(1.15, sp / Math.max(moveSpeed, 0.001) * 0.9) : 0;
+      dragAngle += (dragTarget - dragAngle) * (1 - Math.exp(-6 * dt));
+      if (greatOn) mountR.rotation.x = gsPitch + dragAngle;
+
+      // 2.2) 弓 / 箭「向前 90°」补偿：持弓左臂前伸、拉弦右臂抬肘累计约 90° 俯仰，
+      //      会把弓面和搭在弦上的箭转成朝天 / 朝地。这里抵消手臂的 X 旋转，
+      //      让弓面正对前方、箭沿身体 +Z 指向正前方（后拉仍沿局部 -Z，语义不变）。
+      if (combat.weapon === 'bow') {
+        bowModel.g.rotation.x = -(armL.root.rotation.x + armL.joint.rotation.x);
+        arrowModel.rotation.x = -(armR.root.rotation.x + armR.joint.rotation.x);
+      }
+
+      // 2.5) 受击分层覆盖（v8f）。先记下攻击旋身角：头部补偿只抵消「主动旋身」，
+      //      受击带来的肩部扭转应让头跟着一起偏，不该被 headPivot 反向抵消。
+      const combatSpin = upper.rotation.y;
+      applyHurt(hurt, c.bodyYaw);
+
+      // 2.6) 移动惯性倾斜叠加：启动前倾 / 刹车后仰 / 绕圈侧倾。
+      //      受击时减半，避免与受击后仰打架；攻击时速度差分很小，倾斜自然趋零。
+      const leanScale = hurt.type === 'none' ? 1 : 0.4;
+      upper.rotation.x += leanForward * leanScale;
+      // 侧移时的程序化身体侧倾（v8）与惯性侧倾叠加；受击时同样减半
+      upper.rotation.z += (leanSide + gait.sideLean) * leanScale;
+
+      // 2.7) v8c 跳跃 / 落地蓄力缓冲：纯姿态「叠加」，绝不写 Core 的 position / velocity。
+      //  屈膝 + 髋前倾让脚大致留在原地，重心下沉 + 上半身前倾形成「蓄力吸收冲击」，
+      //  脉冲由 Core 时间归一化，结束后自动归零、完全交还给步态 / 攻击层。
+      if (landPulse > 0) {
+        legL.root.rotation.x -= landCfg.hipPitch * landPulse;
+        legR.root.rotation.x -= landCfg.hipPitch * landPulse;
+        legL.joint.rotation.x += landCfg.kneeBend * landPulse;
+        legR.joint.rotation.x += landCfg.kneeBend * landPulse;
+        // v8f：下沉写在共享骨盆；下盘相对骨盆反向补偿，脚只跟着下沉 lowerScale 的比例
+        pelvis.position.y -= landCfg.crouchDepth * landPulse;
+        lower.position.y += landCfg.crouchDepth * (1 - landCfg.lowerScale) * landPulse;
+        upper.rotation.x += landCfg.upperPitch * landPulse;
+        armL.root.rotation.x -= landCfg.armTuck * landPulse;
+        armR.root.rotation.x -= landCfg.armTuck * landPulse;
+      }
+
+      // 2.8) v8d 挥击跨步层（受 lowerBodyWeight 控制）：所有武器 / 所有攻击段统一叠加。
+      //  由 attackProgress 派生、连击左右脚交替领先，两端自动归零不残留；
+      //  只写腿与骨盆（下盘），上半身跨步仍由 applyStep 负责，避免重心重复下沉。
+      if (attackLegWeight > 0 && c.grounded) {
+        const stride = attackStridePose(combat.attackProgress, combat.comboIndex, animCfg.stride);
+        const s = attackLegWeight;
+        legL.root.rotation.x += stride.legL.pitchX * s;
+        legR.root.rotation.x += stride.legR.pitchX * s;
+        legL.root.rotation.z += stride.legL.rollZ * s;
+        legR.root.rotation.z += stride.legR.rollZ * s;
+        legL.joint.rotation.x += stride.legL.kneeX * s;
+        legR.joint.rotation.x += stride.legR.kneeX * s;
+        pelvis.position.x += stride.pelvisX * s;
+        pelvis.position.y += stride.pelvisY * s;   // 负值 = 重心下沉
+        pelvis.rotation.z += stride.pelvisRoll * s;
+      }
+
+      // 3) 朝向三段分离：root 已由 three-scene 设为 bodyYaw
+      //    下盘 = 上面算出的连续 hipYaw（v8b：跟随移动方向带转，但绝不跨 ±π 跳变）；
+      //    头部先于身体转向目标（补偿攻击旋身，仍用 wrapAngle 走最短弧，但其限幅很小、
+      //    受 headTurnRate 平滑，不会造成可见跳变）。
+      lower.rotation.y = hipYaw;
+      // 只补偿主动攻击旋身，不含受击扭转（见 2.5 说明）
+      const spin = combatSpin;
+      headPivot.rotation.y = wrapAngle(c.headYaw - c.bodyYaw - spin);
+
+      // 4) v8g 足部 IK 锚定：放在所有姿态层之后，把「骨盆被额外推走」的差值
+      //    反解进髋 / 膝角。空中不钉脚（让腿随身体收起）；enabled=false 时整层跳过，
+      //    精确回到旧 FK 姿态，调试面板可直接 A/B 对照。
+      lastIK = applyFootIK({
+        root, pelvis, lower,
+        limbs: ikLimbs,
+        base: ikBase,
+        cfg: ikConfig,
+        grounded: c.grounded,
+        attacking,
+      });
+    },
+    lean(): { forward: number; side: number } {
+      return { forward: leanForward, side: leanSide };
+    },
+    landing(): {
+      pulse: number; remaining: number; kind: 'none' | 'land' | 'jump'; impactVy: number;
+    } {
+      const pulse = pulseValue(lastNow, pulseStart, pulseDuration, pulseStrength, pulseCompress);
+      const remaining = pulseDuration > 0
+        ? Math.max(0, pulseDuration - Math.max(0, lastNow - pulseStart))
+        : 0;
+      return {
+        pulse,
+        remaining,
+        kind: pulse > 0 ? pulseKind : 'none',
+        impactVy: lastImpactVy,
+      };
+    },
+    hurt(): HurtPose {
+      return lastHurtPose;
+    },
+    ik(): IKDiagnostics {
+      return lastIK;
+    },
+    attackBlend(): number {
+      return attackBlend;
+    },
+    attackWeights(): {
+      gaitScale: number; attackLegWeight: number; driveSpeed: number; stridePhase: number;
+    } {
+      return {
+        gaitScale: lastGaitScale,
+        attackLegWeight,
+        driveSpeed: lastDrive.speed,
+        stridePhase: lastDrive.phase,
+      };
+    },
+    hipYaw(): number {
+      return hipYaw;
+    },
+    gaitYaw(): number {
+      return lastGaitYaw;
+    },
+    arrowDirection(): { x: number; y: number; z: number } {
+      arrowModel.updateWorldMatrix(true, false);
+      const e = arrowModel.matrixWorld.elements;
+      // 第 3 列 = 变换后的局部 +Z；归一化去掉上游缩放影响
+      const x = e[8];
+      const y = e[9];
+      const z = e[10];
+      const len = Math.hypot(x, y, z) || 1;
+      return { x: x / len, y: y / len, z: z / len };
+    },
+    dispose(): void {
+      root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          const m = obj.material;
+          if (Array.isArray(m)) m.forEach((x) => x.dispose());
+          else m.dispose();
+        }
+      });
+    },
+  };
+}

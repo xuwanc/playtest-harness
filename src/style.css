@@ -1,0 +1,237 @@
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #12161d;
+  color: #e6edf3;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+#app, #app canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* HUD + 提示共用一个纵向容器：提示永远在 HUD 下方，绝对 top 不再需要 */
+#overlay-left {
+  position: fixed;
+  top: 10px;
+  left: 12px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: calc(100vw - 24px);
+}
+
+#hud {
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(120, 160, 200, 0.28);
+  border-radius: 6px;
+  background: rgba(10, 14, 20, 0.62);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre;
+  pointer-events: none;
+  letter-spacing: 0.2px;
+}
+
+#weapon-bar {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid rgba(120, 160, 200, 0.25);
+  border-radius: 8px;
+  background: rgba(10, 14, 20, 0.62);
+}
+
+.wp {
+  min-width: 50px;
+  padding: 7px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(140, 175, 210, 0.3);
+  background: rgba(38, 52, 68, 0.7);
+  color: rgba(220, 232, 244, 0.75);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: none;
+  transition: background 90ms linear, color 90ms linear;
+}
+
+.wp.is-active {
+  border-color: rgba(130, 205, 255, 0.85);
+  background: rgba(60, 130, 185, 0.72);
+  color: #fff;
+}
+
+/* 提示在纵向容器里紧跟 HUD 下方，不再用绝对 top；横竖屏都不会压住 HUD */
+#hint {
+  max-width: min(360px, 76vw);
+  text-align: left;
+  font-size: 10px;
+  line-height: 1.6;
+  color: rgba(200, 215, 230, 0.5);
+  pointer-events: none;
+}
+
+#pad-left, #pad-right {
+  position: fixed;
+  bottom: 24px;
+  z-index: 20;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+#pad-left { left: 18px; }
+#pad-right { right: 18px; }
+
+.btn {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 1px solid rgba(150, 195, 235, 0.45);
+  background: rgba(40, 70, 100, 0.38);
+  color: #eaf3fb;
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  touch-action: none;
+  transition: background 80ms linear, transform 80ms linear;
+}
+
+.btn:active, .btn.is-down {
+  background: rgba(90, 160, 220, 0.62);
+  transform: scale(0.94);
+}
+
+.btn-small {
+  width: 48px;
+  height: 48px;
+  font-size: 12px;
+  border-color: rgba(210, 170, 120, 0.45);
+  background: rgba(100, 75, 40, 0.38);
+}
+
+.btn-attack {
+  width: 88px;
+  height: 88px;
+  font-size: 19px;
+  border-color: rgba(235, 150, 110, 0.6);
+  background: rgba(135, 65, 45, 0.48);
+}
+
+.btn-attack:active, .btn-attack.is-down {
+  background: rgba(220, 110, 70, 0.7);
+}
+
+.btn-cast {
+  width: 62px;
+  height: 62px;
+  font-size: 14px;
+  border-color: rgba(175, 145, 235, 0.55);
+  background: rgba(80, 60, 120, 0.45);
+}
+
+/* 调试面板放进固定容器并限制高度：展开后内部滚动，绝不覆盖右下角操作按钮 */
+#debug-panel {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 30;
+  max-height: calc(100vh - 170px);
+  overflow-y: auto;
+  border-radius: 6px;
+}
+
+#debug-panel .lil-gui.root {
+  width: 250px;
+}
+
+.lil-gui {
+  --background-color: rgba(16, 21, 28, 0.92);
+  --font-size: 11px;
+  z-index: 30 !important;
+}
+
+@media (max-width: 620px) {
+  .btn { width: 54px; height: 54px; font-size: 15px; }
+  .btn-small { width: 42px; height: 42px; font-size: 11px; }
+  .btn-attack { width: 72px; height: 72px; font-size: 16px; }
+  .btn-cast { width: 52px; height: 52px; font-size: 12px; }
+  .wp { min-width: 40px; padding: 6px 5px; font-size: 10px; }
+  #pad-left, #pad-right { gap: 8px; bottom: 16px; }
+  #pad-left { left: 10px; }
+  #pad-right { right: 10px; }
+  #hint { font-size: 8px; max-width: 82vw; }
+}
+
+/* ---- 竖屏：攻击 / 技2 从上到下竖排放在右侧，单手拇指够得到 ----
+   横屏完全保持原来的底部横排；只按屏幕方向切换，不依赖宽度断点。 */
+@media (orientation: portrait) {
+  #pad-right {
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    right: 12px;
+    top: 30%;
+    bottom: auto;
+    gap: 18px;
+  }
+  /* 顶部整行让给武器条；HUD 用短版并下移，收起的调试面板再放到 HUD 下方 */
+  #overlay-left { top: 58px; }
+  #debug-panel {
+    top: 212px;
+    right: 8px;
+    max-height: calc(100vh - 230px);
+  }
+  #debug-panel .lil-gui.root { width: 210px; }
+  /* 竖屏窄屏：HUD 允许自动换行，宽度锁在视口内，不再横向溢出 */
+  #hud { font-size: 8px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+  #hint { font-size: 8px; max-width: 94vw; color: rgba(210, 226, 240, 0.72); }
+}
+
+/* 竖屏窄屏叠加：按钮尺寸沿用小屏档，但技能条仍保持纵向 */
+@media (orientation: portrait) and (max-width: 620px) {
+  #pad-right { right: 10px; top: 32%; gap: 16px; }
+  #pad-left { bottom: 16px; }
+}
+
+/* ---- v7c #7：辅助按钮（冲 / 跳 / 复位）不再占左下角 ----
+   竖屏：全部移到屏幕「右侧底部」，与右侧中部竖排的攻击 / 技2 错开不重叠，
+        左下角完整让给隐形摇杆；
+   横屏：移到「右下角」，紧挨攻击 / 技2 组左侧同一行，整组都收在右下角。
+   数值按两组按钮的实际宽度错开，大小屏各给一档。 */
+@media (orientation: portrait) {
+  #pad-left { left: auto; right: 10px; bottom: 16px; }
+}
+@media (orientation: portrait) and (max-width: 620px) {
+  #pad-left { right: 10px; }
+}
+@media (orientation: landscape) {
+  #pad-left { left: auto; right: 190px; bottom: 24px; }
+}
+@media (orientation: landscape) and (max-width: 620px) {
+  #pad-left { right: 150px; bottom: 16px; }
+}

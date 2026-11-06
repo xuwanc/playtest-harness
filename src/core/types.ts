@@ -1,0 +1,1269 @@
+/**
+ * Core 公共数据契约 —— 纯类型定义，零运行时依赖。
+ *
+ * 可移植纪律（同时面向 Web 复用与 Unity / Godot 对照重写）：
+ *  1. 只允许 number / string / boolean / 数组 / plain object，不用 class、enum、Symbol、Proxy、装饰器。
+ *  2. World 必须可 JSON 序列化，不得存放函数、类实例、闭包或渲染对象。
+ *  3. 所有状态集中在 World，状态转移是确定性的 step(world, dt, intents)。
+ *  4. 不出现 window / document / Math.random / Date.now / performance。
+ */
+
+export type Vec3 = { x: number; y: number; z: number };
+export type Vec2XZ = { x: number; z: number };
+
+export type BoxKind = 'ground' | 'step' | 'wall' | 'lintel' | 'obstacle';
+
+/** 轴对齐碰撞白盒。min/max 为世界坐标，闭区间。 */
+export type Box = {
+  id: string;
+  kind: BoxKind;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+};
+
+export type Bounds = { minX: number; maxX: number; minZ: number; maxZ: number };
+
+export type StepSpec = {
+  id: string;
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+  height: number;
+};
+
+export type DoorwaySpec = {
+  id: string;
+  x: number;
+  z: number;
+  openingWidth: number;
+  openingHeight: number;
+  wallThickness: number;
+  wallSpan: number;
+  wallHeight: number;
+};
+
+export type ObstacleSpec = {
+  id: string;
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+  height: number;
+};
+
+/** 供后续寻路模块消费的网格元数据（本期只生成，不实现寻路）。 */
+export type GridMeta = {
+  cellSize: number;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+};
+
+export type SceneConfig = {
+  ground: { size: number; thickness: number };
+  steps: StepSpec[];
+  doorways: DoorwaySpec[];
+  obstacles: ObstacleSpec[];
+  grid: GridMeta;
+};
+
+/* ---------------- 武器 / 战斗契约 ---------------- */
+
+export type WeaponId = 'sword-shield' | 'dual-swords' | 'greatsword' | 'staff' | 'bow';
+
+/** 槽位 1..5 与 WeaponId 的固定映射，输入层与 UI 共用，避免各写一份。 */
+export const WEAPON_ORDER: WeaponId[] = [
+  'sword-shield',
+  'dual-swords',
+  'greatsword',
+  'staff',
+  'bow',
+];
+
+export type WeaponProfile = {
+  moveMultiplier: number;
+  windup: number;
+  active: number;
+  recovery: number;
+  /** 三连击各段的前向位移（米），active 阶段线性推进 */
+  lunge: [number, number, number];
+  /** 剑类为 3，法杖 / 弓为 0 */
+  comboCount: number;
+};
+
+export type CastProfile = {
+  windup: number;
+  active: number;
+  recovery: number;
+  lunge: number;
+};
+
+export type CombatConfig = {
+  /** 攻击结束后仍可接下一段的窗口（秒） */
+  comboWindow: number;
+  /** 每段攻击动作结束后的收势停顿（秒）：位移结束 → 停顿 → 才能接下一段，形成三连击节奏 */
+  settle: number;
+  /** 攻击期间（windup/active/recovery）保留的自主移动速度比例（0 = 完全锁定，位移只由 lunge 决定；1 = 正常速度） */
+  attackMoveScale: number;
+  /** 收势停顿（settle）期间保留的自主移动速度比例：让「攻击后停顿」不再完全锁死，保留一点惯性余速 */
+  settleMoveScale: number;
+  /** 攻击尚未彻底结束时（recovery 阶段）可提前取消、接下一段的进度比例（0.45 = recovery 过 45% 即可衔接），让连击节奏更连贯 */
+  cancelWindow: number;
+  /** 有目标做动态前冲时，最小前冲比例（相对武器基础 lunge）：即使贴脸也保留一点跨步，不会完全修没 */
+  minLungeScale: number;
+  /** 按住攻击键时，剑类在每段停顿结束后自动接续下一段（无限循环连击） */
+  autoCombo: boolean;
+  weapons: Record<WeaponId, WeaponProfile>;
+  /** 法杖的两个技能已抽离到独立 abilities 模块（引导飞弹 / 电环），不再复用近战状态机（v7c #12） */
+  bow: {
+    maxChargeTime: number;
+    minChargeToFire: number;
+    chargeMoveMultiplier: number;
+    release: CastProfile;
+  };
+};
+
+/** idle → windup → active → recovery → settle → idle；settle 是「每段前移后的停顿」。 */
+export type AttackPhase = 'idle' | 'windup' | 'active' | 'recovery' | 'settle';
+
+/** 本次攻击的时长缓存，开始时算一次，表现层与状态机直接读取。 */
+export type AttackTimings = {
+  windup: number;
+  active: number;
+  recovery: number;
+  /** 收势停顿时长；此阶段零位移、零 impulse，attackProgress 固定为 1 */
+  settle: number;
+  lunge: number;
+};
+
+export type CombatState = {
+  weapon: WeaponId;
+  phase: AttackPhase;
+  /** 0 = 未在连击中；1..3 = 当前连击段 */
+  comboIndex: number;
+  phaseTimer: number;
+  comboWindow: number;
+  queued: boolean;
+  charging: boolean;
+  /** 0..1 */
+  charge: number;
+  /** 0..1，当前攻击整体进度（不含 settle），表现层用于插值动画 */
+  attackProgress: number;
+  /** 攻击开始时锁定的朝向，挥击过程中不受转向影响 */
+  attackFacing: number;
+  /** 每次起手递增，表现层据此触发一次性特效（箭矢等） */
+  attackId: number;
+  /** 最近一次弓箭释放的蓄力值 0..1，供表现层决定箭速 */
+  lastCharge: number;
+  timings: AttackTimings;
+};
+
+/* ---------------- 派生招 / 动作链接契约（v9a Phase 1） ---------------- */
+
+/**
+ * 「冲刺 / 翻滚 / 闪现 / 长跑后接攻击」与「空中起手、落地命中」共用的一套数据驱动招式表。
+ * 设计约束：
+ *  - 假人与主角同构：命中统一走 hits.applyHit(HitTarget)，"不能击退 / 不伤害"只是
+ *    hits.noDamageToPlayer 这个测试开关，不是写死在代码里的机制差异。
+ *  - 不背后索敌；起手把目标 id / 朝向 / 距离快照进 LinkState，挥击中不再重选目标。
+ *  - 目标丢失 / 超范围时只冲到配置极限距离后中断，绝不无限追击。
+ *  - 派生招与冲刺共用 dash.cooldown 冷却槽，且每个窗口只触发一次（不可连发）。
+ * 全部纯数值 / plain data，可 JSON 序列化，确定性。
+ */
+
+export type LinkSource = 'none' | 'roll' | 'blink' | 'sprint';
+export type LinkPhase = 'idle' | 'windup' | 'active' | 'recovery';
+/** 命中形状：Phase 1 用 sector / capsule（扫掠），后续 circle(旋风/冰环) / cone(落地冲击面)。 */
+export type HitShapeKind = 'sector' | 'capsule' | 'circle' | 'cone';
+
+export type LinkHitConfig = {
+  shape: HitShapeKind;
+  /** 判定半径（米）：扇区 / 圆 / 锥形有效 */
+  radius: number;
+  /** 扇区 / 锥形半角（度） */
+  arcDeg: number;
+  /** 扫掠线段半径（米）：capsule 有效，防止一帧大位移穿过目标 */
+  width: number;
+  /** 受击类型 */
+  type: HurtType;
+  /** 僵直时长（秒），0 = 按类型取默认 */
+  duration: number;
+  /** 击退距离（米），0 = 不击退 */
+  knockback: number;
+  /** 命中脉冲间隔（秒），0 = 每个 active 帧判定；旋风斩等可用多脉冲 */
+  pulseInterval: number;
+  /** Phase 3 预留：浮空目标高度（米），0 = 不浮空；上限 = characterHeight（不超过一个身高）。
+   *  实现时按 v0 = sqrt(2·gravity·liftHeight) 反算初速，滞空时长自然符合物理。 */
+  liftHeight: number;
+  /** Phase 2/3 预留：冰冻时长（秒），0 = 不冰冻 */
+  freeze: number;
+};
+
+export type LinkMoveConfig = {
+  enabled: boolean;
+  /** 招式标识，表现层据此选动画 / 特效 */
+  kind: string;
+  /** 最大冲锋距离（米）：索敌时取 min(目标距离 - stopDistance, distance) */
+  distance: number;
+  windup: number;
+  active: number;
+  recovery: number;
+  hit: LinkHitConfig;
+};
+
+export type LinkConfig = {
+  /** 总开关：false = 完全不产生派生招，窗口内攻击退回普通连击（精确 A/B） */
+  enabled: boolean;
+  /** 各来源结束后的可接招窗口（秒）。长跑 / 闪现刻意更长，避免操作不过来 */
+  windows: { roll: number; blink: number; sprint: number };
+  /** 派生招与冲刺共享的冷却（秒）：触发后把 dash.cooldown 至少提升到该值 */
+  sharedCooldown: number;
+  /** 长跑途中是否允许直接触发（松手后仍会另开窗口） */
+  triggerWhileSprinting: boolean;
+  /** 索敌：不做背后索敌，只取前方扇区内最近目标 */
+  search: {
+    range: number;
+    maxAngleDeg: number;
+    /** 冲到距目标多近停住 */
+    stopDistance: number;
+  };
+  /** 无目标时是否回退到「面朝向 + 冲到极限距离」 */
+  noTargetFallback: boolean;
+  /** 武器 → 冲刺后招式表。未配置 / enabled=false 的武器不消费攻击输入（弓、法杖占位） */
+  moves: Partial<Record<WeaponId, LinkMoveConfig>>;
+  /** 落地招（Phase 3 实现）：空中按攻击立即起手、落地命中。配置先就位，enabled=false */
+  landing: {
+    enabled: boolean;
+    /** 起手后等待落地的最大时长（秒），超时取消 */
+    maxAirTime: number;
+    moves: Partial<Record<WeaponId, LinkMoveConfig>>;
+  };
+};
+
+/** 派生招运行时状态：玩家与每个假人各一份，结构完全一致（对称机制）。 */
+export type LinkState = {
+  phase: LinkPhase;
+  source: LinkSource;
+  /** 剩余可接招窗口（秒）。刻意不叫 window：Core 契约禁止出现浏览器全局同名标识符 */
+  linkWindow: number;
+  /** 窗口 id 单调自增；usedWindowId 相等表示该窗口已触发过（不可连发） */
+  windowId: number;
+  usedWindowId: number;
+  /** 派生招自身冷却（触发时 = sharedCooldown），与 dash.cooldown 共享语义 */
+  cooldown: number;
+  /** 当前招式 kind（'' = 无） */
+  kind: string;
+  /** 起手时的武器，中途换武器即取消 */
+  weapon: WeaponId | '';
+  /** 每次起手递增，表现层据此触发一次性特效 */
+  id: number;
+  /** 阶段计时（秒） */
+  timer: number;
+  /** 动作进度 0..1（windup+active+recovery 归一化） */
+  progress: number;
+  /** 起手锁定的朝向 */
+  facing: number;
+  /** 起手锁定的目标 id（0 = 无目标 / 回退面朝向） */
+  targetId: number;
+  /** 起手锁定的目标距离 */
+  targetDist: number;
+  /** 本次冲锋目标距离（米，收敛用，全程不变 → 超范围只冲到极限即中断） */
+  travel: number;
+  /** 已行进距离（米） */
+  travelled: number;
+  /** 本帧位移线段起点（扫掠命中用，movement 之前记录） */
+  fromX: number;
+  fromZ: number;
+  /** 命中脉冲计时 */
+  pulseTimer: number;
+  /** 本次招式已命中的目标 id（去重，保证每个目标只结算一次） */
+  hitIds: number[];
+  /** 本帧 attackPressed 是否已被派生通道消费（供 combat / abilities 仲裁） */
+  consumedAttack: boolean;
+  /** 长跑状态沿检测（true → false 时开窗口） */
+  prevSprinting: boolean;
+};
+
+/* ---------------- 目标选择契约 ---------------- */
+
+export type TargetingConfig = {
+  /** 候选目标的最大水平距离（米） */
+  range: number;
+  /** 相对当前面朝向允许的最大夹角（度，半角）；背后的敌人不会被强行锁定 */
+  maxAngleDeg: number;
+  /** 朝向加权：score = dist - frontBias * cos(夹角)，越正面越优先 */
+  frontBias: number;
+  /** 每击结束希望与敌人保持的距离（米）：动态前冲与击退都趋向它 */
+  idealRange: number;
+  /** 有目标时，前冲距离相对武器基础 lunge 的最大放大倍数 */
+  maxLungeScale: number;
+  /** 总开关：关闭后攻击朝向与动态前冲退回「无目标」行为 */
+  targetAssist: boolean;
+};
+
+export type TargetState = {
+  /** 0 = 无目标；1..N = 锁定的假人 id */
+  targetId: number;
+  /** 由玩家指向目标的角度（弧度） */
+  targetYaw: number;
+  /** 玩家到目标的水平距离（米） */
+  targetDist: number;
+  hasTarget: boolean;
+};
+
+/* ---------------- 命中 / 受击 / 击退契约 ---------------- */
+
+/** 命中目标：玩家或某个假人。玩家与假人共用一套 applyHit 规则（v9a 对称机制）。 */
+export type HitTarget = { kind: 'player' } | { kind: 'dummy'; index: number };
+
+/** 三种受击动画 + 无受击。字符串联合，跨语言映射无歧义。 */
+export type HurtType = 'none' | 'light' | 'heavy' | 'knock';
+
+/** 受击状态：Core 计时，表现层用 1 - timer/duration 归一化进度驱动后仰与闪色。 */
+export type HurtState = {
+  type: HurtType;
+  /** 剩余时长（秒） */
+  timer: number;
+  /** 本次受击总时长（秒），0 = 未受击 */
+  duration: number;
+  /** 受击方向（攻击者 → 受击者）的单位向量，用于后仰朝向 */
+  dirX: number;
+  dirZ: number;
+  /** 击退速度冲量（m/s，世界 XZ）：命中时写入，每帧由 movement / dummies 消费，decayHurt 指数衰减，
+   *  形成「被击中后连续后退」而非一帧闪现。伤害系统接入后可改成受质量影响。 */
+  knockX: number;
+  knockZ: number;
+};
+
+export type HitsConfig = {
+  /** 命中扇区半角（度），以 attackFacing 为中心 */
+  arcDeg: number;
+  /** 各武器有效攻击距离（米） */
+  reach: Record<WeaponId, number>;
+  /** 三种受击动画时长（秒） */
+  hurtLight: number;
+  hurtHeavy: number;
+  hurtKnock: number;
+  /** 各武器命中后的击退距离（米），0 = 不击退；大剑最大 */
+  knockback: Record<WeaponId, number>;
+  /** 击退速度衰减率（1/s，指数）：v(t) = v0·e^(-decay·t)。初速 v0 = push·decay，
+   *  因此总后退距离 ≈ push，既保留「击退把敌人推开」的手感，又不会一帧闪现到终点。 */
+  knockbackDecay: number;
+  /** 假人挥砍命中玩家的有效距离（米） */
+  dummyReach: number;
+  /**
+   * 测试限制开关：true = 假人攻击玩家只写受击动画，不施加击退 / 伤害 / 浮空 / 冰冻。
+   * 假人与主角机制同构（同一 applyHit 出口），这个开关只是测试场景的数值限制，
+   * 关闭后玩家也会按同一套规则被击退 —— 不是写死在代码里的不对称。
+   */
+  noDamageToPlayer: boolean;
+  /** 假人挥砍对玩家的击退距离（米），仅在 noDamageToPlayer=false 时生效 */
+  dummyKnockback: number;
+};
+
+/* ---------------- 技能契约（法杖：引导飞弹 / 电环，v7c #12） ---------------- */
+
+/**
+ * 把法杖技能从「复用近战 AttackPhase + castIndex 硬编码」里剥离成一套独立抽象：
+ *  - 引导类（channel）：按住攻击键可移动，按间隔发射投射物，命中即结算；
+ *  - 放置类（zone）：原地生成一个短暂存在的区域，按脉冲对范围内敌人结算命中。
+ * 命中结算统一走 hits.dealHit（与近战共用受击 / 击退 / 计数 / 事件出口），保持可维护性。
+ * 全部为 plain data、可 JSON 序列化；不读外部状态，确定性。
+ */
+
+/** 投射物（奥术飞弹）：引导期间按 fireInterval 发射，沿世界 XZ 匀速飞行，命中或超时销毁。 */
+export type ProjectileState = {
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+  /** 单位飞行方向（世界 XZ） */
+  dirX: number;
+  dirZ: number;
+  speed: number;
+  /** 剩余存活（秒） */
+  life: number;
+  /** 命中半径（米），叠加假人半径判定 */
+  radius: number;
+};
+
+/** 电环：原地放置，存活期内按脉冲对范围内假人结算「僵直 + 轻微击退」。世界坐标，不随玩家移动。 */
+export type ShockRingState = {
+  id: number;
+  x: number;
+  z: number;
+  radius: number;
+  /** 剩余存活（秒） */
+  life: number;
+  /** 总存活（秒），表现层据此归一化缩放 / 淡出 */
+  duration: number;
+  /** 距下一次命中脉冲的剩余时间（秒） */
+  pulseTimer: number;
+};
+
+/**
+ * 法杖技能运行时：引导与放置区域统一成一份纯数据状态，与近战 AttackPhase 状态机解耦。
+ * 引导刻意不进入 combat.phase（保持 idle），因此移动模块不锁速 —— 「按住可以移动引导」。
+ */
+export type AbilityState = {
+  /** 是否正在引导（法杖 + 按住攻击键） */
+  channeling: boolean;
+  /** 引导朝向（每帧用 resolveFacingYaw 刷新，支持拖拽辅助朝向） */
+  channelYaw: number;
+  /** 距下一发飞弹的剩余时间（秒） */
+  fireTimer: number;
+  /** 累计发射数，表现层 / 事件据此触发一次性效果，持久递增不倒退 */
+  volleyId: number;
+  projectiles: ProjectileState[];
+  rings: ShockRingState[];
+  /** 全局技能实例 id 自增（飞弹 / 电环共用，保证唯一） */
+  nextId: number;
+};
+
+/** 技能配置：全部数值外置，调试面板可热改。 */
+export type AbilityConfig = {
+  /** 奥术飞弹引导（攻击键按住，可移动） */
+  arcane: {
+    /** 发射间隔（秒） */
+    fireInterval: number;
+    /** 飞弹速度（米/秒） */
+    speed: number;
+    /** 飞弹存活时长（秒） */
+    life: number;
+    /** 命中半径（米） */
+    radius: number;
+    /** 命中受击类型 */
+    hurtType: HurtType;
+    /** 命中受击时长（秒） */
+    hurtDuration: number;
+    /** 命中击退距离（米，0 = 不击退） */
+    knockback: number;
+    /** 引导时移动速度比例（1 = 不减速，体现「可移动引导」） */
+    moveScale: number;
+  };
+  /** 原地电环（技2 放置） */
+  ring: {
+    /** 作用半径（米） */
+    radius: number;
+    /** 存活时长（秒） */
+    duration: number;
+    /** 命中脉冲间隔（秒） */
+    pulseInterval: number;
+    /** 命中造成的僵直时长（秒，写入 hurt.timer，让假人 AI 停住） */
+    stun: number;
+    /** 命中轻微击退（米） */
+    knockback: number;
+  };
+};
+
+/* ---------------- 角色间分离契约 ---------------- */
+
+export type SeparationConfig = {
+  /** 每帧迭代次数，越多越不容易残留重叠 */
+  iterations: number;
+  /** 额外分离量（米），避免两实体恰好贴边时抖动 */
+  slop: number;
+};
+
+/* ---------------- 冲刺 / 闪避契约 ---------------- */
+
+/** 冲刺动作类型：翻滚（物理武器）/ 闪现（法杖）/ 无。 */
+export type DashKind = 'none' | 'roll' | 'blink';
+
+export type DashConfig = {
+  /** 翻滚：位移（米）、持续时间（秒）、冷却（秒） */
+  rollDistance: number;
+  rollDuration: number;
+  rollCooldown: number;
+  /** 闪现：最大距离（米）、沿途采样步长（米，越小越不易穿墙）、冷却（秒） */
+  blinkDistance: number;
+  blinkStep: number;
+  blinkCooldown: number;
+  /** 闪现后立即清空水平速度，避免惯性把角色拉回 */
+  blinkClearVelocity: boolean;
+};
+
+/**
+ * 冲刺状态，plain data，可随 World 一起 JSON 序列化。
+ * roll 有 active 持续期（写 impulse 让 movement 消费）；blink 是单帧瞬移，
+ * from/to 记录起终点供表现层画残影与落点光效。id 每次触发递增，驱动一次性特效。
+ */
+export type DashState = {
+  kind: DashKind;
+  phase: 'idle' | 'active';
+  /** active 剩余时间（秒） */
+  timer: number;
+  /** 本次 active 总时长（秒），表现层归一化进度 */
+  duration: number;
+  /** 剩余冷却（秒） */
+  cooldown: number;
+  /** 动作方向（单位向量） */
+  dirX: number;
+  dirZ: number;
+  fromX: number;
+  fromZ: number;
+  toX: number;
+  toZ: number;
+  /** 每次触发递增 */
+  id: number;
+};
+
+/* ---------------- 智能相机契约 ---------------- */
+
+/**
+ * 威胁评估 → 构图意图。参考战神5 的情境相机：周围威胁越多、越近，
+ * 相机越拉远并把画面中心向威胁质心平移，必要时略微抬高俯角看清包围圈；
+ * 无人时则轻微推进，让画面更贴近玩家。
+ * 全部是纯数值，Core 计算、可快照、可跨语言对照；时间平滑由表现层负责。
+ */
+export type CameraThreatConfig = {
+  /** 威胁评估半径（米），超出不计入 */
+  radius: number;
+  /** 权重饱和距离（米）：<= 此距离时近度权重为 1 */
+  nearDistance: number;
+  /** 各假人行为模式的基础威胁倍率 */
+  modeWeight: Record<DummyMode, number>;
+  /** 假人正处于挥砍 active 帧时的额外加权 */
+  attackBoost: number;
+  /** 威胁归一化饱和常数：threat = sum / (sum + saturation) */
+  saturation: number;
+  /** 无威胁时的推进比例（0.12 = 距离 × 0.88） */
+  pushIn: number;
+  /** 满威胁时的最大拉远比例 */
+  maxPullback: number;
+  /** 画面中心相对玩家的最大平移（米） */
+  maxOffset: number;
+  /** 满威胁时的最大俯角增量（度） */
+  maxPitchDelta: number;
+  /** 威胁质心方向平移系数 */
+  framingBias: number;
+};
+
+export type CameraIntent = {
+  /** 距离倍率：<1 推进、>1 拉远 */
+  distanceScale: number;
+  /** 画面中心相对玩家的平移（世界 XZ，米） */
+  offsetX: number;
+  offsetZ: number;
+  /** 俯角增量（度） */
+  pitchDelta: number;
+  /** 归一化威胁强度 0..1 */
+  threat: number;
+  /** 参与评估的威胁数量 */
+  threatCount: number;
+  /** 威胁加权质心（世界 XZ），供调试可视化 */
+  centroidX: number;
+  centroidZ: number;
+};
+
+/* ---------------- 测试假人契约 ---------------- */
+
+/** 四种测试行为 + 待机（点击循环里的「关闭」态）。 */
+export type DummyMode = 'idle' | 'wander' | 'follow' | 'keep-distance' | 'attack';
+
+/** 点击假人的循环顺序：四种行为依次轮转，idle 作为暂停态放在末尾。 */
+export const DUMMY_MODES: DummyMode[] = ['wander', 'follow', 'keep-distance', 'attack', 'idle'];
+
+export type DummySpawn = { x: number; z: number };
+
+export type DummyConfig = {
+  count: number;
+  spawn: DummySpawn[];
+  /** 与 spawn 一一对应，reset 时按此恢复 */
+  initialModes: DummyMode[];
+  radius: number;
+  height: number;
+  moveSpeed: number;
+  acceleration: number;
+  /** 游走：以 home 为圆心的半径 / 换目标间隔（秒） */
+  wanderRadius: number;
+  wanderInterval: number;
+  /** 跟随：小于此距离停止靠近，避免贴脸 */
+  followStopDistance: number;
+  /** 保持距离：趋向距离 / 死区 / 死区内绕行强度 */
+  keepDistance: number;
+  keepDeadZone: number;
+  keepStrafe: number;
+  /** 攻击：进入范围才挥砍（无伤害）/ 冷却 / 三段时长 */
+  attackRange: number;
+  attackInterval: number;
+  attackWindup: number;
+  attackActive: number;
+  attackRecovery: number;
+};
+
+export type DummyAttackPhase = 'idle' | 'windup' | 'active' | 'recovery';
+
+/** 单个假人的全部状态，plain 数据，可随 World 一起 JSON 序列化。 */
+export type DummyState = {
+  id: number;
+  mode: DummyMode;
+  initialMode: DummyMode;
+  homeX: number;
+  homeZ: number;
+  position: Vec3;
+  velocity: Vec3;
+  facing: number;
+  /** 身体朝向：指数平滑追随 facing（转身有惯性，不像 root.rotation 那样瞬转），怪物动画与主角一致（v7b#9） */
+  bodyYaw: number;
+  /** 头部朝向：更快追随 facing，头先于身体转向目标，再相对身体限幅（v7b#9） */
+  headYaw: number;
+  gaitPhase: number;
+  distance: number;
+  targetX: number;
+  targetZ: number;
+  wanderTimer: number;
+  attackCooldown: number;
+  attackPhase: DummyAttackPhase;
+  attackPhaseTimer: number;
+  /** 0..1，表现层用于挥砍插值 */
+  attackProgress: number;
+  /** 每次起手递增，表现层据此触发一次性特效 */
+  attackId: number;
+  /** 受击僵直：timer > 0 期间假人不主动移动、不发起新攻击 */
+  hurt: HurtState;
+  /** v9a：与主角完全同构的派生招运行时状态（对称机制，当前 AI 不主动起手） */
+  link: LinkState;
+};
+
+export type DummyViewConfig = {
+  /** 按 id 顺序取色，数量不足时回绕 */
+  colors: string[];
+  labelBg: string;
+  attackArcColor: string;
+};
+
+/**
+ * 程序化朝向参数：面朝向 / 身体朝向 / 移动方向分离。
+ * 全部是速率与角度，纯数值，Unity/Godot 可直接映射。
+ */
+export type OrientationConfig = {
+  /** 身体朝向追随目标朝向的指数平滑速率（1/s），越小转得越慢 */
+  bodyTurnRate: number;
+  /** 头部朝向追随目标朝向的速率（1/s），应明显大于身体 → 头先转到位 */
+  headTurnRate: number;
+  /** 头部相对身体的最大偏转角（度），防止扭头过度 */
+  maxHeadTurnDeg: number;
+};
+
+export type CoreConfig = {
+  fixedDt: number;
+  maxStepsPerFrame: number;
+  moveSpeed: number;
+  sprintMultiplier: number;
+  acceleration: number;
+  friction: number;
+  gravity: number;
+  jumpSpeed: number;
+  stepHeight: number;
+  characterRadius: number;
+  characterHeight: number;
+  coyoteTime: number;
+  jumpBufferTime: number;
+  strideLength: number;
+  /**
+   * 步幅随速度增长的强度。0 = 固定步幅（步频随速度线性飙升，高速过快）；
+   * 越大则高速步幅越大、步频越平缓。默认 0.45，兼顾「步幅明显变大」与「步频不过度压低」。
+   */
+  strideSpeedGain: number;
+  /** 步幅增长的速度比上限（相对 moveSpeed），防止冲刺等高速态把步幅拉得过大 */
+  strideSpeedCap: number;
+  fallTolerance: number;
+  spawn: Vec3;
+  worldBounds: Bounds;
+  orientation: OrientationConfig;
+  combat: CombatConfig;
+  /** v9a：冲刺 / 翻滚 / 闪现 / 长跑后的数据驱动派生招表 */
+  links: LinkConfig;
+  /** 法杖技能（引导飞弹 / 电环），独立于近战状态机（v7c #12） */
+  abilities: AbilityConfig;
+  targeting: TargetingConfig;
+  hits: HitsConfig;
+  separation: SeparationConfig;
+  dash: DashConfig;
+  camera: CameraThreatConfig;
+  dummies: DummyConfig;
+};
+
+export type CameraConfig = {
+  pitchDeg: number;
+  yawDeg: number;
+  distance: number;
+  smoothing: number;
+  fov: number;
+};
+
+export type JoystickConfig = { maxRadiusPx: number; deadZone: number };
+
+/** 智能相机表现参数：Core 只输出构图意图，时间平滑属于观感，留在表现层。 */
+export type SmartCameraViewConfig = {
+  /** 构图意图的指数平滑速率（1/s），越大跟随越紧 */
+  smoothing: number;
+};
+
+/**
+ * 用户主动缩放（v8e）：双指捏合 / 滚轮 / 快捷键改变相机距离倍率。
+ * 纯观感参数，只被输入适配层与相机表现层消费；不进入 Core 状态、不影响快照与确定性。
+ * 语义：倍率 >1 = 相机拉远（看得更广），<1 = 拉近（看得更近）；
+ *      最终距离 = camera.distance × 智能构图 distanceScale × 用户倍率。
+ */
+export type CameraZoomViewConfig = {
+  /** 用户倍率下限（相对基础距离），防止镜头穿进角色 */
+  min: number;
+  /** 用户倍率上限，防止拉到场景外 */
+  max: number;
+  /** 倍率目标的指数平滑速率（1/s），越大越跟手 */
+  smoothing: number;
+  /** 捏合灵敏度：两指距离比例 → 倍率比例的指数（1 = 等比例，>1 更灵敏） */
+  pinchGain: number;
+  /** 单帧倍率比例限幅（>1），防止一帧内手指瞬移造成镜头爆冲 */
+  maxStepRatio: number;
+  /** 滚轮向下滚动 100px 对应的倍率比例（>1 = 拉远），向上取倒数 */
+  wheelStep: number;
+  /** 键盘单次缩放的倍率比例（>1 = 拉远） */
+  keyStep: number;
+};
+
+/** 冲刺特效表现参数（纯观感）。 */
+export type DashViewConfig = {
+  /** 翻滚落地尘环 / 闪现首尾光环颜色 */
+  rollColor: string;
+  blinkColor: string;
+  /** 一次性特效存活时长（秒） */
+  fxDuration: number;
+  /** 光环半径（米） */
+  ringRadius: number;
+};
+
+/** v9a：派生招表现参数（纯观感，不进 Core 状态）。 */
+export type LinkViewConfig = {
+  /** 冲锋 / 盾击一次性光环颜色 */
+  chargeColor: string;
+  /** 光环半径（米） */
+  ringRadius: number;
+  /** 光环存活时长（秒） */
+  fxDuration: number;
+  /** 举盾前撞：上半身前倾最大角（度） */
+  leanDeg: number;
+  /** 举盾前撞：持盾臂前伸最大角（度） */
+  shieldPitchDeg: number;
+  /** 举盾前撞：骨盆前移最大量（米） */
+  pelvisReach: number;
+};
+
+export type VoxelConfig = {
+  headSize: number;
+  bodyWidth: number;
+  bodyHeight: number;
+  limbThickness: number;
+  legLength: number;
+  armLength: number;
+};
+
+/** 表现层程序化朝向参数：只影响观感，不进入 Core 状态。 */
+/**
+ * 程序化步态（v8）：把「移动方向 → 腿部姿态」的解算参数外置，供调试面板热调。
+ * 纯数值、零依赖，表现层 gait.ts 消费；不进入 Core 快照。
+ */
+export type GaitViewConfig = {
+  /** 摆幅随速度增益：amp = min(maxAmp, speed/moveSpeed × strideGain) */
+  strideGain: number;
+  /** 摆幅上限（rad），防止冲刺时腿甩过头 */
+  maxAmp: number;
+  /** 侧向步幅相对前后步幅的比例 */
+  sideWeight: number;
+  /** 交叉步强度 0..1：侧移时领先腿跨过中线、步幅更大 */
+  crossStep: number;
+  /** 摆动相抬膝幅度 */
+  kneeLift: number;
+  /** 脚落地锁定强度 0..1：支撑相把脚往身后压，抵消髋部前移（脚不打滑） */
+  plantLock: number;
+  /** 骨盆左右重心转移（米） */
+  comSway: number;
+  /** 骨盆上下起伏（米） */
+  comBob: number;
+  /** 侧移时骨盆 / 上半身侧倾（rad） */
+  hipLean: number;
+  /** 手臂对侧摆幅度 */
+  armSwing: number;
+};
+
+/* ---------------- 程序动画分层 / 落地缓冲（v8c，纯表现层） ---------------- */
+
+/**
+ * 攻击动画的「下半身权重」：把攻击姿态对腿的写入做成可调层，而不是直接覆盖步态。
+ *   lowerBodyWeight = 0 → 攻击动画完全不碰下半身（用户本轮要看的效果：下盘稳住不动）；
+ *   lowerBodyWeight = 1 → 恢复旧行为（大剑 / 三连击第 3 段直接写腿）。
+ *   gaitWeight      = 0 → 攻击期间步态对下盘的贡献平滑淡出到静止基准（下盘完全不动）；
+ *   gaitWeight      = 1 → 攻击期间步态继续驱动下盘（用于对比「边走边打」）。
+ * blendRate 只控制进出攻击的指数平滑速率，避免权重切换瞬间产生姿态跳变。
+ * 三层都不进入 Core / 快照，只影响观感。
+ */
+export type AttackPoseViewConfig = {
+  /** 攻击「挥击跨步」姿态对下半身（腿/骨盆）的写入权重 0..1，默认 0 = 完全过滤。
+   *  1 = 每段攻击按 attackProgress 前踏跨步、连击左右脚交替领先（v8d）。 */
+  lowerBodyWeight: number;
+  /** 攻击期间「程序化步态」对下半身的权重 0..1，默认 1 = 保留步态接管。
+   *  v8d 起攻击阶段会喂给步态解算器一套由 attackProgress 派生的等效驱动
+   *  （Core 锁速时 solveGait 才会输出姿态），0 = 淡出到静止基准。 */
+  gaitWeight: number;
+  /** 进出攻击姿态的指数平滑速率（1/s），帧率无关 */
+  blendRate: number;
+};
+
+/**
+ * 攻击跨步的程序动画参数（v8d）：两条下半身驱动路径共用的幅度 / 方向配置。
+ * 纯表现层，只被 program-anim.ts 读取；Core 不感知。
+ *
+ * 背景：Core 在攻击阶段把自主移速锁为 0（attackMoveScale=0，v.x=v.z=0），
+ * 而步态解算器在 speed<EPS 时直接返回静止姿态 —— 若不补足等效驱动，
+ * 「攻击时保留移动步态」这一路无论权重拉到多少都恒为 0，看起来就是下半身完全不动。
+ */
+export type AttackStrideViewConfig = {
+  /** 每段攻击的跨步周期数（整数）。相位 = 真实 gaitPhase + progress × TAU × cycles，
+   *  整数周期保证进出攻击时与真实相位同相，不会跨相位跳变。 */
+  cycles: number;
+  /** 攻击期间的等效步速（m/s）：让 solveGait 在 Core 锁速时仍有可见摆幅 */
+  strideSpeed: number;
+  /** 攻击跨步方向中「前冲」占比 0..1，其余给左右交替侧跨 */
+  forwardBias: number;
+  /** 挥击跨步：腿前后摆幅度（rad，领先腿向前、跟随腿蹬地） */
+  stepPitch: number;
+  /** 挥击跨步：领先腿抬膝幅度（rad） */
+  stepKnee: number;
+  /** 挥击跨步：左右侧摆幅度（rad） */
+  stepSide: number;
+  /** 挥击跨步：重心下沉（m，正值表示下沉） */
+  stepDip: number;
+  /** 挥击跨步：骨盆朝领先侧侧移（m） */
+  stepSway: number;
+  /* ---- v8g：applyStep 的「骨盆前移 / 侧跨 / 下沉」幅度外置 ----
+   * 旧版硬编码 0.17 / 0.14 / 0.05，重击时骨盆推得过远，配合受击的上半身位移
+   * 会出现「身体离开腿」。收敛后由 IK 把脚钉在地面，跨步变成「脚落地 + 身体前移」。 */
+  /** 挥击跨步骨盆前移（m） */
+  stepReach: number;
+  /** 挥击跨步骨盆左右交替侧移（m） */
+  stepSideReach: number;
+  /** 挥击跨步重心下沉（m） */
+  stepDipReach: number;
+  /** 大剑重击额外收敛系数 0..1（含旋身角），避免大幅抡剑时身体脱节 */
+  heavyScale: number;
+};
+
+/**
+ * 跳跃 / 落地的程序化蓄力缓冲（squash & absorb）：
+ * 只叠加关节与重心姿态，绝不写 character.position / velocity（跳跃驱动完全不变）。
+ * 触发由表现层检测 grounded 上升/下降沿，进度用 Core 的 world.time 计时，
+ * 因此暂停、时间缩放、单步推进都与逻辑同步，也不会引入本地时间累积。
+ */
+export type LandingViewConfig = {
+  /** 总开关，关闭后完全不叠加缓冲 */
+  enabled: boolean;
+  /** 落地缓冲总时长（秒）：快速下压 → 缓慢回弹 → 归零 */
+  duration: number;
+  /** 下压段占总时长的比例 0.05..0.9（越小越「脆」，越大越「软」） */
+  compressRatio: number;
+  /** 重心下沉深度（米，上半身） */
+  crouchDepth: number;
+  /** 屈膝角（rad） */
+  kneeBend: number;
+  /** 髋前倾补偿（rad），让脚大致留在原地而不是被屈膝抬走 */
+  hipPitch: number;
+  /** 上半身前倾（rad） */
+  upperPitch: number;
+  /** 手臂收拢（rad） */
+  armTuck: number;
+  /** 下盘重心下沉相对上半身的比例 0..1 */
+  lowerScale: number;
+  /** 冲击速度饱和值（m/s）：|落地前 vy| 达到该值时缓冲强度为 1 */
+  impactSpeed: number;
+  /** 最小缓冲强度 0..1：小跳 / 走下台阶也有一点可见的蓄力 */
+  minScale: number;
+  /** 起跳预备下蹲强度倍率 0..1（0 = 关闭，只做落地缓冲） */
+  jumpAnticipation: number;
+  /** 起跳预备时长（秒） */
+  anticipationDuration: number;
+};
+
+export type ProgramAnimViewConfig = {
+  attack: AttackPoseViewConfig;
+  /** v8d：攻击跨步的等效驱动与姿态幅度（两条下半身路径共用） */
+  stride: AttackStrideViewConfig;
+  landing: LandingViewConfig;
+};
+
+export type OrientationViewConfig = {
+  /** 下盘朝「移动方向」带转的比例（0 = 完全跟身体，1 = 完全跟移动方向）。
+   *  v8b 起只是幅度系数，配合 hipYawMaxDeg 限幅，由连续侧向占比驱动、指数平滑，
+   *  不再用 wrapAngle(moveYaw - bodyYaw)（±π 会翻转，引导/后退时下盘跳变）。 */
+  legYawScale: number;
+  /** 下盘偏航的最大角度（度），限幅避免大角度转身带来的朝向突兀 */
+  hipYawMaxDeg: number;
+  /** 下盘偏航的指数平滑速率（1/s，越大越快），帧率无关 */
+  hipYawSmoothing: number;
+  /** 头部枢轴相对身体顶部的高度 */
+  headPivotHeight: number;
+};
+
+/**
+ * 移动惯性带来的身体倾斜（纯表现）：启动前倾、刹车后仰、绕圈侧倾。
+ * 由表现层按速度/朝向的帧差派生，不进入 Core 状态，不影响确定性与快照。
+ */
+export type LeanViewConfig = {
+  /** 前后倾斜：加速度在身体前方投影的增益（弧度 per m/s²） */
+  accelGain: number;
+  /** 侧倾：转向角速度 × 速度 的增益（弧度 per (rad/s · m/s)） */
+  turnGain: number;
+  /** 前后 / 侧向最大倾角（度） */
+  maxForwardDeg: number;
+  maxSideDeg: number;
+  /** 指数平滑速率（1/s），越大跟随越紧 */
+  smoothing: number;
+  /* ---- v8g：惯性倾斜不再只写上半身 ---- */
+  /** 盆骨随惯性倾斜的比例 0..1（相对上半身，明显小于 1，避免整个人被掀翻） */
+  pelvisTiltGain: number;
+  /** 盆骨沿倾斜方向的小幅重心平移（m / rad） */
+  pelvisShift: number;
+  /** 移动时身体略微下沉的最大深度（m），按平滑后的速度比例线性取用 */
+  moveCrouch: number;
+  /** 下沉量的指数平滑速率（1/s） */
+  crouchSmoothing: number;
+};
+
+/**
+ * 两骨 IK 足部锚定（v8g，纯表现层）。
+ * 在此之前实验台只有 FK 与解析摆腿，没有 IK；程序动画推走骨盆时脚只能跟着飘。
+ * 这里把「脚的落点」作为世界锚点，用两骨 IK 反解髋/膝角，把额外骨盆位移吸收进腿里。
+ * 所有参数纯数值、Core 零改动，enabled=false 可精确回到旧 FK 姿态做 A/B 对照。
+ */
+export type IKViewConfig = {
+  /** 总开关：false = 完全不跑 IK（旧行为） */
+  enabled: boolean;
+  /** 足部锚定权重 0..1：1 = 脚完全钉在步态落点，0 = 完全交给 FK */
+  weight: number;
+  /** 攻击期间权重倍率 0..1：留一点跨步自由度，避免挥击时脚被钉死 */
+  attackScale: number;
+  /** 单帧最大角度修正（度），防止目标突变造成抽搐 */
+  maxCorrectionDeg: number;
+};
+
+/** 武器挂点握持姿态（度）：让剑从「贴手臂竖直向上」改成「斜向前伸出、刀锋朝外」。 */
+export type WeaponMountConfig = {
+  swordPitchDeg: number;
+  swordYawDeg: number;
+  greatswordPitchDeg: number;
+  greatswordYawDeg: number;
+  staffPitchDeg: number;
+  shieldPitchDeg: number;
+  bowPitchDeg: number;
+};
+
+/** 受击动画表现参数（弧度 / 强度），只影响观感。 */
+/**
+ * 一套命中部位的受击姿态参数（v8f）。
+ * 全部是「每单位力度」的系数，实际幅度 = lean(type) × pulse × 该系数，
+ * 因此力度与部位正交：同一拳打在腹 / 肩可以分别热调而不互相牵连。
+ * 纯数值，Unity / Godot 可直接映射到骨骼关节目标值。
+ */
+export type HurtPoseProfile = {
+  /** 上半身朝受击方向的前后倾斜倍率（绕腰） */
+  upperPitch: number;
+  /** 上半身侧倾倍率（绕腰，随命中侧向分量） */
+  upperRoll: number;
+  /** 肩部扭转倍率（绕腰 Y 轴，打肩时明显） */
+  upperYaw: number;
+  /** 躯干前屈（不随方向的附加量，正 = 含胸蜷缩，打腹时明显） */
+  fold: number;
+  /** 上半身相对骨盆朝受击方向的位移（身体反应主幅度，应明显大于 comShift） */
+  shift: number;
+  /** 整体下沉（骨盆下移） */
+  drop: number;
+  /** 屁股向后（局部 -Z，固定方向，不与受击方向挂钩） */
+  back: number;
+  /** 屈膝量（两腿相同，不随方向） */
+  knee: number;
+  /** 髋前倾（让脚大体留在原地） */
+  hip: number;
+  /** 手臂叠加：正 = 前抬收拢护住，负 = 被甩开向后 / 外扬 */
+  arm: number;
+};
+
+export type HurtViewConfig = {
+  flashColor: string;
+  flashStrength: number;
+  /** 三种受击的力度（弧度，同时作为旧版最大后仰角与分层姿态的总幅度） */
+  leanLight: number;
+  leanHeavy: number;
+  leanKnock: number;
+  /** v8f 分层受击总开关：false = 回到「脚底锚定、整体刚性倾斜」的旧姿态，用于 A/B 对照 */
+  enabled: boolean;
+  /** 命中部位映射：0 = 腹部 / 低，1 = 肩部 / 高；按受击类型查表 */
+  hitHeight: { light: number; heavy: number; knock: number };
+  /** 强制部位（0..1）：-1 = 按类型自动。调试面板可直接对比「打肩 vs 打腹」 */
+  forceHitHeight: number;
+  /** 冲击→回弹分段比例：前段快速到位、后段缓慢回正，两端值与导数均为 0 */
+  pulseRatio: number;
+  /** 整体重心沿受击方向的偏移系数（必须明显小于 profile.shift） */
+  comShift: number;
+  /** 下盘跟随骨盆后坐 / 下沉的比例（1 = 完全跟随，0 = 脚完全留原地） */
+  lowerScale: number;
+  /* ---- v8g：上半身相对骨盆的位移限幅 ----
+   * 旧版 shift=0.26/0.34 在 knock（大剑重击）时把整个上半身平移约 0.28m，
+   * 躯干下沿直接离开骨盆，观感就是「身体离开腿」。诊断量 pose.upperShift 不变，
+   * 只在写节点时缩放 + 限幅，保证 comShift / upperShift 的比例语义仍可断言。 */
+  /** 上半身相对骨盆位移的缩放 0..1 */
+  upperShiftScale: number;
+  /** 上半身相对骨盆位移的单轴上限（m） */
+  maxUpperShift: number;
+  /** 腹部（低部位）姿态：含胸蜷缩、下沉与屈膝多、手臂收拢 */
+  abdomen: HurtPoseProfile;
+  /** 肩部（高部位）姿态：侧倾与扭转多、下沉屈膝少、手臂被甩开 */
+  shoulder: HurtPoseProfile;
+};
+
+/** 当前锁定目标的脚下指示环。 */
+export type TargetViewConfig = {
+  ringColor: string;
+  ringRadius: number;
+};
+
+export type ColorConfig = {
+  ground: string;
+  step: string;
+  wall: string;
+  lintel: string;
+  obstacle: string;
+  body: string;
+  head: string;
+  limb: string;
+  shoe: string;
+  blade: string;
+  bladeEdge: string;
+  metal: string;
+  wood: string;
+  glow: string;
+};
+
+export type ViewConfig = {
+  camera: CameraConfig;
+  smartCamera: SmartCameraViewConfig;
+  /** v8e：双指捏合 / 滚轮 / 快捷键缩放相机（纯表现层） */
+  zoom: CameraZoomViewConfig;
+  joystick: JoystickConfig;
+  showGrid: boolean;
+  showColliders: boolean;
+  voxel: VoxelConfig;
+  orientation: OrientationViewConfig;
+  gait: GaitViewConfig;
+  /** v8c：攻击动画下半身权重过滤 + 跳跃 / 落地程序化蓄力缓冲 */
+  animation: ProgramAnimViewConfig;
+  weaponMount: WeaponMountConfig;
+  lean: LeanViewConfig;
+  /** v8g：两骨 IK 足部锚定（玩家 / 假人同构） */
+  ik: IKViewConfig;
+  /** v9a：派生招特效与举盾前撞姿态参数 */
+  links: LinkViewConfig;
+  dash: DashViewConfig;
+  hurt: HurtViewConfig;
+  targeting: TargetViewConfig;
+  colors: ColorConfig;
+  dummies: DummyViewConfig;
+};
+
+export type AppConfig = { core: CoreConfig; scene: SceneConfig; view: ViewConfig };
+
+/** 输入意图：已经是世界空间方向，Core 不知道屏幕、相机、按键的存在。 */
+export type Intents = {
+  moveX: number;
+  moveZ: number;
+  jumpPressed: boolean;
+  /** 冲刺按住：持续加速跑（基础手感，保留） */
+  sprintHeld: boolean;
+  /** 冲刺按下沿：触发一次翻滚 / 闪现（按当前武器分化） */
+  sprintPressed: boolean;
+  resetPressed: boolean;
+  /** 攻击键按下沿：剑触发连击 / 法杖施法1 / 弓开始蓄力 */
+  attackPressed: boolean;
+  /** 攻击键按住：弓持续蓄力；剑类开启自动连击（每段停顿结束后自动接续） */
+  attackHeld: boolean;
+  /** 攻击键松开沿：弓释放 */
+  attackReleased: boolean;
+  /** 副技能按下沿：法杖施法2 */
+  skill2Pressed: boolean;
+  /** 0 = 不切换；1..5 对应 WEAPON_ORDER */
+  weaponSlot: number;
+  /** 0 = 无；1..N = 被点击的假人 id（由表现层射线拾取后填入） */
+  dummyClickId: number;
+  /** 攻击 / 技2 按钮拖拽产生的辅助瞄准方向（世界 XZ 单位向量，由输入层用相机地面基向量换算）。
+   *  aimActive=false 表示无拖拽，动作朝向退回「锁定目标 > 移动 > 面朝向」。 */
+  aimX: number;
+  aimZ: number;
+  aimActive: boolean;
+};
+
+export const EMPTY_INTENTS: Intents = {
+  moveX: 0,
+  moveZ: 0,
+  jumpPressed: false,
+  sprintHeld: false,
+  sprintPressed: false,
+  resetPressed: false,
+  attackPressed: false,
+  attackHeld: false,
+  attackReleased: false,
+  skill2Pressed: false,
+  weaponSlot: 0,
+  dummyClickId: 0,
+  aimX: 0,
+  aimZ: 0,
+  aimActive: false,
+};
+
+export type EventType =
+  | 'landed'
+  | 'jumped'
+  | 'stepUp'
+  | 'blocked'
+  | 'reset'
+  | 'weapon-change'
+  | 'attack-start'
+  | 'attack-active'
+  | 'attack-end'
+  | 'combo-reset'
+  | 'charge-start'
+  | 'charge-release'
+  /** 法杖引导奥术飞弹起手 / 结束 */
+  | 'channel-start'
+  | 'channel-end'
+  /** 每发射一枚奥术飞弹，value = volleyId */
+  | 'projectile-fire'
+  /** 原地放置电环，value = ring id */
+  | 'ring-place'
+  /** 电环一次命中脉冲，value = ring id */
+  | 'ring-pulse'
+  | 'dummy-mode'
+  | 'dummy-attack'
+  /** 假人挥砍进入 active 帧（命中判定用），value = 假人 id */
+  | 'dummy-hit'
+  /** 玩家攻击命中假人，value = 假人 id */
+  | 'hit'
+  /** 假人挥砍命中玩家（无伤害，只驱动受击动画），value = 假人 id */
+  | 'player-hurt'
+  /** 冲刺：翻滚起手，value = dash.id */
+  | 'roll'
+  /** 冲刺：法杖闪现，value = dash.id */
+  | 'blink'
+  /** 冲刺冷却结束（可用于 HUD / 音效），value = 0 */
+  | 'dash-ready'
+  /** v9a：派生招起手，value = link.id */
+  | 'link-start'
+  /** v9a：派生招进入 active（命中帧开始），value = link.id */
+  | 'link-active'
+  /** v9a：派生招收势结束，value = link.id */
+  | 'link-end'
+  /** v9a：派生招命中一个目标，value = 目标假人 id */
+  | 'link-hit';
+
+/** 显式事件队列（数组），对应 C# 的 List<GameEvent>，可跨语言比对。 */
+export type GameEvent = {
+  type: EventType;
+  tick: number;
+  x: number;
+  y: number;
+  z: number;
+  /** 语义随事件类型而定：连击段 / 施法序号 / 蓄力值 / 武器槽位 / 假人 id */
+  value: number;
+};
+
+export type CharacterState = {
+  /** 脚底中心点 */
+  position: Vec3;
+  velocity: Vec3;
+  /** 面朝向 / 目标朝向（弧度，atan2(x, z)）：攻击时锁定 attackFacing，平时跟随移动输入 */
+  facing: number;
+  /** 移动方向（atan2(vx, vz)），与身体朝向分离：可侧移 / 后退 */
+  moveYaw: number;
+  /** 身体朝向：指数平滑追随 facing，帧率无关，表现层用它转整个身体 */
+  bodyYaw: number;
+  /** 头部朝向：更快追随 facing 且相对身体限幅，表现「头先于身体转向目标」 */
+  headYaw: number;
+  grounded: boolean;
+  sprinting: boolean;
+  gaitPhase: number;
+  distance: number;
+  coyoteTime: number;
+  jumpBuffer: number;
+};
+
+export type ModuleFlags = {
+  movement: boolean;
+  pathfinding: boolean;
+  combat: boolean;
+  /** v9a：派生招模块独立开关，关闭后完全不产生派生招（窗口内攻击退回普通连击） */
+  links: boolean;
+  /** 法杖技能（引导 / 飞弹 / 电环）独立开关，关闭后完全冻结 */
+  abilities: boolean;
+  orientation: boolean;
+  targeting: boolean;
+  hits: boolean;
+  separation: boolean;
+  dash: boolean;
+  camera: boolean;
+  dummies: boolean;
+};
+
+export type World = {
+  tick: number;
+  time: number;
+  rngState: number;
+  config: CoreConfig;
+  boxes: Box[];
+  gridMeta: GridMeta;
+  character: CharacterState;
+  combat: CombatState;
+  /** 法杖技能运行时（引导飞弹 / 电环），与近战状态机解耦（v7c #12） */
+  abilities: AbilityState;
+  /** 本帧外部附加速度（m/s），由战斗模块写入、移动模块消费 */
+  impulse: { x: number; z: number };
+  /** 当前智能锁定的目标（每帧重算，攻击起手时读取） */
+  targeting: TargetState;
+  /** 玩家受击状态（放在 World 而非 character，保持「假人不改 character」契约） */
+  playerHurt: HurtState;
+  /** 玩家累计命中假人的次数（无伤害，仅用于验收观察） */
+  hitCount: number;
+  /** 冲刺 / 闪避状态（翻滚或闪现），纯状态数据 */
+  dash: DashState;
+  /** 智能相机构图意图（Core 算出的确定性目标值），表现层做指数平滑后消费 */
+  camera: CameraIntent;
+  /** v9a：玩家派生招运行时状态（与每个假人的 link 同构） */
+  playerLink: LinkState;
+  /** 测试假人，四种 AI 行为，纯状态数据 */
+  dummies: DummyState[];
+  /** 假人累计发起的攻击次数（无伤害，仅用于验收观察） */
+  dummyAttackCount: number;
+  events: GameEvent[];
+  modules: ModuleFlags;
+};
+
+/* ---------------- 寻路契约（本期只定义，不实现） ---------------- */
+
+export type PathNode = { x: number; z: number };
+
+export type PathRequest = {
+  start: PathNode;
+  goal: PathNode;
+  radius: number;
+  height: number;
+  stepHeight: number;
+};
+
+export type PathResult = { found: boolean; nodes: PathNode[]; cost: number };
+
+/** 纯函数式寻路端口；未来实现 A* / NavMesh 时替换这个函数即可。 */
+export type Pathfinder = (request: PathRequest, boxes: Box[], grid: GridMeta) => PathResult;
