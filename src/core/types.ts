@@ -667,6 +667,14 @@ export type OrientationConfig = {
   facingDeadbandDeg: number;
   /** 低于该幅度视为「拇指微颤」，完全不改面朝向（0.18 ≈ 半径 56px 上的 10px） */
   facingMinMagnitude: number;
+  /**
+   * v9h：面朝向最大转速（度/秒）。锁定期（攻击）解除、摇杆从静止突然指到反方向时，
+   * 目标与当前朝向差 120°+ 会在一帧内整块翻转（真机日志里的 141°/126° 跳变），
+   * 视觉上是头瞬间甩过去。限速只削「大角」，小角照样瞬时对齐。
+   */
+  facingTurnRate: number;
+  /** 与当前朝向夹角小于该值时直接对齐，不受 facingTurnRate 限制（度） */
+  facingSnapDeg: number;
 };
 
 export type CoreConfig = {

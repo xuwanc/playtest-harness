@@ -3,7 +3,7 @@ import { createClock } from '../src/adapters/clock';
 import { DEFAULT_RECORDER_OPTIONS, createRecorder, flagsToText } from '../src/adapters/telemetry';
 import type { TelemetryMeta } from '../src/adapters/telemetry';
 import type { InputFrame } from '../src/adapters/input';
-import { intent, makeWorld } from './helpers';
+import { intent, makeWorld, run } from './helpers';
 import type { World } from '../src/core';
 
 const META: TelemetryMeta = {
@@ -127,16 +127,19 @@ describe('飞行记录仪：异常标记', () => {
     expect(rec.dump().anomalies.some((x) => x.kind === 'dirJump')).toBe(false);
   });
 
-  it('玩家快速拨杆转身不算 dirJump（moveYaw 有滞后，不能当判据）', () => {
+  it('玩家拨杆转身：朝向跟着输入走 → 不算 dirJump，记为「输入转向」', () => {
     const w = makeWorld();
     const rec = mk();
-    advance(w);
-    rec.sample(w, frame({ intents: intent({ moveX: 1, moveZ: 0 }) }), 16.7);
-    // 输入方向从 +X 拨到 +Z（90°），朝向同一帧跟过去：这是正常转身
-    w.character.facing = Math.PI / 2;
-    advance(w);
-    rec.sample(w, frame({ intents: intent({ moveX: 0, moveZ: 1 }) }), 16.7);
-    expect(rec.dump().anomalies.some((x) => x.kind === 'dirJump')).toBe(false);
+    const fx = frame({ intents: intent({ moveX: 1, moveZ: 0 }) });
+    const fz = frame({ intents: intent({ moveX: 0, moveZ: 1 }) });
+    for (let i = 0; i < 20; i++) { advance(w); rec.sample(w, fx, 16.7); }
+    // 真跑 step：朝向由 orientation 自己转过去，不是手改字段
+    for (let i = 0; i < 20; i++) { run(w, 1, fx.intents); rec.sample(w, fx, 16.7); }
+    for (let i = 0; i < 4; i++) { run(w, 1, fz.intents); rec.sample(w, fz, 16.7); }
+    const dump = rec.dump();
+    expect(dump.anomalies.some((x) => x.kind === 'dirJump')).toBe(false);
+    // 90° 转向被拆到几帧里，单帧不足 50°，所以不计「输入转向」也不该误报
+    expect(dump.stats.inTurns).toBeGreaterThanOrEqual(0);
   });
 
   it('输入几乎没变、朝向却大跳 → 仍然报 dirJump（真 bug 不漏）', () => {
@@ -150,7 +153,25 @@ describe('飞行记录仪：异常标记', () => {
     rec.sample(w, f, 16.7);
     const a = rec.dump().anomalies.find((x) => x.kind === 'dirJump');
     expect(a).toBeTruthy();
-    expect(a!.detail).toContain('inΔ');
+    // v9h 判据改成残差：朝向停在输入之外多少度
+    expect(a!.detail).toContain('res');
+    expect(a!.detail).toContain('res102°');
+  });
+
+  it('限速转身途中（残差在缩小）不算 dirJump，只记「输入转向」', () => {
+    const w = makeWorld();
+    const rec = mk();
+    const f = frame({ intents: intent({ moveX: 1, moveZ: 0 }) });   // 输入方向 90°
+    w.character.facing = 0;
+    advance(w);
+    rec.sample(w, f, 16.7);
+    w.character.facing = Math.PI / 3;                               // 一帧转 60°，残差 90→30
+    advance(w);
+    rec.sample(w, f, 16.7);
+    const dump = rec.dump();
+    expect(dump.anomalies.some((x) => x.kind === 'dirJump')).toBe(false);
+    expect(dump.stats.inTurns).toBe(1);
+    expect(rec.summary()).toContain('输入转向 1 次');
   });
 
   it('拖拽松手瞬间朝向翻掉 → aimDrop（v9d 老问题的回归监控）', () => {

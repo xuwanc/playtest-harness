@@ -36,7 +36,9 @@
       "facingSmoothRate": 14,
       "facingDeadZone": 0.12,
       "facingDeadbandDeg": 22,
-      "facingMinMagnitude": 0.18
+      "facingMinMagnitude": 0.18,
+      "facingTurnRate": 1800,
+      "facingSnapDeg": 30
     },
     "combat": {
       "comboWindow": 0.65,

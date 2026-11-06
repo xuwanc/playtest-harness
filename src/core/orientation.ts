@@ -18,6 +18,17 @@ function approach(current: number, target: number, rate: number, dt: number): nu
 }
 
 /**
+ * 单帧转角上限（v9h）：与目标夹角 <= snapRad 直接对齐，超过则最多转 maxStep。
+ * 纯数学、无状态，保证确定性。
+ */
+export function limitTurn(current: number, target: number, maxStep: number, snapRad: number): number {
+  const delta = wrapAngle(target - current);
+  const abs = Math.abs(delta);
+  if (abs <= snapRad || abs <= maxStep) return target;
+  return wrapAngle(current + Math.sign(delta) * Math.max(maxStep, 0));
+}
+
+/**
  * 程序化朝向模块：把「面朝向 / 身体朝向 / 移动方向」拆成四条独立状态。
  *
  *  - facing   面朝向（目标方向）：攻击中锁定 attackFacing；平时取摇杆意图方向；无输入保持。
@@ -59,12 +70,20 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
     // 两道闸：① 与当前朝向夹角小于 deadband 就不动（拇指微颤不转身）；
     //        ② 超过则按 facingSmoothRate 指数趋近（≈70ms 到位），不是瞬移。
     // 大幅推杆（>= 35%）仍瞬时跟随，转身手感不变。
+    // 大角限速（v9h）：真机日志里剩下的朝向跳变全是大角单帧翻转 ——
+    // 攻击锁定解除（141°）、摇杆从静止突然指到反方向（126°）。目标方向一变就整块抹过去，
+    // 头部会在 3 帧内甩到限幅边界，看着像抽帧。这里统一给面朝向一个 1800°/s 的转速上限：
+    // 141° 约 78ms、90° 约 50ms 转完，攻击起手前早就到位，手感不变；小于 30° 仍瞬时对齐。
+    const maxStep = ((o.facingTurnRate * Math.PI) / 180) * dt;
+    const snapRad = (o.facingSnapDeg * Math.PI) / 180;
     if (inputLen >= 0.35) {
-      c.facing = target;
+      c.facing = limitTurn(c.facing, target, maxStep, snapRad);
     } else if (inputLen >= o.facingMinMagnitude) {
       const diff = Math.abs(wrapAngle(target - c.facing));
       if (diff > (o.facingDeadbandDeg * Math.PI) / 180) {
-        c.facing = approach(c.facing, target, o.facingSmoothRate, dt);
+        const eased = approach(c.facing, target, o.facingSmoothRate, dt);
+        // 指数趋近在 180° 反向时首帧就能走 38°，同样要过限速
+        c.facing = limitTurn(c.facing, eased, maxStep, 0);
       }
     }
   }

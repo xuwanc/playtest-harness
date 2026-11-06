@@ -46,15 +46,20 @@ export function flagsToText(flags: number): string {
   return on.length > 0 ? on.join(',') : '-';
 }
 
-/** 采样行列定义（与 TelemetryRow 一一对应）。 */
+/** 采样行列定义（与 TelemetryRow 一一对应）。列只追加、不重排，旧 dump 仍可按位置读。 */
 export const ROW_COLUMNS = [
   't', 'tick', 'dt', 'st', 'sy', 'rs', 'ry', 'held', 'src',
-  'mx', 'mz', 'px', 'pz', 'vx', 'vz', 'yaw', 'body', 'fl', 'stride',
+  'mx', 'mz', 'px', 'pz', 'vx', 'vz', 'yaw', 'body', 'fl', 'stride', 'inYaw',
 ] as const;
 const COL_T = 0;
-const COL_MX = 9;
-const COL_MZ = 10;
 const COL_YAW = 15;
+const COL_STRIDE = 18;
+/**
+ * v9h：输入方向直接落一列。之前摘要里的 `in` 是用 mx/mz 现算的，
+ * 和判定用的 inYaw 不是同一条取值路径（前者含死区前后差异），
+ * 出现过「摘要显示输入在变、判定却说 inΔ=0」的对不上。
+ */
+const COL_INYAW = 19;
 
 export type TelemetryRow = (number | string)[];
 
@@ -109,6 +114,9 @@ export type TelemetryStats = {
   linkHits: number;
   rolls: number;
   blinks: number;
+  /** 大角转向里「玩家自己要求」的次数：判据解释得掉的那部分，不算异常，只做可见性 */
+  inTurns: number;
+  inTurnMax: number;
   /** 法杖引导起手（「攻击 0」时靠这些字段区分「没按」和「按了但不是近战」） */
   channels: number;
   bolts: number;
@@ -263,6 +271,7 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
     attacks: 0, hits: 0, hurts: 0, links: 0, linkHits: 0,
     rolls: 0, blinks: 0, jumps: 0, resets: 0,
     channels: 0, bolts: 0, rings: 0, bowCharges: 0,
+    inTurns: 0, inTurnMax: 0,
     dirJumps: 0, aimDrops: 0, freezes: 0, stickLosts: 0,
   };
 
@@ -271,8 +280,6 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
   let lastRowT = -1e9;
   let prevYaw: number | null = null;
   let prevMoveYaw = 0;
-  /** 上一帧的移动输入方向（无输入时为 null）—— 判断「朝向跳」还是「玩家真的转了」 */
-  let prevInYaw: number | null = null;
   let prevFlags = 0;
   /** 最近一帧的武器：回答「攻击 0 次」到底是没按，还是按在法杖 / 弓上 */
   let lastWeapon = '';
@@ -358,16 +365,17 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
     lines.push(`摇杆活跃 ${dur > 0 ? Math.round((s.stickActiveMs / 1000 / dur) * 100) : 0}% · 手势 按下 ${gsum('press')}（单击 ${gsum('tap')} / 双击 ${gsum('doubleTap')} / 拖拽 ${gsum('drag')} / 长按 ${gsum('longPress')} / 打断 ${gsum('cancel')} / 拖放 ${gsum('release')}）`);
     lines.push(`攻击 ${s.attacks}(中${s.hits}) · 受击 ${s.hurts} · 派生 ${s.links}(中${s.linkHits}) · 翻滚 ${s.rolls} 闪现 ${s.blinks} · 跳 ${s.jumps} · 复位 ${s.resets}`);
     lines.push(`法杖 引导${s.channels} 飞弹${s.bolts} 电环${s.rings} · 弓蓄力${s.bowCharges} · 当前武器 ${lastWeapon || '-'}`);
-    lines.push(`异常 ${anomalies.length}（dir ${s.dirJumps} / aim ${s.aimDrops} / freeze ${s.freezes} / stick ${s.stickLosts} / spike ${s.spikes}）`);
+    // 数量用「计数」而不是「缓冲条数」：掉帧条目有 6 条上限，用缓冲长度会写出
+    // 「异常 3（spike 29）」这种自相矛盾的行。
+    lines.push(`异常 ${s.dirJumps + s.aimDrops + s.freezes + s.stickLosts}`
+      + `（dir ${s.dirJumps} / aim ${s.aimDrops} / freeze ${s.freezes} / stick ${s.stickLosts}）`
+      + ` · 掉帧尖峰 ${s.spikes}`
+      + (s.inTurns > 0 ? ` · 输入转向 ${s.inTurns} 次（最大 ${s.inTurnMax.toFixed(0)}°）` : ''));
     if (anomalies.length > 0) {
       for (const a of anomalies.slice(-6)) {
         lines.push(`· ${a.kind} @t${a.t.toFixed(2)} tick${a.tick} ${a.ms > 0 ? `${a.ms}ms ` : ''}${a.detail}`);
         const yaws = a.ctx.map((r) => String(r[COL_YAW])).join(' ');
-        const ins = a.ctx.map((r) => {
-          const mx = r[COL_MX] as number;
-          const mz = r[COL_MZ] as number;
-          return Math.hypot(mx, mz) > 0.05 ? String(Math.round((Math.atan2(mx, mz) * 180) / Math.PI)) : '.';
-        }).join(' ');
+        const ins = a.ctx.map((r) => (r[COL_INYAW] === '' || r[COL_INYAW] == null ? '.' : String(r[COL_INYAW]))).join(' ');
         lines.push(`  yaw ${yaws}`);
         lines.push(`  in  ${ins}`);
       }
@@ -415,6 +423,7 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
         r3(c.position.x), r3(c.position.z),
         r3(c.velocity.x), r3(c.velocity.z),
         deg1(yaw), deg1(c.bodyYaw), flags, r3(c.stride),
+        inYaw === null ? '' : deg1(inYaw),
       ];
       pushRow(row, false);
 
@@ -427,22 +436,39 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
         pushAnomaly('frameSpike', t, world.tick, dtMs, `dt ${dtMs.toFixed(0)}ms fl=${flagsToText(flags)}`, row);
       }
 
-      // 2) 朝向突变：拖拽松手（aimDrop）与无输入跳变（dirJump）
+      // 2) 朝向：先判「玩家要求的转向」，剩下的才算 bug
+      //
+      // v9h 换了判据。前两版都在比「朝向跳了多少 vs 输入变多少」，问题是这样量的是
+      // 「这一帧输入动没动」，而不是「朝向有没有去玩家没要求的地方」：
+      //   · 攻击锁定解除时朝向要回到输入方向 —— 输入没变，却被判成跳变（真机 141° 那条）
+      //   · 摇杆中途松手 5 帧再指到反方向 —— 输入从「无」变「有」，同样被误伤
+      // 现在改成看**残差**：朝向与当前输入方向的夹角。朝向跟着输入走 → 残差 0 → 正常；
+      // 朝向停在输入之外 > 25° → 才是真异常。
       if (prevYaw !== null && !quiet) {
         const deltaDeg = Math.abs(deg1(wrapPi(yaw - prevYaw)));
         const moveDelta = Math.abs(deg1(wrapPi(c.moveYaw - prevMoveYaw)));
-        // 判据必须看「输入方向」而不是 moveYaw：moveYaw 由速度反推，转向时有 0.1~0.2s 滞后，
-        // 用它会把「玩家快速拨杆转身」误报成朝向 bug（v0.9.7 真机 10 次误报全属此类）。
-        const inDelta = inYaw !== null && prevInYaw !== null
-          ? Math.abs(deg1(wrapPi(inYaw - prevInYaw)))
-          : (inYaw === null && prevInYaw === null ? 0 : 999);
+        const busyF = (prevFlags | flags) & (FLAG_ATTACK | FLAG_DASH | FLAG_LINK | FLAG_HURT);
+        const residual = inYaw === null ? null : Math.abs(deg1(wrapPi(yaw - inYaw)));
+        // 还在往输入方向转（残差在缩小）就说明朝向没跑偏，只是转速有限 —— v9h 加了
+        // 1800°/s 上限后，大角掉头必然有若干帧残差 20~150°，不能算异常。
+        const prevResidual = inYaw === null || prevYaw === null
+          ? null
+          : Math.abs(deg1(wrapPi(prevYaw - inYaw)));
+        const converging = residual !== null && prevResidual !== null && residual < prevResidual - 0.5;
         const dropAim = (prevFlags & FLAG_AIM) !== 0 && (flags & FLAG_AIM) === 0;
+        const explained = residual !== null && (residual <= 12 || converging);
         if (deltaDeg > opt.aimDropDeg && dropAim) {
           pushAnomaly('aimDrop', t, world.tick, 0,
             `${deltaDeg.toFixed(0)}° @aim→none stick(${frame.stickX.toFixed(2)},${frame.stickY.toFixed(2)}) fl=${flagsToText(flags)}`, row);
-        } else if (deltaDeg > opt.dirJumpDeg && inDelta < 15 && (flags & (FLAG_ATTACK | FLAG_DASH | FLAG_LINK | FLAG_HURT)) === 0 && !dropAim) {
-          pushAnomaly('dirJump', t, world.tick, 0,
-            `${deltaDeg.toFixed(0)}° inΔ${inDelta === 999 ? '无输入' : `${inDelta.toFixed(0)}°`} mvΔ${moveDelta.toFixed(0)}° yaw ${deg1(prevYaw)}→${deg1(yaw)} fl=${flagsToText(prevFlags)}→${flagsToText(flags)}`, row);
+        } else if (deltaDeg > opt.dirJumpDeg && busyF === 0 && !dropAim) {
+          if (explained) {
+            // 玩家自己拨的杆（含锁定解除后归位、松手后重新指方向）：不计异常，但要可见
+            stats.inTurns++;
+            if (deltaDeg > stats.inTurnMax) stats.inTurnMax = deltaDeg;
+          } else {
+            pushAnomaly('dirJump', t, world.tick, 0,
+              `${deltaDeg.toFixed(0)}° res${residual === null ? ' 无输入' : `${residual.toFixed(0)}°`} yaw ${deg1(prevYaw)}→${deg1(yaw)} in ${inYaw === null ? '.' : deg1(inYaw)}° mvΔ${moveDelta.toFixed(0)}° fl=${flagsToText(prevFlags)}→${flagsToText(flags)}`, row);
+          }
         }
       }
 
@@ -482,7 +508,6 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
 
       prevYaw = yaw;
       prevMoveYaw = c.moveYaw;
-      prevInYaw = inYaw;
       prevFlags = flags;
     },
 
@@ -552,6 +577,8 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
       stats.resets = 0;
       stats.dirJumps = 0;
       stats.aimDrops = 0;
+      stats.inTurns = 0;
+      stats.inTurnMax = 0;
       stats.freezes = 0;
       stats.stickLosts = 0;
       for (const k of Object.keys(stats.gestures)) delete stats.gestures[k];

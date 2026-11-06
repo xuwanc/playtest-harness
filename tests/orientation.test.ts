@@ -14,15 +14,17 @@ describe('程序化朝向：面朝向 / 身体朝向 / 移动方向分离', () =
     expect(w.modules.orientation).toBe(true);
   });
 
-  it('转向瞬间：身体平滑不瞬移，头部比身体更接近目标（头先到位）', () => {
+  it('转向：大角走限速但 4 帧到位，身体明显滞后、头更接近目标（头先到位）', () => {
     const w = makeWorld();
     run(w, 1, intent({ moveX: 1, moveZ: 0 }));
-    const target = w.character.facing;
-    expect(Math.abs(wrapAngle(target - HALF_PI))).toBeLessThan(1e-6);
+    // v9h：90° 属于大角，单帧最多 30°，不会一帧整块翻过去
+    expect(Math.abs(wrapAngle(w.character.facing - HALF_PI))).toBeGreaterThan(0.2);
+    run(w, 3, intent({ moveX: 1, moveZ: 0 }));
+    expect(Math.abs(wrapAngle(w.character.facing - HALF_PI))).toBeLessThan(1e-9);
     expect(w.character.bodyYaw).toBeGreaterThan(0);
-    expect(w.character.bodyYaw).toBeLessThan(target * 0.5);
-    const headErr = Math.abs(wrapAngle(target - w.character.headYaw));
-    const bodyErr = Math.abs(wrapAngle(target - w.character.bodyYaw));
+    expect(w.character.bodyYaw).toBeLessThan(w.character.facing * 0.7);
+    const headErr = Math.abs(wrapAngle(w.character.facing - w.character.headYaw));
+    const bodyErr = Math.abs(wrapAngle(w.character.facing - w.character.bodyYaw));
     expect(headErr).toBeLessThan(bodyErr);
   });
 
@@ -70,11 +72,14 @@ describe('程序化朝向：面朝向 / 身体朝向 / 移动方向分离', () =
     expect(Math.abs(wrapAngle(w.character.moveYaw - w.character.bodyYaw))).toBeGreaterThan(0.2);
   });
 
-  it('掉头瞬间面朝向立即改变，身体明显滞后', () => {
+  it('掉头 180°：面朝向不整块翻转，但 100ms 内转完，身体明显滞后', () => {
     const w = makeWorld();
     run(w, 60, intent({ moveX: 1 }));
     run(w, 1, intent({ moveX: -1 }));
-    expect(Math.abs(wrapAngle(w.character.facing + HALF_PI))).toBeLessThan(1e-6);
+    // 单帧只转 30°，180° 需要 6 帧——这一步正是真机日志里 141° 整块跳的修法
+    expect(Math.abs(wrapAngle(w.character.facing - HALF_PI))).toBeGreaterThan(0.3);
+    run(w, 7, intent({ moveX: -1 }));
+    expect(Math.abs(wrapAngle(w.character.facing + HALF_PI))).toBeLessThan(1e-9);
     expect(Math.abs(wrapAngle(w.character.bodyYaw - w.character.facing))).toBeGreaterThan(1);
   });
 
@@ -154,11 +159,41 @@ describe('v9g：小幅推杆的朝向抗抖', () => {
     expect(Math.abs(wrapAngle(w.character.facing - held))).toBeLessThan(1e-9);
   });
 
-  it('推杆 >= 35% 时方向突变瞬时跟随，不被平滑拖慢', () => {
+  it('推杆 >= 35%：90° 在 4 帧内到位，单帧不超过限速（不吃死区、不拖到 0.2s）', () => {
     const w = makeWorld();
     w.character.facing = 0;
     run(w, 1, intent({ moveX: 0.8, moveZ: 0 }));
-    expect(Math.abs(wrapAngle(w.character.facing - HALF_PI))).toBeLessThan(1e-6);
+    const after1 = Math.abs(wrapAngle(w.character.facing));
+    const maxStep = ((w.config.orientation.facingTurnRate * Math.PI) / 180) * w.config.fixedDt;
+    expect(after1).toBeGreaterThan(0);
+    expect(after1).toBeLessThanOrEqual(maxStep + 1e-9);
+    run(w, 3, intent({ moveX: 0.8, moveZ: 0 }));
+    expect(Math.abs(wrapAngle(w.character.facing - HALF_PI))).toBeLessThan(1e-9);
+  });
+
+  it('攻击锁定解除：朝向跨帧回到输入方向，不整块翻转（真机 141° 那条的回归）', () => {
+    const w = makeWorld();
+    run(w, 30, intent({ moveX: 1 }));                     // 面向 +X
+    w.combat.phase = 'windup';
+    w.combat.attackFacing = HALF_PI;
+    run(w, 3, intent({ moveX: -1 }));                     // 锁定期间保持 +X
+    const locked = w.character.facing;
+    w.combat.phase = 'idle';
+    run(w, 1, intent({ moveX: -1 }));
+    const maxStep = ((w.config.orientation.facingTurnRate * Math.PI) / 180) * w.config.fixedDt;
+    const moved = Math.abs(wrapAngle(w.character.facing - locked));
+    expect(moved).toBeGreaterThan(0.1);
+    expect(moved).toBeLessThanOrEqual(maxStep + 1e-9);
+    run(w, 7, intent({ moveX: -1 }));
+    expect(Math.abs(wrapAngle(w.character.facing + HALF_PI))).toBeLessThan(1e-9);
+  });
+
+  it('小角（<= facingSnapDeg）调整仍瞬时对齐，不引入任何延迟', () => {
+    const w = makeWorld();
+    w.character.facing = 0;
+    const ang = ((w.config.orientation.facingSnapDeg - 5) * Math.PI) / 180;
+    run(w, 1, intent({ moveX: Math.sin(ang), moveZ: Math.cos(ang) }));
+    expect(Math.abs(wrapAngle(w.character.facing - ang))).toBeLessThan(1e-9);
   });
 
   it('低于 facingDeadZone 的微抖不改变面朝向', () => {
