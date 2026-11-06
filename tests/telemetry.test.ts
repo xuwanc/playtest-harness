@@ -174,6 +174,35 @@ describe('飞行记录仪：异常标记', () => {
     expect(rec.summary()).toContain('输入转向 1 次');
   });
 
+  it('拖拽瞄准改变朝向：aim 期间不算 dirJump（玩家显式指定方向）', () => {
+    const w = makeWorld();
+    const rec = mk();
+    const f = frame({ intents: intent({ moveX: 0, moveZ: 1, aimX: 1, aimZ: 0, aimActive: true }) });
+    w.character.facing = 0;
+    advance(w);
+    rec.sample(w, f, 16.7);
+    w.character.facing = Math.PI / 2;          // 朝向跟到拖拽方向
+    advance(w);
+    rec.sample(w, f, 16.7);
+    expect(rec.dump().anomalies.some((x) => x.kind === 'dirJump')).toBe(false);
+  });
+
+  it('有移动输入时 aim 消失、朝向回到摇杆方向：不报 aimDrop（v9i 误报源）', () => {
+    const w = makeWorld();
+    const rec = mk();
+    const aimF = frame({ intents: intent({ moveX: 0.7, moveZ: 0.7, aimX: -1, aimZ: 0, aimActive: true }) });
+    const moveF = frame({ intents: intent({ moveX: 0.7, moveZ: 0.7 }) });
+    w.character.facing = -Math.PI / 2;
+    advance(w);
+    rec.sample(w, aimF, 16.7);
+    w.character.facing = Math.PI / 4;          // 松手，回到摇杆方向
+    advance(w);
+    rec.sample(w, moveF, 16.7);
+    const dump = rec.dump();
+    expect(dump.anomalies.some((x) => x.kind === 'aimDrop')).toBe(false);
+    expect(dump.stats.inTurns).toBeGreaterThanOrEqual(1);
+  });
+
   it('拖拽松手瞬间朝向翻掉 → aimDrop（v9d 老问题的回归监控）', () => {
     const w = makeWorld();
     const rec = mk();

@@ -447,7 +447,10 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
       if (prevYaw !== null && !quiet) {
         const deltaDeg = Math.abs(deg1(wrapPi(yaw - prevYaw)));
         const moveDelta = Math.abs(deg1(wrapPi(c.moveYaw - prevMoveYaw)));
-        const busyF = (prevFlags | flags) & (FLAG_ATTACK | FLAG_DASH | FLAG_LINK | FLAG_HURT);
+        // aim 只看「本帧」：拖拽瞄准期间朝向往哪走都是玩家指定的，屏蔽；
+        // 松手那一帧 aim 已消失，仍要检查「是否回到输入方向」，所以不屏蔽。
+        const busyF = ((prevFlags | flags) & (FLAG_ATTACK | FLAG_DASH | FLAG_LINK | FLAG_HURT))
+          | (flags & FLAG_AIM);
         const residual = inYaw === null ? null : Math.abs(deg1(wrapPi(yaw - inYaw)));
         // 还在往输入方向转（残差在缩小）就说明朝向没跑偏，只是转速有限 —— v9h 加了
         // 1800°/s 上限后，大角掉头必然有若干帧残差 20~150°，不能算异常。
@@ -455,7 +458,10 @@ export function createRecorder(options: RecorderOptions): TelemetryRecorder {
           ? null
           : Math.abs(deg1(wrapPi(prevYaw - inYaw)));
         const converging = residual !== null && prevResidual !== null && residual < prevResidual - 0.5;
-        const dropAim = (prevFlags & FLAG_AIM) !== 0 && (flags & FLAG_AIM) === 0;
+        // v9i：拖拽瞄准是玩家显式指定方向，aim 期间朝向跟它走是设计行为；
+        // 松手后朝向回到摇杆方向同理。只有「松手瞬间没有移动输入、朝向却掉了」才是
+        // v9d 那个 bug（法杖 / 弓松手面朝正下方），所以 aimDrop 只在无输入时判。
+        const dropAim = (prevFlags & FLAG_AIM) !== 0 && (flags & FLAG_AIM) === 0 && inYaw === null;
         const explained = residual !== null && (residual <= 12 || converging);
         if (deltaDeg > opt.aimDropDeg && dropAim) {
           pushAnomaly('aimDrop', t, world.tick, 0,

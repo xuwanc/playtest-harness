@@ -57,8 +57,17 @@ export type InputAdapter = {
 type BtnKey = GestureButton;
 const BTN_KEYS: BtnKey[] = ['jump', 'sprint', 'reset', 'attack', 'skill2'];
 const TAP_SLOP_PX = 8;
-/** 拖拽超过该像素才算「辅助瞄准」，避免把一次轻点误判成方向拖拽（v7c #11） */
-const AIM_SLOP_PX = 12;
+/**
+ * 辅助瞄准的「确认拖拽」门槛（px）。
+ * v9.9 真机日志：点按技能2 时拇指自然位移 13px，旧阈值 12px 把它当成了拖拽瞄准，
+ * 于是移动方向被改成手指抖动的方向（屏幕上 -78° = 左上），松手 140ms 后才回到摇杆方向。
+ * 26px 大于「点按」的正常抖动区间，又小于按钮半径的两倍，有意拖出去仍能触发。
+ */
+const AIM_SLOP_PX = 26;
+/** 已确认拖拽后，缩回到该值以内才撤销瞄准（迟滞，避免在阈值附近来回闪） */
+const AIM_EXIT_SLOP_PX = 16;
+/** 按钮手势判定的拖拽门槛；略低于瞄准，但仍高于点按抖动，避免点按被记成 drag */
+const GESTURE_SLOP_PX = 20;
 /**
  * v9d：松手后仍保留最后拖拽方向的时长（ms）。
  * 旧版只保留 1 帧，真机上 pointerup 与下一帧之间可能插入合成 move 或系统事件，
@@ -118,11 +127,13 @@ export function createInput(opts: InputOptions): InputAdapter {
   let aimStartY = 0;
   let aimDX = 0;
   let aimDY = 0;
+  /** 本次按下期间是否已拖出确认阈值 —— 没确认过就是点按，抖动向量一律不生效 */
+  let aimArmed = false;
   /** 最近一次松手时间（performance.now）；< 0 表示从未松手 */
   let aimReleaseAt = -1;
 
   /** v9d：所有按钮共用一台手势状态机（点击 / 双击 / 长按 / 拖拽方向） */
-  const gestureTracker = createGestureTracker({ slopPx: AIM_SLOP_PX, longPressMs: 450, doubleTapMs: 350 });
+  const gestureTracker = createGestureTracker({ slopPx: GESTURE_SLOP_PX, longPressMs: 450, doubleTapMs: 350 });
   let gestureQueue: ButtonGesture[] = [];
   let lastGesture: ButtonGesture | null = null;
 
@@ -223,6 +234,7 @@ export function createInput(opts: InputOptions): InputAdapter {
     aimReleaseAt = -1;
     aimDX = 0;
     aimDY = 0;
+    aimArmed = false;
   }
   const onVisibility = (): void => {
     if (document.hidden) releaseAllInputs();
@@ -306,10 +318,18 @@ export function createInput(opts: InputOptions): InputAdapter {
     // v8e：先解算捏合结束（可能把剩余单指接续为摇杆），再做下面的 tap / 摇杆清理
     if (wasActivePointer) syncPinch();
 
-    // 瞄准拖拽结束：按时间保留余辉，让 attackReleased / skill2Pressed 那几帧仍能吃到朝向
+    // 瞄准拖拽结束：只有「确认拖过」的才留余辉。
+    // 没确认过的是一次点按，抖动产生的向量直接清掉 —— 否则松手后 140ms 内
+    // 朝向仍被锁在抖动方向（真机上表现为「松开一会儿才回到摇杆方向」）。
     if (e.pointerId === aimPointerId) {
       aimPointerId = null;
-      aimReleaseAt = performance.now();
+      if (aimArmed) {
+        aimReleaseAt = performance.now();
+      } else {
+        aimDX = 0;
+        aimDY = 0;
+        aimReleaseAt = -1;
+      }
     }
 
     // v9d：兜底结束手势（按钮自身已处理时返回 null）
@@ -367,6 +387,7 @@ export function createInput(opts: InputOptions): InputAdapter {
         aimStartY = e.clientY;
         aimDX = 0;
         aimDY = 0;
+        aimArmed = false;
         aimReleaseAt = -1;
       }
     };
@@ -466,7 +487,7 @@ export function createInput(opts: InputOptions): InputAdapter {
       const len = Math.hypot(aimDX, aimDY);
       const holding = aimPointerId !== null
         || (aimReleaseAt >= 0 && now - aimReleaseAt < AIM_HOLD_MS);
-      const active = holding && len > AIM_SLOP_PX;
+      const active = holding && aimArmed && len >= AIM_EXIT_SLOP_PX;
       if (!active) return { active: false, holding, x: 0, z: 0, dx: aimDX, dy: aimDY };
       const b = getBasis();
       const ux = aimDX / len;
@@ -521,9 +542,15 @@ export function createInput(opts: InputOptions): InputAdapter {
       // 拖拽辅助瞄准（v7c #11）：屏幕拖拽 (dx,dy) 用同一套相机地面基向量换算成世界 XZ 单位向量，
       // 与摇杆语义一致（向上拖 = 世界前方、向右拖 = 世界右方）。
       const aimLen = Math.hypot(aimDX, aimDY);
+      // 迟滞两档：拖到 26px 才算「确认拖拽」，缩回 16px 以内才撤销。
+      // 点按按钮时 10~15px 的自然位移永远够不到，因此不会改动朝向。
+      if (aimPointerId !== null) {
+        if (aimLen >= AIM_SLOP_PX) aimArmed = true;
+        else if (aimLen < AIM_EXIT_SLOP_PX) aimArmed = false;
+      }
       const aimHolding = aimPointerId !== null
         || (aimReleaseAt >= 0 && now - aimReleaseAt < AIM_HOLD_MS);
-      const aiming = aimHolding && aimLen > AIM_SLOP_PX;
+      const aiming = aimHolding && aimArmed && aimLen >= AIM_EXIT_SLOP_PX;
       let aimX = 0;
       let aimZ = 0;
       if (aiming) {
@@ -540,6 +567,7 @@ export function createInput(opts: InputOptions): InputAdapter {
         aimDX = 0;
         aimDY = 0;
         aimReleaseAt = -1;
+        aimArmed = false;
       }
 
       const tap = pendingTap;
@@ -575,7 +603,7 @@ export function createInput(opts: InputOptions): InputAdapter {
       dummyClickEdge = 0;
 
       // v9d：出帧时补世界方向（技能层可直接当朝向 / 位移方向用）
-      const gestures = gestureQueue.map((g) => withWorldDirection(g, b, AIM_SLOP_PX));
+      const gestures = gestureQueue.map((g) => withWorldDirection(g, b, GESTURE_SLOP_PX));
       gestureQueue = [];
       if (gestures.length > 0) lastGesture = gestures[gestures.length - 1];
 
