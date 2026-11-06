@@ -187,17 +187,40 @@ html, body {
   #hint { font-size: 8px; max-width: 82vw; }
 }
 
-/* ---- 竖屏：攻击 / 技2 从上到下竖排放在右侧，单手拇指够得到 ----
-   横屏完全保持原来的底部横排；只按屏幕方向切换，不依赖宽度断点。 */
+/* ---- v9b：竖屏操作簇 —— 冲 / 跳 与 技2 / 攻击 收拢到屏幕右侧、垂直居中 ----
+   布局：右列「技2 / 攻击」，左列「冲 / 跳」，两列中心对齐、合成一个拇指簇，
+        不再一组在右侧中部、一组在右侧底部来回够；
+   复位：「会重置整场」，从操作簇里移出、单独钉在右下角，避免高速滑拇指误触；
+   横屏：完全保持原来的底部横排，只按屏幕方向切换，不依赖宽度断点。
+   居中用 top: calc(50% - 半列高) 而不是 transform —— 父级一旦有 transform 会
+   成为 fixed 子元素（复位）的包含块，导致复位钉错位置。 */
 @media (orientation: portrait) {
   #pad-right {
     flex-direction: column;
     align-items: center;
-    justify-content: flex-start;
-    right: 12px;
-    top: 30%;
+    justify-content: center;
+    right: calc(14px + env(safe-area-inset-right, 0px));
+    top: calc(50% - 82px); /* (技2 62 + gap 14 + 攻击 88) / 2 */
     bottom: auto;
-    gap: 18px;
+    gap: 14px;
+  }
+  #pad-left {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    left: auto;
+    right: calc(14px + 88px + 12px + env(safe-area-inset-right, 0px));
+    top: calc(50% - 70px); /* (冲 64 + gap 12 + 跳 64) / 2 */
+    bottom: auto;
+    gap: 12px;
+  }
+  /* 复位脱离操作簇，单独固定在右下角 */
+  #pad-left #btn-reset {
+    position: fixed;
+    left: auto;
+    top: auto;
+    right: calc(14px + env(safe-area-inset-right, 0px));
+    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
   }
   /* 顶部整行让给武器条；HUD 用短版并下移，收起的调试面板再放到 HUD 下方 */
   #overlay-left { top: 58px; }
@@ -212,23 +235,25 @@ html, body {
   #hint { font-size: 8px; max-width: 94vw; color: rgba(210, 226, 240, 0.72); }
 }
 
-/* 竖屏窄屏叠加：按钮尺寸沿用小屏档，但技能条仍保持纵向 */
+/* 竖屏窄屏：按钮走小屏档（攻击 72 / 技2 52 / 冲跳 54），列高变矮，重算居中与水平偏移 */
 @media (orientation: portrait) and (max-width: 620px) {
-  #pad-right { right: 10px; top: 32%; gap: 16px; }
-  #pad-left { bottom: 16px; }
+  #pad-right {
+    right: calc(12px + env(safe-area-inset-right, 0px));
+    top: calc(50% - 69px); /* (52 + 14 + 72) / 2 */
+    gap: 14px;
+  }
+  #pad-left {
+    right: calc(12px + 72px + 10px + env(safe-area-inset-right, 0px));
+    top: calc(50% - 60px); /* (54 + 12 + 54) / 2 */
+    gap: 12px;
+  }
+  #pad-left #btn-reset {
+    right: calc(12px + env(safe-area-inset-right, 0px));
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
-/* ---- v7c #7：辅助按钮（冲 / 跳 / 复位）不再占左下角 ----
-   竖屏：全部移到屏幕「右侧底部」，与右侧中部竖排的攻击 / 技2 错开不重叠，
-        左下角完整让给隐形摇杆；
-   横屏：移到「右下角」，紧挨攻击 / 技2 组左侧同一行，整组都收在右下角。
-   数值按两组按钮的实际宽度错开，大小屏各给一档。 */
-@media (orientation: portrait) {
-  #pad-left { left: auto; right: 10px; bottom: 16px; }
-}
-@media (orientation: portrait) and (max-width: 620px) {
-  #pad-left { right: 10px; }
-}
+/* ---- 横屏：辅助按钮（冲 / 跳 / 复位）仍在右下角、与攻击 / 技2 同一行 ---- */
 @media (orientation: landscape) {
   #pad-left { left: auto; right: 190px; bottom: 24px; }
 }
