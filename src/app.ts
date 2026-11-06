@@ -18,6 +18,8 @@ const EMPTY_FRAME: InputFrame = {
   source: 'idle',
   tap: null,
   zoomScale: 1,
+  gestures: [],
+  lastGesture: null,
 };
 
 export function startApp(): void {
@@ -88,6 +90,9 @@ export function startApp(): void {
   (window as unknown as { __harness?: unknown }).__harness = {
     world, view, clock, input, viewConfig: VIEW_CONFIG,
     getUserZoom: () => userZoom,
+    // v9d：手势接口读数，技能层 / 自动化验收可直接订阅最近一次手势
+    getGestures: () => lastFrame.gestures,
+    getLastGesture: () => lastFrame.lastGesture,
   };
 
   let last = performance.now();

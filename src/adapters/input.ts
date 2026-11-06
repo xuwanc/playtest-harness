@@ -1,4 +1,6 @@
 import type { CameraZoomViewConfig, Intents } from '../core';
+import { createGestureTracker, withWorldDirection } from './button-gesture';
+import type { ButtonGesture, GestureButton } from './button-gesture';
 import { initialPinchState, solvePinch, wheelZoomScale } from './pinch';
 import type { PinchPoint, PinchState } from './pinch';
 
@@ -31,18 +33,30 @@ export type InputFrame = {
   tap: Tap | null;
   /** v8e：本帧相机缩放比例（>1 拉远、<1 拉近、1 = 无变化），由组装层累乘到用户倍率 */
   zoomScale: number;
+  /** v9d：本帧产生的按钮手势（press / drag / longPress / tap / doubleTap / release / cancel） */
+  gestures: ButtonGesture[];
+  /** v9d：最近一次手势（跨帧保留，方便 HUD / 技能层读取） */
+  lastGesture: ButtonGesture | null;
 };
 
 export type InputAdapter = {
   sample(): InputFrame;
+  /** v9d：只读当前辅助瞄准状态（不消费边沿），供调试面板 / 自动化验收 / 技能层查询 */
+  peekAim(): { active: boolean; holding: boolean; x: number; z: number; dx: number; dy: number };
   dispose(): void;
 };
 
-type BtnKey = 'jump' | 'sprint' | 'reset' | 'attack' | 'skill2';
+type BtnKey = GestureButton;
 const BTN_KEYS: BtnKey[] = ['jump', 'sprint', 'reset', 'attack', 'skill2'];
 const TAP_SLOP_PX = 8;
 /** 拖拽超过该像素才算「辅助瞄准」，避免把一次轻点误判成方向拖拽（v7c #11） */
 const AIM_SLOP_PX = 12;
+/**
+ * v9d：松手后仍保留最后拖拽方向的时长（ms）。
+ * 旧版只保留 1 帧，真机上 pointerup 与下一帧之间可能插入合成 move 或系统事件，
+ * 导致弓释放 / 法杖收招那一帧读到 aimActive=false，朝向退回锁定目标或 0（看起来像「面朝正下方」）。
+ */
+const AIM_HOLD_MS = 140;
 /** 滚轮 deltaMode=1（行）/ 2（页）换算成像素，保证不同设备缩放速度一致 */
 const WHEEL_LINE_PX = 16;
 const WHEEL_PAGE_PX = 400;
@@ -84,17 +98,28 @@ export function createInput(opts: InputOptions): InputAdapter {
   let pendingTap: Tap | null = null;
 
   // 攻击 / 技2 按钮拖拽 → 世界空间辅助瞄准方向（v7c #11）。
-  // 拖拽指针用 setPointerCapture 捕获，手指移出按钮也不中断；松手后保留一帧余辉，
-  // 让「抬手释放弓 / 按技2 起手」那一帧仍能读到最后拖拽方向。
+  // 拖拽指针用 setPointerCapture 捕获，手指移出按钮也不中断；松手后按时间保留余辉
+  // （v9d：1 帧 → AIM_HOLD_MS），让「抬手释放弓 / 法杖收招」那几帧仍能读到最后拖拽方向。
   let aimPointerId: number | null = null;
   let aimStartX = 0;
   let aimStartY = 0;
   let aimDX = 0;
   let aimDY = 0;
-  let aimLinger = 0;
+  /** 最近一次松手时间（performance.now）；< 0 表示从未松手 */
+  let aimReleaseAt = -1;
+
+  /** v9d：所有按钮共用一台手势状态机（点击 / 双击 / 长按 / 拖拽方向） */
+  const gestureTracker = createGestureTracker({ slopPx: AIM_SLOP_PX, longPressMs: 450, doubleTapMs: 350 });
+  let gestureQueue: ButtonGesture[] = [];
+  let lastGesture: ButtonGesture | null = null;
 
   /** 所有在 UI 区域按下的指针，与摇杆 / tap / 捏合完全隔离。 */
   const uiPointers = new Set<number>();
+
+  /** 手势队列只存屏幕数据，出帧时统一用当帧相机基向量换算成世界方向 */
+  function pushGesture(g: ButtonGesture | null): void {
+    if (g) gestureQueue.push(g);
+  }
 
   // ---- v8e 双指捏合缩放 ----
   /** 所有「非 UI 区域」按下的指针（Map 插入顺序 = 按下顺序），供捏合解算消费 */
@@ -163,6 +188,36 @@ export function createInput(opts: InputOptions): InputAdapter {
   const keys = new Set<string>();
   const cleanups: Array<() => void> = [];
 
+  /**
+   * v9d：一次性释放所有输入状态。
+   * 移动端切后台 / 来电 / 系统手势打断时常常收不到 pointerup，
+   * 会导致按钮一直 held（弓卡在蓄力、冲刺停不下来）或摇杆原点残留。
+   */
+  function releaseAllInputs(): void {
+    for (const k of BTN_KEYS) {
+      if (btnPointer[k] !== undefined) btnPointer[k] = undefined;
+      releaseButton(k);
+    }
+    gestureTracker.reset();
+    uiPointers.clear();
+    activePointers.clear();
+    pinchState = initialPinchState();
+    pinchActive = false;
+    stickId = null;
+    rawDX = 0;
+    rawDY = 0;
+    tapId = null;
+    tapMoved = false;
+    pendingTap = null;
+    aimPointerId = null;
+    aimReleaseAt = -1;
+    aimDX = 0;
+    aimDY = 0;
+  }
+  const onVisibility = (): void => {
+    if (document.hidden) releaseAllInputs();
+  };
+
   const onPointerDown = (e: PointerEvent): void => {
     // UI 区域：只登记 id，绝不启动摇杆、不设 tap、不参与捏合
     if (isUiTarget(e.target)) {
@@ -190,9 +245,21 @@ export function createInput(opts: InputOptions): InputAdapter {
   const onPointerMove = (e: PointerEvent): void => {
     // 瞄准拖拽向量：即使该指针属于 UI 区域（按钮），也要先记录（UI 指针不参与摇杆 / tap）
     if (e.pointerId === aimPointerId) {
-      aimDX = e.clientX - aimStartX;
-      aimDY = e.clientY - aimStartY;
+      // v9d：松手后浏览器可能补发 buttons=0 的合成 move；部分环境还会给出 (0,0)。
+      // 这类数据一旦写进 aim，松手瞬间方向就会跳（弓 / 法杖最明显），必须过滤。
+      // 注意触摸 pointermove 的 buttons 并不总是 1，不能一律用 buttons=0 判定，
+      // 否则会把按住期间的正常拖动也丢掉（弓会释放到默认朝向）。
+      const phantom = (e.pointerType === 'mouse' && e.buttons === 0)
+        || (e.clientX === 0 && e.clientY === 0 && (aimStartX !== 0 || aimStartY !== 0));
+      if (!phantom) {
+        aimDX = e.clientX - aimStartX;
+        aimDY = e.clientY - aimStartY;
+      }
     }
+
+    // v9d：按钮手势位移（capture 后事件仍会派发到按钮 / window，这里统一喂状态机）
+    pushGesture(gestureTracker.move(e.pointerId, e.clientX, e.clientY, performance.now()));
+
     // v8e：非 UI 指针坐标更新并解算捏合（UI 指针不在集合内，跳过）
     if (!uiPointers.has(e.pointerId) && activePointers.has(e.pointerId)) {
       activePointers.set(e.pointerId, { id: e.pointerId, x: e.clientX, y: e.clientY });
@@ -229,11 +296,14 @@ export function createInput(opts: InputOptions): InputAdapter {
     // v8e：先解算捏合结束（可能把剩余单指接续为摇杆），再做下面的 tap / 摇杆清理
     if (wasActivePointer) syncPinch();
 
-    // 瞄准拖拽结束：保留一帧余辉，让 attackReleased / skill2Pressed 那帧仍能吃到朝向
+    // 瞄准拖拽结束：按时间保留余辉，让 attackReleased / skill2Pressed 那几帧仍能吃到朝向
     if (e.pointerId === aimPointerId) {
       aimPointerId = null;
-      aimLinger = 1;
+      aimReleaseAt = performance.now();
     }
+
+    // v9d：兜底结束手势（按钮自身已处理时返回 null）
+    pushGesture(gestureTracker.end(e.pointerId, e.clientX, e.clientY, performance.now()));
 
     // 按钮松开：无论是否命中 UI 判定都要清掉按住态（弓蓄力靠这个释放）
     for (const k of BTN_KEYS) {
@@ -265,6 +335,8 @@ export function createInput(opts: InputOptions): InputAdapter {
     const aimable = k === 'attack' || k === 'skill2';
     const down = (e: PointerEvent): void => {
       e.preventDefault();
+      // 同一按钮已有手指按住：忽略第二根手指，避免状态被覆盖后 up 收不到
+      if (btnPointer[k] !== undefined) return;
       btnPointer[k] = e.pointerId;
       pointerHeld[k] = true;
       if (k === 'jump') edge.jump = true;
@@ -273,33 +345,41 @@ export function createInput(opts: InputOptions): InputAdapter {
       if (k === 'attack') edge.attackPressed = true;
       if (k === 'skill2') edge.skill2 = true;
       el.classList.add('is-down');
+      pushGesture(gestureTracker.begin(k, e.pointerId, e.clientX, e.clientY, performance.now()));
+
+      // v9d：所有按钮都捕获指针。旧版只有可瞄准按钮捕获，其余按钮滑出圆外会收到
+      // pointerleave 被当成松手（冲刺按到一半就停），也让抬手位置不可靠。
+      try { el.setPointerCapture(e.pointerId); } catch { /* 不支持时退化为按钮内拖拽 */ }
+
       if (aimable) {
-        // 捕获指针：拖拽移出按钮圆外仍持续收到 move，且不会触发 pointerleave 误松开
-        try { el.setPointerCapture(e.pointerId); } catch { /* 不支持时退化为按钮内拖拽 */ }
         aimPointerId = e.pointerId;
         aimStartX = e.clientX;
         aimStartY = e.clientY;
         aimDX = 0;
         aimDY = 0;
-        aimLinger = 0;
+        aimReleaseAt = -1;
       }
     };
     const up = (e: PointerEvent): void => {
       if (btnPointer[k] !== e.pointerId) return;
       btnPointer[k] = undefined;
       releaseButton(k);
+      pushGesture(gestureTracker.end(e.pointerId, e.clientX, e.clientY, performance.now()));
+    };
+    const cancel = (e: PointerEvent): void => {
+      if (btnPointer[k] !== e.pointerId) return;
+      btnPointer[k] = undefined;
+      releaseButton(k);
+      pushGesture(gestureTracker.cancel(e.pointerId, performance.now()));
     };
 
     el.addEventListener('pointerdown', down);
     el.addEventListener('pointerup', up);
-    el.addEventListener('pointercancel', up);
-    // 可瞄准按钮不绑 pointerleave：拖拽划出按钮时不应被当作松手（弓会误释放 / 瞄准会断）
-    if (!aimable) el.addEventListener('pointerleave', up);
+    el.addEventListener('pointercancel', cancel);
     cleanups.push(() => {
       el.removeEventListener('pointerdown', down);
       el.removeEventListener('pointerup', up);
-      el.removeEventListener('pointercancel', up);
-      if (!aimable) el.removeEventListener('pointerleave', up);
+      el.removeEventListener('pointercancel', cancel);
     });
   }
 
@@ -362,12 +442,30 @@ export function createInput(opts: InputOptions): InputAdapter {
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
   window.addEventListener('pointercancel', onPointerUp);
+  window.addEventListener('blur', releaseAllInputs);
+  document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('wheel', onWheel, { passive: false });
   window.addEventListener('gesturestart', onGestureStart);
 
   return {
+    peekAim() {
+      const now = performance.now();
+      const len = Math.hypot(aimDX, aimDY);
+      const holding = aimPointerId !== null
+        || (aimReleaseAt >= 0 && now - aimReleaseAt < AIM_HOLD_MS);
+      const active = holding && len > AIM_SLOP_PX;
+      if (!active) return { active: false, holding, x: 0, z: 0, dx: aimDX, dy: aimDY };
+      const b = getBasis();
+      const ux = aimDX / len;
+      const uy = aimDY / len;
+      const ax = b.rightX * ux + b.forwardX * -uy;
+      const az = b.rightZ * ux + b.forwardZ * -uy;
+      const al = Math.hypot(ax, az) || 1;
+      return { active: true, holding, x: ax / al, z: az / al, dx: aimDX, dy: aimDY };
+    },
+
     sample(): InputFrame {
       const r = radius();
       let sx = stickId !== null ? Math.max(-1, Math.min(1, rawDX / r)) : 0;
@@ -402,10 +500,16 @@ export function createInput(opts: InputOptions): InputAdapter {
         mz /= ml;
       }
 
+      // v9d：长按判定（每帧一次，按住超过阈值只触发一次）
+      const now = performance.now();
+      pushGesture(gestureTracker.poll(now));
+
       // 拖拽辅助瞄准（v7c #11）：屏幕拖拽 (dx,dy) 用同一套相机地面基向量换算成世界 XZ 单位向量，
       // 与摇杆语义一致（向上拖 = 世界前方、向右拖 = 世界右方）。
       const aimLen = Math.hypot(aimDX, aimDY);
-      const aiming = (aimPointerId !== null || aimLinger > 0) && aimLen > AIM_SLOP_PX;
+      const aimHolding = aimPointerId !== null
+        || (aimReleaseAt >= 0 && now - aimReleaseAt < AIM_HOLD_MS);
+      const aiming = aimHolding && aimLen > AIM_SLOP_PX;
       let aimX = 0;
       let aimZ = 0;
       if (aiming) {
@@ -417,13 +521,11 @@ export function createInput(opts: InputOptions): InputAdapter {
         aimX = ax / al;
         aimZ = az / al;
       }
-      // 余辉只在松手后保留一帧，随后清空拖拽向量，避免朝向被旧方向长期锁住
-      if (aimLinger > 0) {
-        aimLinger -= 1;
-        if (aimLinger === 0 && aimPointerId === null) {
-          aimDX = 0;
-          aimDY = 0;
-        }
+      // 余辉结束后清空拖拽向量，避免朝向被旧方向长期锁住
+      if (!aimHolding && aimPointerId === null) {
+        aimDX = 0;
+        aimDY = 0;
+        aimReleaseAt = -1;
       }
 
       const tap = pendingTap;
@@ -458,8 +560,13 @@ export function createInput(opts: InputOptions): InputAdapter {
       weaponSlotEdge = 0;
       dummyClickEdge = 0;
 
+      // v9d：出帧时补世界方向（技能层可直接当朝向 / 位移方向用）
+      const gestures = gestureQueue.map((g) => withWorldDirection(g, b, AIM_SLOP_PX));
+      gestureQueue = [];
+      if (gestures.length > 0) lastGesture = gestures[gestures.length - 1];
+
       const source = stickId !== null ? 'pointer' : keys.size > 0 ? 'keyboard' : 'idle';
-      return { intents, stickX: sx, stickY: sy, source, tap, zoomScale };
+      return { intents, stickX: sx, stickY: sy, source, tap, zoomScale, gestures, lastGesture };
     },
 
     dispose(): void {
@@ -467,10 +574,13 @@ export function createInput(opts: InputOptions): InputAdapter {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerUp);
+      window.removeEventListener('blur', releaseAllInputs);
+      document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('gesturestart', onGestureStart);
+      gestureTracker.reset();
       for (const fn of cleanups) fn();
     },
   };

@@ -100,6 +100,11 @@ export function createHud(el: HTMLElement): Hud {
       const lk = world.playerLink;
       const linkLabel = `link ${lk.kind || '-'}  ${lk.phase}  prog ${f(lk.progress)}  win ${f(lk.linkWindow)}s  cd ${f(lk.cooldown)}s  hits ${lk.hitIds.length}  travel ${f(lk.travelled)}/${f(lk.travel)}m  id ${lk.id}`;
       const linkShort = `${lk.phase}/${lk.kind || '-'}/w${f(lk.linkWindow)}`;
+      // v9d：最近一次按钮手势（点击 / 双击 / 长按 / 拖拽方向），验证手势接口是否按预期产出
+      const g = input.lastGesture;
+      const gestureLabel = g
+        ? `${g.button} ${g.kind} ${g.heldMs.toFixed(0)}ms d${g.distance.toFixed(0)}px ${g.angleDeg.toFixed(0)}° taps${g.taps}`
+        : '-';
       const dummies = world.dummies
         .map((s) => `${s.id}:${MODE_LABELS[s.mode]}`)
         .join('  ');
@@ -121,7 +126,7 @@ export function createHud(el: HTMLElement): Hud {
           `weapon ${label}  ${cb.phase}  combo ${cb.comboIndex}/3  atk ${f(cb.attackProgress)}  dash ${dashLabel}  ab ${atkBlendLabel}  gw/lw ${wShort}  land ${landShort}  ik ${ikShort}`,
           `aim ${aimLabel}  target ${world.targeting.hasTarget ? `#${world.targeting.targetId} @${f(world.targeting.targetDist)}m` : '无'}  hit ${world.hitCount}  hurt ${world.playerHurt.type}  lay ${hurtShort}`,
           `dummies ${dummies}  atkCount ${world.dummyAttackCount}  cam ${(cam.threat * 100).toFixed(0)}% ×${f(cam.distanceScale)}  ${zoomLabel}  lk ${linkShort}`,
-          `event ${last ? `${last.type} ${f(last.value)}` : '-'}  scale ${f(debug.timeScale)}${debug.paused ? ' [P]' : ''}`,
+          `event ${last ? `${last.type} ${f(last.value)}` : '-'}  scale ${f(debug.timeScale)}${debug.paused ? ' [P]' : ''}  g ${gestureLabel}`,
         ].join('\n');
       } else {
         el.textContent = [
@@ -139,7 +144,7 @@ export function createHud(el: HTMLElement): Hud {
           `camera ${camLabel}  ${zoomLabel}`,
           `target ${world.targeting.hasTarget ? `#${world.targeting.targetId} @${f(world.targeting.targetDist)}m  face ${deg(world.targeting.targetYaw)}deg` : '无 (前方扇区内无敌人)'}   charge [${bar}] ${(cb.charge * 100).toFixed(0)}%  charging ${cb.charging ? 'Y' : 'N'}`,
           `dummies ${dummies}   atkCount ${world.dummyAttackCount}  hit ${world.hitCount}  hurt ${world.playerHurt.type}  impulse (${f(world.impulse.x)}, ${f(world.impulse.z)})`,
-          `event ${last ? `${last.type} ${f(last.value)}` : '-'}   scale ${f(debug.timeScale)}${debug.paused ? ' [PAUSED]' : ''}`,
+          `event ${last ? `${last.type} ${f(last.value)}` : '-'}   scale ${f(debug.timeScale)}${debug.paused ? ' [PAUSED]' : ''}   gesture ${gestureLabel}`,
         ].join('\n');
       }
     },

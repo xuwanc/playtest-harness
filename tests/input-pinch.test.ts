@@ -38,6 +38,9 @@ function setup(): { win: FakeWindow; input: ReturnType<typeof createInput> } {
   vi.stubGlobal('document', {
     getElementById: () => null,
     querySelectorAll: () => [],
+    hidden: false,
+    addEventListener: (): void => { /* v9d：blur / visibilitychange 兜底不需要在 stub 里跑 */ },
+    removeEventListener: (): void => { /* noop */ },
   });
   vi.stubGlobal('Element', FakeElement);
   const opts: InputOptions = {

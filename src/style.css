@@ -282,12 +282,16 @@ html, body {
   }
   /* 顶部整行让给武器条；HUD 用短版并下移，收起的调试面板再放到 HUD 下方 */
   #overlay-left { top: 58px; }
+  /* v9d：竖屏调试面板从「右侧中部」移到左上（HUD 下方），宽度收窄，
+     右缘不越过 x≈226，与右侧居中的操作簇（x≥242）完全分开 */
   #debug-panel {
-    top: 212px;
-    right: 8px;
-    max-height: calc(100vh - 230px);
+    top: 96px;
+    left: 8px;
+    right: auto;
+    max-width: min(220px, 56vw);
+    max-height: calc(100vh - 250px);
   }
-  #debug-panel .lil-gui.root { width: 210px; }
+  #debug-panel .lil-gui.root { width: min(220px, 56vw); }
   /* 竖屏窄屏：HUD 允许自动换行，宽度锁在视口内，不再横向溢出 */
   #hud { font-size: 8px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
   #hint { font-size: 8px; max-width: 94vw; color: rgba(210, 226, 240, 0.72); }
