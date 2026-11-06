@@ -461,3 +461,91 @@ html, body {
   line-height: 1.5;
   color: rgba(170, 190, 210, 0.5);
 }
+
+/* ---- v9k 临时方向调试盘 --------------------------------------------------
+   屏幕下方居中：正上 = 相机前方，顺时针为正。
+   整块指针穿透（只有标题胶囊可点），保证不抢摇杆起点 / 按钮。 */
+#dirdbg {
+  position: fixed;
+  left: 50%;
+  bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+  z-index: 14;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#dirdbg-toggle {
+  pointer-events: auto;
+  padding: 1px 8px;
+  border: 1px solid rgba(120, 160, 200, 0.28);
+  border-radius: 999px;
+  background: rgba(10, 14, 20, 0.5);
+  color: rgba(196, 216, 234, 0.78);
+  font-family: inherit;
+  font-size: 9px;
+  line-height: 1.5;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+  touch-action: none;
+  opacity: 0.85;
+}
+
+#dirdbg-toggle:active { background: rgba(60, 120, 170, 0.55); color: #fff; }
+
+#dirdbg-canvas {
+  display: block;
+  width: 118px;
+  height: 118px;
+  opacity: 0.88;
+}
+
+#dirdbg-read {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(8, 12, 17, 0.42);
+  font-size: 10px;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+  color: rgba(206, 220, 234, 0.8);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+
+#dirdbg-read .dd-line {
+  display: flex;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+#dirdbg .dd-in { color: #38bdf8; }
+#dirdbg .dd-mv { color: #fbbf24; }
+#dirdbg .dd-fc { color: #f472b6; }
+#dirdbg .dd-sub { opacity: 0.8; }
+
+#dirdbg.is-warn #dirdbg-canvas { opacity: 1; }
+#dirdbg.is-warn #dirdbg-read .dd-sub { color: #fbbf24; }
+
+#dirdbg.is-off #dirdbg-canvas,
+#dirdbg.is-off #dirdbg-read { display: none; }
+
+/* 横屏矮屏：挪到左下角的空带里，缩小一号 —— 居中会正好压住角色 */
+@media (max-height: 460px) {
+  #dirdbg {
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    bottom: calc(26px + env(safe-area-inset-bottom, 0px));
+    transform: none;
+    align-items: flex-start;
+  }
+  #dirdbg-canvas { width: 96px; height: 96px; }
+  #dirdbg-read { font-size: 9px; }
+}

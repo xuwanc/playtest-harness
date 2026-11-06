@@ -8,6 +8,7 @@ import type { Intents, WeaponId } from './core';
 import { CORE_CONFIG, SCENE_CONFIG, VIEW_CONFIG } from './config';
 import { createDebugPanel } from './presentation/debug-panel';
 import type { DebugState } from './presentation/debug-panel';
+import { createDirDebug } from './presentation/dir-debug';
 import { createHud } from './presentation/hud';
 import { createOverlayFold } from './presentation/overlay-fold';
 import { createSceneView } from './presentation/three-scene';
@@ -62,6 +63,10 @@ export function startApp(): void {
     },
   });
   const diagPanel = createTelemetryPanel(recorder, badge);
+
+  // v9k：临时方向调试盘（输入 / 移动 / 面朝向三个角度同屏对照）。
+  // 纯观测层，只读 World 与 InputFrame；删掉 createDirDebug 与本段即可完全移除。
+  const dirDebug = createDirDebug({ deadZone: () => VIEW_CONFIG.joystick.deadZone });
   // 切后台回来时不要把它当成「单帧 300ms」的掉帧异常
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) recorder.suspend(800);
@@ -128,6 +133,9 @@ export function startApp(): void {
     // v9f：诊断记录（控制台 / 自动化验收都能直接取摘要或完整 dump）
     telemetry: recorder,
     telemetrySummary: () => recorder.summary(),
+    // v9k：方向调试盘（控制台 / 自动化可读当前三个角，或直接开关）
+    dirDebug,
+    dirAngles: () => dirDebug.last(),
   };
 
   let last = performance.now();
@@ -172,6 +180,7 @@ export function startApp(): void {
 
     syncWeaponButtons(world.combat.weapon);
     view.render(world, dt);
+    dirDebug.update(world, lastFrame, view.getGroundBasis());
     const diag = view.diagnostics();
     hud.update(world, fps, steps, lastFrame, debug, {
       attackBlend: diag.attackBlend,
