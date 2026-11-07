@@ -647,8 +647,10 @@ export function createVoxelRig(
   let swingFade = 1;
   /** 本帧实际采用的肩部位移（诊断用） */
   let lastShoulder = { lx: 0, ly: 0, lz: 0, rx: 0, ry: 0, rz: 0 };
-  /** 本帧挥击层要求的武器挂点俯仰（null = 用武器默认值） */
-  let swingMountPitch: number | null = null;
+  /** 本帧挥击层要求的剑身仰角（null = 用武器默认挂点） */
+  let swingBladePitch: number | null = null;
+  /** 本帧主挥手：决定按哪条手臂链反解挂点 */
+  let swingLead: 'R' | 'L' = 'R';
 
   // ---- v8c 程序动画分层状态（全部纯表现，不进入 Core / 快照）----
   /** 攻击姿态混合系数 0..1：指数平滑进出攻击，避免下盘姿态单帧跳变 */
@@ -1010,6 +1012,51 @@ export function createVoxelRig(
     armR.wrist.rotation.set(wristPitch, 0, wristTwist);
   }
 
+  /** 某把武器、某只手的默认挂点俯仰（与 applyMountPose 保持一致）。 */
+  function mountBasePitch(w: WeaponId): number {
+    const d = Math.PI / 180;
+    if (w === 'greatsword') return mountCfg.greatswordPitchDeg * d;
+    if (w === 'staff') return mountCfg.staffPitchDeg * d;
+    if (w === 'bow') return mountCfg.bowPitchDeg * d;
+    return mountCfg.swordPitchDeg * d;
+  }
+
+  /**
+   * v9s.25 · 剑身仰角 → 挂点角。
+   *
+   * 这是「剑尖朝上」这个 bug 的正解：作者在数据里写的是**世界仰角**（0 = 水平），
+   * 而骨架看到的是「挂点相对前臂转了多少」。两者差着整条手臂链的俯仰：
+   *
+   * ```text
+   * 仰角 = π/2 − (躯干 + 肩 + 肘 + 腕 + 挂点)
+   * ⇒ 挂点 = π/2 − 仰角 − (躯干 + 肩 + 肘 + 腕)
+   * ```
+   *
+   * 旧的 58° 常量只在「手臂自然下垂」时读起来正常；手臂抬到 −80° 时，
+   * 剑身只剩 12° 的倾斜，实际几乎竖直 —— 前两段横扫看起来像举着剑站着。
+   *
+   * 必须放在腕部之后：腕部的滞后角也在这条链上，早一步算会把滞后吃掉一半。
+   * 躯干俯仰用 2.1 记下的快照（姿态层刚写完、惯性 / 受击还没叠），
+   * 这样受击后仰、跑动前倾仍然会让剑自然跟着身体走。
+   */
+  function applyBladeTarget(combat: CombatState, torsoPitch: number): void {
+    const w = combat.weapon;
+    if (w === 'staff' || w === 'bow') return;
+    const arm = swingLead === 'R' ? armR : armL;
+    const mount = swingLead === 'R' ? mountR : mountL;
+    const drag = w === 'greatsword' && swingLead === 'R' ? dragAngle : 0;
+    const e = swingBladePitch;
+    if (e === null) {
+      mount.rotation.x = mountBasePitch(w) + drag;
+      return;
+    }
+    // 刻意**不**把腕角算进补偿链：腕滞后是「剑比手慢半拍」的那一层，
+    // 抵消掉它就等于把 v9s24 的白做了（实测剑尖相对手只差 1cm）。这里只抵消
+    // 躯干 + 肩 + 肘，让剑停在目标仰角附近，再叠加腕部的甩动。
+    const chain = torsoPitch + arm.root.rotation.x + arm.joint.rotation.x;
+    mount.rotation.x = Math.PI / 2 - e - chain;
+  }
+
   /**
    * v9s.23：把解出的挥击姿态写进骨骼。
    *
@@ -1018,7 +1065,8 @@ export function createVoxelRig(
    * 而 2.6 / 2.8 的惯性、落地缓冲、跨步层都在本函数之后才 +=，可以安全叠上去。
    */
   function writeSwingPose(p: SwingPose): void {
-    swingMountPitch = p.mountPitch;
+    swingBladePitch = p.bladePitch;
+    swingLead = p.lead;
     upper.rotation.y += p.yaw;
     upper.rotation.x += p.pitch;
     upper.rotation.z += p.roll;
@@ -1158,7 +1206,7 @@ export function createVoxelRig(
       swingPose = null;
       swingSeg = 0;
       swingFade = 1;
-      swingMountPitch = null;
+      swingBladePitch = null;
       // 收招：握点回到默认位置（否则下一轮起手会从上一轮滑到的地方开始）
       gripSlide = NaN;
       // 内收量也归位（否则最后一段停在举顶时会带着 0 内收进待机）
@@ -1738,24 +1786,15 @@ export function createVoxelRig(
 
       // 2.1) 大剑移动拖地：非攻击且正在移动时，把剑身额外俯放，剑尖贴近地面。
       //      攻击时 dragAngle 平滑归零，剑回到双手持握基准姿态。
-      const gsPitch = (mountCfg.greatswordPitchDeg * Math.PI) / 180;
+      //      挂点角本身在 3.6（腕部之后）统一写，那里才能拿到完整的手臂链。
       const greatOn = combat.weapon === 'greatsword';
       const sp = Math.hypot(c.velocity.x, c.velocity.z);
       const wantDrag = greatOn && combat.phase === 'idle' && sp > 0.5;
       const dragTarget = wantDrag ? Math.min(1.15, sp / Math.max(moveSpeed, 0.001) * 0.9) : 0;
       dragAngle += (dragTarget - dragAngle) * (1 - Math.exp(-6 * dt));
-      if (greatOn) {
-        // v9s.23：武器挂点俯仰随手臂高度补偿。
-        // 挂点原本是固定 58°（相对前臂），这个值只在「手臂大致前举」时读起来正常。
-        // 举剑过顶（手臂绕 X 转 −169°）后，58° 会被翻成「剑尖朝后下方」——
-        // 实测段 3 起手刃尖在 (0.58, 0.36, −0.61)，即插在身后腰侧，同时那截下段柄
-        // 从头顶穿出来。真实持剑时手腕会反向转，让剑始终保持「前上方」，
-        // 这里把这个反向补偿外置：手臂越往上，挂点越往后掰。
-        // 系数取 1.0 = 剑的世界朝向完全稳定；调小则剑会跟着手臂多翻一点。
-        // 举顶下劈由挥击层直接给挂点角（与手臂同向）；其余段用武器默认 58°。
-        // 走「挂点角」而不是「补偿手臂角」，是因为后者会让剑在收势时又抬起来。
-        mountR.rotation.x = (swingMountPitch ?? gsPitch) + dragAngle;
-      }
+      // 记下「姿态层刚写完、惯性 / 受击还没叠」的躯干俯仰：
+      // 剑身仰角要抵消的是它，而不是把后续的受击后仰也一起抵消掉。
+      const torsoPitchForBlade = upper.rotation.x;
 
       // 2.2) 弓 / 箭「向前 90°」补偿：持弓左臂前伸、拉弦右臂抬肘累计约 90° 俯仰，
       //      会把弓面和搭在弦上的箭转成朝天 / 朝地。这里抵消手臂的 X 旋转，
@@ -1868,6 +1907,11 @@ export function createVoxelRig(
       // 传 frameDt 而不是 clamp 过的 dt：暂停 / 命中定格时 frameDt 为 0，
       // 腕部必须真正冻结（clamp 后的 dt 下限是 1/240，会漏出微小抖动）。
       applyWrist(frameDt, combat.comboIndex);
+
+      // 3.55) v9s.25 剑身仰角反解：数据给的是「剑离水平面多少度」，
+      //       这里按实际手臂链换算成挂点角。必须在腕部之后、副手握持之前 ——
+      //       腕滞后是链上的一环，副手 IK 又取柄的世界坐标。
+      applyBladeTarget(combat, torsoPitchForBlade);
 
       // 3.5) v9s.22 副手握持：必须在朝向 / 胸偏转都写完之后解算 ——
       //  上半身一转动，柄的世界位置就变了，早一步解会「握在空气里」。

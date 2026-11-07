@@ -11,8 +11,8 @@ function speed(w: World): number {
 
 function totalSpeed(w: World): number {
   return Math.hypot(
-    w.character.velocity.x + w.impulse.x + w.kick.x,
-    w.character.velocity.z + w.impulse.z + w.kick.z,
+    w.character.velocity.x + w.impulse.x,
+    w.character.velocity.z + w.impulse.z,
   );
 }
 
@@ -23,7 +23,7 @@ function swordStill(): World {
   return w;
 }
 
-describe('v9s.21 三层运动：移动 / 技能位移 / 脉冲', () => {
+describe('v9s.21 运动分层：移动 / 技能位移（v9s.25 起去掉脉冲层）', () => {
   it('起手不再掉崖：速度是平滑衰减，不是一帧归零', () => {
     const w = swordStill();
     run(w, 60, intent({ moveX: 1 }));
@@ -132,49 +132,6 @@ describe('v9s.21 三层运动：移动 / 技能位移 / 脉冲', () => {
     }
   });
 
-  it('弓：放箭那一帧写入反向脉冲，之后指数衰减到 0', () => {
-    const w = makeWorld();
-    w.modules.targeting = false;
-    w.config.combat.bow.maxChargeTime = 0.1;
-    run(w, 1, intent({ weaponSlot: 5 })); // 切到弓
-    // 蓄满并放箭（facing = 0，即 +Z）
-    let fired = false;
-    for (let i = 0; i < 40 && !fired; i++) {
-      step(w, DT, intent({ attackHeld: true }));
-      if (w.arrows.length > 0) fired = true;
-    }
-    expect(fired).toBe(true);
-    // 后坐力朝 -Z，与射击方向相反
-    expect(w.kick.z).toBeLessThan(-0.5);
-    const k0 = Math.abs(w.kick.z);
-    for (let i = 0; i < 60; i++) step(w, DT, intent());
-    expect(Math.abs(w.kick.z)).toBeLessThan(k0 * 0.05);
-    expect(Math.abs(w.kick.z)).toBeLessThan(1e-3);
-  });
-
-  it('后坐力不顶掉移动：按住前进射击，位移仍然向前', () => {
-    const w = makeWorld();
-    w.modules.targeting = false;
-    w.config.combat.bow.maxChargeTime = 0.1;
-    run(w, 1, intent({ weaponSlot: 5 }));
-    run(w, 30, intent({ moveZ: 1 }));
-    const x0 = w.character.position.x;
-    const z0 = w.character.position.z;
-    let shots = 0;
-    let prevArrows = 0;
-    for (let i = 0; i < 120; i++) {
-      step(w, DT, intent({ moveZ: 1, attackHeld: true }));
-      if (w.arrows.length > prevArrows) shots += 1;
-      prevArrows = w.arrows.length;
-      // 后坐力会让某一帧的净速度短暂变小（放箭动作本身也把移动压到三成），
-      // 但不应该把角色真的推回去 —— 位移必须单调向前。
-      expect(w.character.position.z).toBeGreaterThanOrEqual(z0 - 1e-9);
-    }
-    expect(shots).toBeGreaterThan(0);
-    expect(w.character.position.z).toBeGreaterThan(z0);
-    expect(Math.abs(w.character.position.x - x0)).toBeLessThan(0.05);
-  });
-
   it('引导减速也是平滑的（不是一帧跳到 moveScale）', () => {
     const w = makeWorld();
     w.modules.targeting = false;
@@ -194,17 +151,12 @@ describe('v9s.21 三层运动：移动 / 技能位移 / 脉冲', () => {
     expect(Math.abs(speed(w) - target)).toBeLessThan(0.2);
   });
 
-  it('复位与传送都会清掉脉冲层', () => {
+  it('复位会清掉技能位移层（翻滚中途重开不残留推进）', () => {
     const w = makeWorld();
-    w.kick.x = 3;
-    w.kick.z = -2;
-    w.character.position.x = 0;
-    // 直接走一次 resetCharacter 的路径：通过 spawn 复位
-    w.character.position.x = 999; // 触发不了复位，改用 warpTo 同口径
-    w.kick.x = 3;
-    w.kick.z = -2;
+    w.impulse.x = 3;
+    w.impulse.z = -2;
     step(w, DT, intent({ resetPressed: true }));
-    expect(w.kick.x).toBe(0);
-    expect(w.kick.z).toBe(0);
+    expect(w.impulse.x).toBe(0);
+    expect(w.impulse.z).toBe(0);
   });
 });

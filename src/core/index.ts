@@ -21,3 +21,4 @@ export * from './world';
 export * from './step';
 export * from './pathfinding';
 export * from './skills';
+export * from './pose-clip';

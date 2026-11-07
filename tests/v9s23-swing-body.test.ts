@@ -98,9 +98,9 @@ describe('v9s.23 三段方向（纯函数）', () => {
     const hit = solveSwingPose('greatsword', 3, 1, SWING);
     expect(wind.kind).toBe('overhead');
     expect(wind.armR!.pitch).toBeLessThan(-1.7);  // 手臂抬到头顶前上
-    // 挂点必须跟着翻：默认 58° 在手臂举高后会把剑翻到身后
-    expect(wind.mountPitch).not.toBeNull();
-    expect(wind.mountPitch!).toBeGreaterThan(2);
+    // v9s.25：数据里给的是剑身仰角（世界语义），举顶时剑尖朝上而不是「挂点角 > 2」
+    expect(wind.bladePitch).not.toBeNull();
+    expect(wind.bladePitch!).toBeGreaterThan(0.8);
     expect(wind.pitch).toBeLessThan(-0.2);       // 躯干后仰
     expect(hit.armR!.pitch).toBeGreaterThan(-0.2); // 劈到身前下方
     expect(hit.pitch).toBeGreaterThan(0.4);      // 躯干前压

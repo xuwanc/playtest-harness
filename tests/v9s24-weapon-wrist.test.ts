@@ -182,10 +182,17 @@ describe('v9s.24 腕部：武器相对手的自由度', () => {
   it('剑尖相对手的局部坐标确实随腕角变化（不是被手臂刚性带着走）', () => {
     const on = run(240);
     const off = run(240, { wrist: 'off' });
-    // 取同一帧（段 3 active，腕角最大）比较剑尖在手部坐标系里的位置
-    const pick = (fs: Frame[]) => fs.find((f) => f.seg === 3 && f.phase === 'active' && f.tipLocal)!;
-    const a = pick(on.frames);
-    const b = pick(off.frames);
+    // v9s.25：改为取「腕角最大」的那一帧再对比 —— 旧版取段 3 active 的第一帧，
+    // 那一帧腕部刚开始从换段重置里恢复，角度接近 0，断言会随动作数据变化而误报。
+    let peak = 0;
+    let at = 0;
+    on.frames.forEach((f, i) => {
+      const v = Math.abs(f.wristPitch) + Math.abs(f.wristTwist);
+      if (v > peak) { peak = v; at = i; }
+    });
+    expect(peak).toBeGreaterThan(0.1);
+    const a = on.frames[at];
+    const b = off.frames[at];
     expect(a.tipLocal).not.toBeNull();
     expect(b.tipLocal).not.toBeNull();
     const delta = a.tipLocal!.distanceTo(b.tipLocal!);

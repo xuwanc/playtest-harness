@@ -131,14 +131,6 @@ function startBowRelease(world: World, intents: Intents, charge: number): void {
   // 表现层不再用 attackId 自己「放一支动画箭」，只按 world.arrows 渲染。
   fireArrow(world, charge, world.combat.attackFacing);
   emit(world, 'charge-release', charge);
-
-  // v9s.21：射击反冲。写进独立的 kick 层而不是改 v —— 玩家按住前进时，
-  // 净速度 = 移动层 − 后坐力，仍然在往前走，只是短暂「顶了一下」。
-  const rb = world.config.combat.bow;
-  if (rb.recoilSpeed > 0) {
-    world.kick.x -= Math.sin(world.combat.attackFacing) * rb.recoilSpeed;
-    world.kick.z -= Math.cos(world.combat.attackFacing) * rb.recoilSpeed;
-  }
 }
 
 /**

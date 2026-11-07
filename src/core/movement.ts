@@ -42,8 +42,6 @@ export function resetCharacter(world: World): void {
   c.distance = 0;
   c.coyoteTime = world.config.coyoteTime;
   c.jumpBuffer = 0;
-  world.kick.x = 0;
-  world.kick.z = 0;
   resetCombat(world);
 }
 
@@ -82,8 +80,6 @@ export function warpTo(world: World, x: number, z: number): void {
   c.distance = 0;
   c.coyoteTime = cfg.coyoteTime;
   c.jumpBuffer = 0;
-  world.kick.x = 0;
-  world.kick.z = 0;
   resetCombat(world);
   resetLink(world);
   resetDash(world);
@@ -210,28 +206,17 @@ export function movementUpdate(world: World, dt: number, intents: Intents): void
     v.z = 0;
     world.impulse.x = 0;
     world.impulse.z = 0;
-    world.kick.x = 0;
-    world.kick.z = 0;
   }
 
-  // 4) 水平积分：三层相加
-  //    v（移动层）+ impulse（技能位移层）+ kick（一次性脉冲层）+ 受击击退。
-  //    kick 独立于 v 的意义：射击后坐力往前顶的时候，玩家按着前进键仍然在前进，
-  //    只是净速度短暂变小；如果直接改 v，后坐力会把移动输入顶掉，读起来像「卡一下」。
+  // 4) 水平积分：两层相加
+  //    v（移动层）+ impulse（技能位移层）+ 受击击退。
+  //    v9s.25 删掉了 v9s.21 的 kick 脉冲层（当时只为弓的后坐力服务）：
+  //    射击时的反向冲量 + 放箭动作的 0.12m 前冲叠在一起，观感是「每射一箭整个人往前顶一下」，
+  //    已经不符合现在的射击手感；要真是后坐力，也该由表现层做相机 / 肩部抖动，而不是推角色。
   const prevX = p.x;
   const prevZ = p.z;
-  p.x += (v.x + world.impulse.x + world.kick.x + world.playerHurt.knockX) * dt;
-  p.z += (v.z + world.impulse.z + world.kick.z + world.playerHurt.knockZ) * dt;
-
-  // 4.5) 脉冲层自然衰减：不需要「结束时刻」，指数衰减到 0 即可。
-  //      用弓的后坐力参数（当前唯一的 kick 来源）；换成别的来源时再抽公共项。
-  if (world.kick.x !== 0 || world.kick.z !== 0) {
-    const kd = Math.exp(-Math.max(0, cfg.combat.bow.recoilDecay) * dt);
-    world.kick.x *= kd;
-    world.kick.z *= kd;
-    if (Math.abs(world.kick.x) < 1e-4) world.kick.x = 0;
-    if (Math.abs(world.kick.z) < 1e-4) world.kick.z = 0;
-  }
+  p.x += (v.x + world.impulse.x + world.playerHurt.knockX) * dt;
+  p.z += (v.z + world.impulse.z + world.playerHurt.knockZ) * dt;
 
   // 5) 水平碰撞（矮台阶会被跳过，交给第 7 步抬升）
   const wasBlocked = resolveHorizontal(world.boxes, p, cfg.characterRadius, cfg.characterHeight, cfg.stepHeight);
@@ -310,7 +295,7 @@ export function movementUpdate(world: World, dt: number, intents: Intents): void
   const frameDist = lengthXZ(p.x - prevX, p.z - prevZ);
   c.distance += frameDist; // 累计里程保留（诊断/统计用），不再参与相位计算
   // v9s.21：步幅改为按「实际位移速度」算，而不是只看 `v`。
-  // 攻击 / 翻滚期间位移来自 impulse 与 kick，`v` 很小（0.3× 甚至 0），
+  // 攻击 / 翻滚期间位移来自 impulse，`v` 很小（0.3× 甚至 0），
   // 若仍用 `v` 反推步幅，stride 会被压到最小值而 frameDist 却很大 ——
   // 相位一帧推进一两弧度，腿看着在疯转。用实际位移速度，跨步时 stride 同步放大。
   const stepSpeed = frameDist / Math.max(dt, EPS);

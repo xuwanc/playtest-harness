@@ -8,6 +8,8 @@
  *  4. 不出现 window / document / Math.random / Date.now / performance。
  */
 
+import type { PoseClip } from './pose-clip';
+
 export type Vec3 = { x: number; y: number; z: number };
 export type Vec2XZ = { x: number; z: number };
 
@@ -183,13 +185,6 @@ export type CombatConfig = {
      * 手放松手仍可随时提前放出（蓄力 ≥ minChargeToFire 时）。
      */
     autoFire: boolean;
-    /**
-     * v9s.21：射击后坐力（反向冲量层）。它是独立的衰减速度层，不经过 `v` 的目标速度，
-     * 所以「往前走 + 后坐」= 4.2 − 1.4，仍在前进，不会把移动输入顶掉。
-     * recoilSpeed 是瞬时叠加的速度（m/s），recoilDecay 是每秒的指数衰减率。
-     */
-    recoilSpeed: number;
-    recoilDecay: number;
     release: CastProfile;
     /**
      * v9s.17：弹道参数。箭由 Core 自己积分（不依赖表现层计时），
@@ -1540,6 +1535,21 @@ export type ProgramAnimViewConfig = {
  * 骨盆重心偏移与肩部（上臂根部）位移，手臂轨迹由同一份数据给出。
  * 三段方向（右→左 / 左→右 / 举顶下劈）也在这里定义，见 `presentation/swing-pose.ts`。
  */
+/**
+ * v9s.25 · 一条连击段引用：指向一条剪辑，可覆写主挥的手与幅度。
+ *
+ * 用对象而不是裸字符串，是为了让「双剑第二段换成左手挥」这种差异只写在数据里，
+ * 不必复制一整条剪辑。
+ */
+export type SwingClipRef = {
+  /** 剪辑 id（`clips` 里的键） */
+  clip: string;
+  /** 覆写主挥手（缺省用剪辑自己的 lead / R） */
+  lead?: 'R' | 'L';
+  /** 覆写本段幅度倍率（缺省用 weaponScale） */
+  scale?: number;
+};
+
 export type SwingPoseViewConfig = {
   enabled: boolean;
   /** 躯干 / 骨盆幅度总倍率（拉 0 可 A/B 对照「只有手臂在动」） */
@@ -1554,6 +1564,15 @@ export type SwingPoseViewConfig = {
   segBlend: number;
   /** 各武器幅度倍率（大剑最夸张，短剑收敛） */
   weaponScale: Record<string, number>;
+  /**
+   * v9s.25：技能动作数据 —— 每把武器的三段（或 N 段）剪辑 id。
+   *
+   * 新增技能 / 加段 / 换动作全部只改这里 + `clips`：代码只负责采样与写骨骼。
+   * 段数不要求是 3，数组多长就循环多长（comboIndex 由 Core 的 comboCount 决定）。
+   */
+  combo?: Record<string, Array<SwingClipRef | string>>;
+  /** v9s.25：剪辑库（id → 语义通道关键帧），见 `core/pose-clip.ts` */
+  clips?: Record<string, PoseClip>;
 };
 
 
@@ -2210,11 +2229,6 @@ export type World = {
   skills: SkillRuntime[];
   /** 本帧外部附加速度（m/s），由战斗模块写入、移动模块消费。v9s.21 起语义收窄为「技能位移层」 */
   impulse: { x: number; z: number };
-  /**
-   * v9s.21：一次性脉冲层（后坐力 / 击退类），与 impulse 分开是因为它需要**自己衰减**：
-   * 每帧 `kick *= exp(-decay·dt)`，不需要任何「结束时刻」，也不会被别的模块重写。
-   */
-  kick: { x: number; z: number };
   /** 当前智能锁定的目标（每帧重算，攻击起手时读取） */
   targeting: TargetState;
   /** v9s：静止盯视触发的原地转身状态（plain data，随快照回放） */

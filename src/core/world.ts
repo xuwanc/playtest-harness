@@ -60,7 +60,6 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
     abilities: initialAbilityState(),
     skills: normalizeSkills(core),
     impulse: { x: 0, z: 0 },
-    kick: { x: 0, z: 0 },
     targeting: initialTargetState(),
     turnInPlace: initialTurnInPlaceState(),
     playerHurt: initialHurt(),

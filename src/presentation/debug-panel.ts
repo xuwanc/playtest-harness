@@ -261,8 +261,6 @@ export function createDebugPanel(
   fight.add(cb.bow, 'maxChargeTime', 0.2, 2, 0.05).name('满蓄力时间 (s)');
   fight.add(cb.bow, 'minChargeToFire', 0, 1, 0.02).name('最小可发射蓄力');
   fight.add(cb.bow, 'autoFire').name('蓄满自动放箭 (按住连射)');
-  fight.add(cb.bow, 'recoilSpeed', 0, 5, 0.1).name('射击后坐力 (m/s)');
-  fight.add(cb.bow, 'recoilDecay', 1, 30, 0.5).name('后坐力衰减 (1/s)');
 
   // v9s.22：夸张化（squash & stretch / 刀光 / 命中定格）
   const exagg = sub(fightRoot, '夸张化 (v9s.22)');
