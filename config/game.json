@@ -7,6 +7,7 @@
     "sprintMultiplier": 1.75,
     "acceleration": 16,
     "friction": 14,
+    "skillDecel": 14,
     "gravity": 24,
     "jumpSpeed": 8,
     "stepHeight": 0.45,
@@ -54,7 +55,10 @@
     "combat": {
       "comboWindow": 0.65,
       "settle": 0.16,
-      "attackMoveScale": 0,
+      "attackMoveScale": 0.3,
+      "lungeMoveScale": 0.08,
+      "lungeCurve": 1.2,
+      "lungeMaxSpeed": 17,
       "settleMoveScale": 0.32,
       "cancelWindow": 0.45,
       "minLungeScale": 0.4,
@@ -126,6 +130,8 @@
         "minChargeToFire": 0.15,
         "chargeMoveMultiplier": 0.55,
         "autoFire": true,
+        "recoilSpeed": 1.0,
+        "recoilDecay": 9,
         "release": {
           "windup": 0.04,
           "active": 0.12,

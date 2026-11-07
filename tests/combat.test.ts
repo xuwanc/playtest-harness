@@ -298,7 +298,13 @@ describe('攻击节奏与位移解耦', () => {
     expect(moving.combat.phase).toBe('recovery');
     const dStillActive = Math.abs(still.character.position.z - stillZ0);
     const dMovingActive = Math.abs(moving.character.position.z - movingZ0);
-    expect(Math.abs(dMovingActive - dStillActive)).toBeLessThan(1e-6);
+    // v9s.21：跨步改成起手尖峰、末段收 0 的包络，位移仍精确等于 lunge。
+    expect(Math.abs(dStillActive - 0.45)).toBeLessThan(0.03);
+    // 攻击期间允许保留三成移速（attackMoveScale = 0.3），所以移动中攻击会多走一点；
+    // 关键是「多出来的部分」远小于按常速跑完这一段的距离（0.22s × 4.2 ≈ 0.9m），
+    // 说明跨步层没有被移动速度加成。
+    expect(dMovingActive).toBeGreaterThan(dStillActive);
+    expect(dMovingActive - dStillActive).toBeLessThan(0.6);
 
     // settle 停顿：保留一点余速（新行为 v7a#3），移动方向仍有少量推进，但远小于常速叠加。
     // 同步推进到 settle 阶段再测量（两者始终同帧），避免把 recovery（仍锁死）的帧算进去、
@@ -324,8 +330,10 @@ describe('攻击节奏与位移解耦', () => {
     }
     const dStill = Math.abs(still.character.position.z - stillZ0);
     const dMoving = Math.abs(moving.character.position.z - movingZ0);
+    // 整段（含 settle）多走的距离 ≈ 三成移速 × 0.62s ≈ 0.9m；
+    // 常速跑完这段是 2.6m，所以「攻击中被压到三成」确实生效。
     expect(dMoving - dStill).toBeGreaterThan(0);
-    expect(dMoving - dStill).toBeLessThan(0.5);
+    expect(dMoving - dStill).toBeLessThan(1.2);
   });
 
   it('调高 attackMoveScale 后攻击期间可继续移动（配置生效）', () => {
@@ -339,6 +347,6 @@ describe('攻击节奏与位移解耦', () => {
       run(locked, 1, intent({ moveX: 1 }));
       run(loose, 1, intent({ moveX: 1 }));
     }
-    expect(loose.character.position.x).toBeGreaterThan(locked.character.position.x + 0.3);
+    expect(loose.character.position.x).toBeGreaterThan(locked.character.position.x + 0.2);
   });
 });

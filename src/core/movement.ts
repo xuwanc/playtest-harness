@@ -42,6 +42,8 @@ export function resetCharacter(world: World): void {
   c.distance = 0;
   c.coyoteTime = world.config.coyoteTime;
   c.jumpBuffer = 0;
+  world.kick.x = 0;
+  world.kick.z = 0;
   resetCombat(world);
 }
 
@@ -80,6 +82,8 @@ export function warpTo(world: World, x: number, z: number): void {
   c.distance = 0;
   c.coyoteTime = cfg.coyoteTime;
   c.jumpBuffer = 0;
+  world.kick.x = 0;
+  world.kick.z = 0;
   resetCombat(world);
   resetLink(world);
   resetDash(world);
@@ -138,38 +142,43 @@ export function movementUpdate(world: World, dt: number, intents: Intents): void
   if ((ix > 0 && p.x >= b.maxX - EPS) || (ix < 0 && p.x <= b.minX + EPS)) ix = 0;
   if ((iz > 0 && p.z >= b.maxZ - EPS) || (iz < 0 && p.z <= b.minZ + EPS)) iz = 0;
 
-  // 2) 水平加速 / 摩擦：指数趋近，与帧率无关
-  //    攻击与停顿期间自主移动被锁定（attackMoveScale，默认 0），
-  //    水平位移只由 combat 写入的 lunge 决定 → 移动中攻击不会额外前冲；
-  //    但收势停顿（settle）保留一部分移速（settleMoveScale），不再完全锁死。
+  // 2) 目标速度：把各状态的「让位比例」乘进武器倍率。
+  //    v9s.21 起这里只算目标速度，不再直接写 v —— 真正的减速由第 3 步统一做。
   const inAttack = world.combat.phase !== 'idle';
-  // v9a：派生招期间同样接管水平速度：位移严格由 links 写入的 impulse 决定，不被方向键叠加。
+  // v9a：派生招期间位移严格由 links 写入的 impulse 决定，不被方向键叠加。
   const linking = world.playerLink.phase !== 'idle';
-  // 翻滚期间同样接管水平速度：位移严格由 dash 写入的 impulse 决定，不被方向键叠加。
-  const inAction = inAttack || world.dash.phase === 'active' || linking;
+  // 翻滚期间同样：位移严格由 dash 写入的 impulse 决定。
+  const dashActive = world.dash.phase === 'active';
+  const inAction = inAttack || dashActive || linking;
   c.sprinting = !inAction && intents.sprintHeld && ilen > EPS;
   const profile = cfg.combat.weapons[world.combat.weapon];
   let weaponMul = profile ? profile.moveMultiplier : 1;
-  if (inAction) {
-    // settle 是「前移后的停顿」，保留一点余速让衔接更顺；其余攻击阶段仍由 lunge 接管
-    weaponMul *= world.combat.phase === 'settle' ? cfg.combat.settleMoveScale : cfg.combat.attackMoveScale;
+  if (dashActive || linking) {
+    // 位移完全交给各自模块的 impulse；方向键不参与（也避免翻滚跑超 rollDistance）
+    weaponMul = 0;
+  } else if (inAttack) {
+    // 攻击可以边走边打（attackMoveScale），但真正把身体推出去的那段（active）
+    // 要让位给跨步层 —— 否则「跑速 + 跨步」在总速度上叠加，到点那一下特别冲。
+    weaponMul *= world.combat.phase === 'active'
+      ? cfg.combat.lungeMoveScale
+      : world.combat.phase === 'settle' ? cfg.combat.settleMoveScale : cfg.combat.attackMoveScale;
   } else if (world.combat.charging) {
     // 弓蓄力减速
     weaponMul *= cfg.combat.bow.chargeMoveMultiplier;
   } else if (world.abilities.channeling) {
-    // 法杖引导奥术飞弹：不进入近战状态机，因此「可移动引导」；按配置轻微减速（默认 0.85）
+    // 法杖引导奥术飞弹：不进入近战状态机，因此「可移动引导」；按配置轻微减速
     // v9s.19：引导减速由技能自己写入（不再硬编码 abilities.arcane）
     weaponMul *= Math.max(0, Math.min(1, world.abilities.channelMoveScale));
   }
   const speed = cfg.moveSpeed * (c.sprinting ? cfg.sprintMultiplier : 1) * weaponMul;
-  if (inAction) {
-    // 攻击 / 停顿期间直接接管水平速度，不累积惯性：
-    // attackMoveScale = 0 时 v 恒为 0，水平位移严格等于 combat 写入的 lunge，
-    // 与「是否正在移动」完全无关 → 移动中攻击不会额外前冲。
-    v.x = ix * speed;
-    v.z = iz * speed;
-  } else {
-    const rate = ilen > EPS ? cfg.acceleration : cfg.friction;
+
+  // 3) 统一趋近：只改目标速度与速率，永远不做赋值。
+  //    v9s.21：旧版在 inAction 时写 `v = ix * speed`，attackMoveScale = 0 就等于
+  //    「一帧从 4.2 掉到 0」；技能结束时 v 也是 0，只能从零重新加速 ——
+  //    用户说的「放技能速度立马掉」「放完像重新起步」都是这一句造成的。
+  //    现在 v 始终连续：进技能按 skillDecel 衰减，出技能直接接回 acceleration。
+  {
+    const rate = inAction ? cfg.skillDecel : (ilen > EPS ? cfg.acceleration : cfg.friction);
     const k = 1 - Math.exp(-rate * dt);
     v.x += (ix * speed - v.x) * k;
     v.z += (iz * speed - v.z) * k;
@@ -201,13 +210,28 @@ export function movementUpdate(world: World, dt: number, intents: Intents): void
     v.z = 0;
     world.impulse.x = 0;
     world.impulse.z = 0;
+    world.kick.x = 0;
+    world.kick.z = 0;
   }
 
-  // 4) 水平积分：叠加战斗模块写入的前向位移（impulse 为速度量纲）+ 受击击退速度（连续后退，非瞬移）
+  // 4) 水平积分：三层相加
+  //    v（移动层）+ impulse（技能位移层）+ kick（一次性脉冲层）+ 受击击退。
+  //    kick 独立于 v 的意义：射击后坐力往前顶的时候，玩家按着前进键仍然在前进，
+  //    只是净速度短暂变小；如果直接改 v，后坐力会把移动输入顶掉，读起来像「卡一下」。
   const prevX = p.x;
   const prevZ = p.z;
-  p.x += (v.x + world.impulse.x + world.playerHurt.knockX) * dt;
-  p.z += (v.z + world.impulse.z + world.playerHurt.knockZ) * dt;
+  p.x += (v.x + world.impulse.x + world.kick.x + world.playerHurt.knockX) * dt;
+  p.z += (v.z + world.impulse.z + world.kick.z + world.playerHurt.knockZ) * dt;
+
+  // 4.5) 脉冲层自然衰减：不需要「结束时刻」，指数衰减到 0 即可。
+  //      用弓的后坐力参数（当前唯一的 kick 来源）；换成别的来源时再抽公共项。
+  if (world.kick.x !== 0 || world.kick.z !== 0) {
+    const kd = Math.exp(-Math.max(0, cfg.combat.bow.recoilDecay) * dt);
+    world.kick.x *= kd;
+    world.kick.z *= kd;
+    if (Math.abs(world.kick.x) < 1e-4) world.kick.x = 0;
+    if (Math.abs(world.kick.z) < 1e-4) world.kick.z = 0;
+  }
 
   // 5) 水平碰撞（矮台阶会被跳过，交给第 7 步抬升）
   const wasBlocked = resolveHorizontal(world.boxes, p, cfg.characterRadius, cfg.characterHeight, cfg.stepHeight);
@@ -285,7 +309,11 @@ export function movementUpdate(world: World, dt: number, intents: Intents): void
   //     但不过度压低频率（旧 0.9 系数把高速步频压得太狠，用户反馈「降得有点多」）。
   const frameDist = lengthXZ(p.x - prevX, p.z - prevZ);
   c.distance += frameDist; // 累计里程保留（诊断/统计用），不再参与相位计算
-  const stepSpeed = lengthXZ(v.x, v.z);
+  // v9s.21：步幅改为按「实际位移速度」算，而不是只看 `v`。
+  // 攻击 / 翻滚期间位移来自 impulse 与 kick，`v` 很小（0.3× 甚至 0），
+  // 若仍用 `v` 反推步幅，stride 会被压到最小值而 frameDist 却很大 ——
+  // 相位一帧推进一两弧度，腿看着在疯转。用实际位移速度，跨步时 stride 同步放大。
+  const stepSpeed = frameDist / Math.max(dt, EPS);
   const u = Math.min(cfg.strideSpeedCap, stepSpeed / Math.max(cfg.moveSpeed, EPS));
   const stride = Math.max(cfg.strideLength * (1 + u * cfg.strideSpeedGain), EPS);
   // v9e：把步幅写进状态，表现层据此反推脚前伸距离（stride × reachRatio）→ 支撑脚零滑步。

@@ -131,6 +131,14 @@ function startBowRelease(world: World, intents: Intents, charge: number): void {
   // 表现层不再用 attackId 自己「放一支动画箭」，只按 world.arrows 渲染。
   fireArrow(world, charge, world.combat.attackFacing);
   emit(world, 'charge-release', charge);
+
+  // v9s.21：射击反冲。写进独立的 kick 层而不是改 v —— 玩家按住前进时，
+  // 净速度 = 移动层 − 后坐力，仍然在往前走，只是短暂「顶了一下」。
+  const rb = world.config.combat.bow;
+  if (rb.recoilSpeed > 0) {
+    world.kick.x -= Math.sin(world.combat.attackFacing) * rb.recoilSpeed;
+    world.kick.z -= Math.cos(world.combat.attackFacing) * rb.recoilSpeed;
+  }
 }
 
 /**
@@ -298,17 +306,30 @@ export function combatUpdate(world: World, dt: number, intents: Intents): void {
     }
   }
 
-  // 5) 前向位移：只在 active 阶段，按 位移/时长 换算成附加速度
-  //    settle / recovery / windup 均为 0，保证「前移 → 停顿」的节奏感
+  // 5) 跨步位移：只在 active 阶段，速度按包络从峰值收到 0。
+  //    v9s.21：旧版是 `lunge / active` 的匀速段，末帧一帧归零 —— 速度是方波，
+  //    「到目标位置速度最高、然后硬停」。现在换成 ease-out 包络：
+  //      v(u) = V0 · (1-u)^p，积分到 D  ⇒  V0 = D·(p+1)/T
+  //    起手最快、到点自然收 0，位移仍然精确等于 lunge（面积不变）。
   //    v9a：派生招 active 时 impulse 已由 links 写好（本帧唯一的位移源），这里既不清零也不覆盖。
   const linkingActive = world.playerLink.phase === 'active';
   if (!linkingActive) {
     world.impulse.x = 0;
     world.impulse.z = 0;
     if (c.phase === 'active' && c.timings.active > EPS) {
-      const speed = c.timings.lunge / c.timings.active;
-      world.impulse.x = Math.sin(c.attackFacing) * speed;
-      world.impulse.z = Math.cos(c.attackFacing) * speed;
+      const T = c.timings.active;
+      const D = Math.max(0, c.timings.lunge);
+      const p = Math.max(0.2, cfg.lungeCurve);
+      // 用「本帧应走的位移增量 / dt」当速度，而不是直接采样曲线高度：
+      // 这样离散积分的总位移严格等于 D，不会因为帧率 / 采样端点产生几个百分点的漂移。
+      const s = (t: number) => D * (1 - Math.pow(1 - Math.min(1, Math.max(0, t / T)), p + 1));
+      const t1 = Math.min(T, Math.max(0, c.phaseTimer));
+      const t0 = Math.min(T, Math.max(0, c.phaseTimer - dt));
+      let mag = Math.max(0, s(t1) - s(t0)) / Math.max(dt, 1e-4);
+      // 安全阀：只挡异常配置，正常包络峰值不会触顶
+      mag = Math.min(mag, Math.max(0, cfg.lungeMaxSpeed));
+      world.impulse.x = Math.sin(c.attackFacing) * mag;
+      world.impulse.z = Math.cos(c.attackFacing) * mag;
     }
   }
 }

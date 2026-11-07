@@ -90,6 +90,7 @@ export function createDebugPanel(
   mv.add(cfg, 'sprintMultiplier', 1, 3, 0.05).name('冲刺倍率');
   mv.add(cfg, 'acceleration', 1, 40, 0.5).name('加速度');
   mv.add(cfg, 'friction', 1, 40, 0.5).name('摩擦');
+  mv.add(cfg, 'skillDecel', 2, 40, 0.5).name('进入技能时的减速速率');
   mv.add(cfg, 'gravity', 5, 60, 0.5).name('重力');
   mv.add(cfg, 'jumpSpeed', 2, 16, 0.2).name('起跳速度');
   mv.add(cfg, 'stepHeight', 0, 1.2, 0.01).name('自动爬台阶阈值');
@@ -250,6 +251,9 @@ export function createDebugPanel(
   fight.add(cb, 'comboWindow', 0.1, 2, 0.05).name('连击窗口 (s)');
   fight.add(cb, 'settle', 0, 0.8, 0.01).name('段间停顿 (s)');
   fight.add(cb, 'attackMoveScale', 0, 1, 0.01).name('攻击时移动比例');
+  fight.add(cb, 'lungeMoveScale', 0, 0.4, 0.01).name('跨步时移动比例');
+  fight.add(cb, 'lungeCurve', 0.2, 4, 0.1).name('跨步曲线指数 (大=更冲)');
+  fight.add(cb, 'lungeMaxSpeed', 4, 30, 0.5).name('跨步速度上限 (m/s)');
   fight.add(cb, 'settleMoveScale', 0, 1, 0.01).name('段间停顿移动比例');
   fight.add(cb, 'cancelWindow', 0, 1, 0.01).name('取消窗口 (s)');
   fight.add(cb, 'minLungeScale', 0, 2, 0.05).name('有目标前冲最小比例');
@@ -257,6 +261,8 @@ export function createDebugPanel(
   fight.add(cb.bow, 'maxChargeTime', 0.2, 2, 0.05).name('满蓄力时间 (s)');
   fight.add(cb.bow, 'minChargeToFire', 0, 1, 0.02).name('最小可发射蓄力');
   fight.add(cb.bow, 'autoFire').name('蓄满自动放箭 (按住连射)');
+  fight.add(cb.bow, 'recoilSpeed', 0, 5, 0.1).name('射击后坐力 (m/s)');
+  fight.add(cb.bow, 'recoilDecay', 1, 30, 0.5).name('后坐力衰减 (1/s)');
   fight.add(cb.bow.trajectory, 'gravity', 0, 24, 0.5).name('箭矢重力 (m/s²)');
   fight.add(cb.bow.trajectory, 'speedMax', 8, 32, 0.5).name('满蓄初速 (m/s)');
   fight.add(cb.bow.trajectory, 'homingRange', 0, 30, 1).name('自动瞄准距离 (m)');

@@ -64,7 +64,9 @@ describe('程序化朝向：面朝向 / 身体朝向 / 移动方向分离', () =
     expect(Math.abs(wrapAngle(moveDir - HALF_PI))).toBeLessThan(0.1);
     // 起手时摇杆改指 +Z，攻击朝向锁定 +Z，但自主移动被锁定
     run(w, 1, intent({ moveX: 0, moveZ: 1, attackPressed: true }));
-    run(w, 2, intent({ moveX: 0, moveZ: 1 }));
+    // v9s.21：攻击期间保留三成移速，摇杆会被真正消费 —— 要把移动方向拉回 +X
+    // 才能验证「移动方向与身体朝向分离」（否则 moveYaw 会跟着输入转向 +Z）。
+    run(w, 2, intent({ moveX: 1, moveZ: 0 }));
     expect(Math.abs(wrapAngle(w.character.facing - 0))).toBeLessThan(1e-6);
     // 身体还在从 +X 平滑转向 +Z（未瞬移）
     expect(w.character.bodyYaw).toBeGreaterThan(0.15);

@@ -146,6 +146,24 @@ export type CombatConfig = {
   settle: number;
   /** 攻击期间（windup/active/recovery）保留的自主移动速度比例（0 = 完全锁定，位移只由 lunge 决定；1 = 正常速度） */
   attackMoveScale: number;
+  /**
+   * v9s.21：跨步（active）期间再压一层的移动比例。
+   * 攻击可以边走边打（attackMoveScale），但真正把身体推出去的那 0.1s 里，
+   * 自主移动要让位给跨步层 —— 否则「跑动速度 + 跨步速度」会在总速度上叠加，
+   * 到目标位置那一下特别冲。默认 0.08，只留一点方向修正的余量。
+   */
+  lungeMoveScale: number;
+  /**
+   * v9s.21：跨步速度包络的指数。位移 D = V0·T/(curve+1)，反解 V0。
+   * 1 = 二次位移曲线（速度线性收到 0）；越大越「起手猛、收得急」。
+   */
+  lungeCurve: number;
+  /**
+   * v9s.21：跨步层速度硬上限（米/秒），只作为「参数调崩」的保险阀。
+   * 正常情况下包络峰值不超过它（剑盾三连第 3 段峰值约 14.6），
+   * 真正的「不叠加」靠 lungeMoveScale 让移动层让位 + 末段收到 0。
+   */
+  lungeMaxSpeed: number;
   /** 收势停顿（settle）期间保留的自主移动速度比例：让「攻击后停顿」不再完全锁死，保留一点惯性余速 */
   settleMoveScale: number;
   /** 攻击尚未彻底结束时（recovery 阶段）可提前取消、接下一段的进度比例（0.45 = recovery 过 45% 即可衔接），让连击节奏更连贯 */
@@ -165,6 +183,13 @@ export type CombatConfig = {
      * 手放松手仍可随时提前放出（蓄力 ≥ minChargeToFire 时）。
      */
     autoFire: boolean;
+    /**
+     * v9s.21：射击后坐力（反向冲量层）。它是独立的衰减速度层，不经过 `v` 的目标速度，
+     * 所以「往前走 + 后坐」= 4.2 − 1.4，仍在前进，不会把移动输入顶掉。
+     * recoilSpeed 是瞬时叠加的速度（m/s），recoilDecay 是每秒的指数衰减率。
+     */
+    recoilSpeed: number;
+    recoilDecay: number;
     release: CastProfile;
     /**
      * v9s.17：弹道参数。箭由 Core 自己积分（不依赖表现层计时），
@@ -1161,6 +1186,13 @@ export type CoreConfig = {
   sprintMultiplier: number;
   acceleration: number;
   friction: number;
+  /**
+   * v9s.21：进入「技能接管」时的减速速率（1/s）。
+   * 旧版在攻击 / 引导开始时把 `v` 直接赋值成 `输入 × 减速后的速度`，
+   * 一帧内从 4.2 掉到 0；现在所有状态都只改「目标速度」，
+   * 用这个速率指数趋近 —— 时间常数 1/14 ≈ 0.07s，读起来是「压了一下」而不是「被截断」。
+   */
+  skillDecel: number;
   gravity: number;
   jumpSpeed: number;
   stepHeight: number;
@@ -1985,8 +2017,13 @@ export type World = {
    * 每个实例带 kind + 自己那份参数；dispatch 只看这张表，不再硬编码「法杖 = 奥术」。
    */
   skills: SkillRuntime[];
-  /** 本帧外部附加速度（m/s），由战斗模块写入、移动模块消费 */
+  /** 本帧外部附加速度（m/s），由战斗模块写入、移动模块消费。v9s.21 起语义收窄为「技能位移层」 */
   impulse: { x: number; z: number };
+  /**
+   * v9s.21：一次性脉冲层（后坐力 / 击退类），与 impulse 分开是因为它需要**自己衰减**：
+   * 每帧 `kick *= exp(-decay·dt)`，不需要任何「结束时刻」，也不会被别的模块重写。
+   */
+  kick: { x: number; z: number };
   /** 当前智能锁定的目标（每帧重算，攻击起手时读取） */
   targeting: TargetState;
   /** v9s：静止盯视触发的原地转身状态（plain data，随快照回放） */

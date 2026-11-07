@@ -108,7 +108,10 @@ describe('大剑击退与受击僵直', () => {
     run(w, 50, intent());
     const d = Math.hypot(w.character.position.x - s.position.x, w.character.position.z - s.position.z);
     expect(d).toBeGreaterThanOrEqual(w.config.targeting.idealRange - 0.15);
-    expect(JSON.stringify(w.character.position)).toBe(playerBefore);
+    // v9s.21：攻击期间保留三成移速，起手那一帧的摇杆会让玩家前移几毫米；
+    // 这里要验证的是「击退只作用于敌人」——玩家绝不会被推向后方。
+    expect(w.character.position.z).toBeLessThanOrEqual(JSON.parse(playerBefore).z + 1e-6);
+    expect(w.character.position.z).toBeGreaterThan(JSON.parse(playerBefore).z - 0.02);
   });
 
   it('受击僵直：假人在 hurt 期间不再产生主动移动（清掉命中前惯性 + 击退速度后位置不变）', () => {
