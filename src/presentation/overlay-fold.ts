@@ -16,7 +16,7 @@
  * 版本说明在 README；那块默认收起、8s 自动收回的 9000 字 changelog 判定为不必要。
  */
 
-export type PanelKey = 'hud' | 'motion' | 'debug';
+export type PanelKey = 'lab' | 'hud' | 'motion' | 'debug';
 
 export type PanelHooks = {
   /** 手感面板（motion-debug）：同步内部 enabled，决定是否绘制曲线 */
@@ -36,19 +36,28 @@ export type OverlayFold = {
   isOpen(key: PanelKey): boolean;
 };
 
-const KEYS: PanelKey[] = ['hud', 'motion', 'debug'];
+const KEYS: PanelKey[] = ['lab', 'hud', 'motion', 'debug'];
 const LABELS: Record<PanelKey, { short: string; full: string }> = {
+  lab: { short: '工位', full: '测试工位' },
   hud: { short: '状态', full: '状态读数' },
   motion: { short: '手感', full: '手感调试面板' },
   debug: { short: '调试', full: '调试面板' },
 };
 
+/** 胶囊 id 与面板 id 并不总是同名（motion → motiondbg / debug → debug-panel），集中映射一次 */
+const PANEL_IDS: Record<PanelKey, { toggle: string; panel: string }> = {
+  lab: { toggle: 'lab-toggle', panel: 'lab-panel' },
+  hud: { toggle: 'hud-toggle', panel: 'hud' },
+  motion: { toggle: 'motiondbg-toggle', panel: 'motiondbg' },
+  debug: { toggle: 'debug-toggle', panel: 'debug-panel' },
+};
+
 export function createPanelRow(hudEl: HTMLElement): OverlayFold {
   const toggles = Object.fromEntries(
-    KEYS.map((k) => [k, document.getElementById(`${k === 'motion' ? 'motiondbg' : k === 'debug' ? 'debug' : 'hud'}-toggle`)]),
+    KEYS.map((k) => [k, document.getElementById(PANEL_IDS[k].toggle)]),
   ) as Record<PanelKey, HTMLElement | null>;
   const panels = Object.fromEntries(
-    KEYS.map((k) => [k, document.getElementById(k === 'motion' ? 'motiondbg' : k === 'debug' ? 'debug-panel' : 'hud')]),
+    KEYS.map((k) => [k, document.getElementById(PANEL_IDS[k].panel)]),
   ) as Record<PanelKey, HTMLElement | null>;
 
   let hooks: PanelHooks = {};

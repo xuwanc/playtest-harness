@@ -15,6 +15,8 @@ export type CameraRig = {
   camera: THREE.PerspectiveCamera;
   /** 2.5D 斜俯视：固定 pitch/yaw，只平移跟随，不随角色旋转；叠加智能构图意图与用户缩放。 */
   update(x: number, y: number, z: number, dt: number, intent?: CameraIntent): void;
+  /** v9s.15：把跟随目标瞬移到指定点（测试工位传送用），不做跨场地平滑滑行 */
+  snap(x: number, y: number, z: number): void;
   resize(aspect: number): void;
   getGroundBasis(): GroundBasis;
   /** 设置用户缩放目标倍率（1 = 基础距离）；实际倍率按 zoomCfg.smoothing 指数平滑跟随 */
@@ -95,6 +97,15 @@ export function createCameraRig(
       }
       // 焦点朝威胁质心平移：相机整体平移（视线方向不变），让玩家与敌群都落在画面内
       focus.set(target.x + smart.offsetX, target.y, target.z + smart.offsetZ);
+      camera.position.copy(focus).add(offset);
+      camera.lookAt(focus);
+      camera.updateMatrixWorld();
+    },
+    snap(x, y, z): void {
+      target.set(x, y + 0.6, z);
+      initialized = true;
+      focus.set(target.x + smart.offsetX, target.y, target.z + smart.offsetZ);
+      computeOffset();
       camera.position.copy(focus).add(offset);
       camera.lookAt(focus);
       camera.updateMatrixWorld();

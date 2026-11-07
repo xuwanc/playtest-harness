@@ -1,5 +1,10 @@
 import { overlapsAny, resolveHorizontal, supportHeight } from './collision';
 import { resetCombat } from './combat';
+import { resetAbilities } from './abilities';
+import { resetDash } from './dash';
+import { resetLink } from './links';
+import { resetTurnInPlace } from './turn-in-place';
+import { NEVER_HURT_AT } from './hits';
 import type { EventType, Intents, World } from './types';
 
 const EPS = 1e-6;
@@ -35,6 +40,61 @@ export function resetCharacter(world: World): void {
   c.coyoteTime = world.config.coyoteTime;
   c.jumpBuffer = 0;
   resetCombat(world);
+}
+
+/**
+ * v9s.15 · 传送到任意坐标（测试工位用）。
+ *
+ * 与 resetCharacter 同口径地清掉「跨场地会残留」的玩家侧状态：速度、步态相位、
+ * 攻击 / 连击、派生招窗口、冲刺与闪烁、引导飞弹 / 电环、受击、锁定目标、原地转身。
+ * 假人与世界时间不动 —— 传送只换位置，不重开一局。
+ *
+ * 只写 World，不读时间 / 输入 → 纯状态转移，可快照、可确定性回放。
+ */
+export function warpTo(world: World, x: number, z: number): void {
+  const c = world.character;
+  const cfg = world.config;
+  const sup = supportHeight(
+    world.boxes, x, z, cfg.characterHeight, cfg.characterRadius, cfg.stepHeight,
+    Number.POSITIVE_INFINITY,
+  );
+  c.position.x = x;
+  c.position.y = sup > Number.NEGATIVE_INFINITY ? sup : 0;
+  c.position.z = z;
+  c.velocity.x = 0;
+  c.velocity.y = 0;
+  c.velocity.z = 0;
+  c.facing = 0;
+  c.moveYaw = 0;
+  c.bodyYaw = 0;
+  c.headYaw = 0;
+  c.grounded = true;
+  c.sprinting = false;
+  c.gaitPhase = 0;
+  c.stride = cfg.strideLength;
+  c.distance = 0;
+  c.coyoteTime = cfg.coyoteTime;
+  c.jumpBuffer = 0;
+  resetCombat(world);
+  resetLink(world);
+  resetDash(world);
+  resetAbilities(world);
+  resetTurnInPlace(world);
+  const t = world.targeting;
+  t.targetId = 0;
+  t.targetYaw = 0;
+  t.targetDist = 0;
+  t.hasTarget = false;
+  const h = world.playerHurt;
+  h.type = 'none';
+  h.lastAt = NEVER_HURT_AT;
+  h.timer = 0;
+  h.duration = 0;
+  h.dirX = 0;
+  h.dirZ = 0;
+  h.knockX = 0;
+  h.knockZ = 0;
+  world.events.length = 0;
 }
 
 /**

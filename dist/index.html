@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <link rel="icon" href="data:," />
     <title>3D 玩法实验台 · Playtest Harness</title>
-    <script type="module" crossorigin src="./assets/index-CzG9CjRd.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-DJpH8nkL.css">
+    <script type="module" crossorigin src="./assets/index-CKf0fs3G.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BTUSXDe-.css">
   </head>
   <body>
     <div id="app"></div>
@@ -18,11 +18,13 @@
          旧「操作说明」#hint 判定为不必要已移除：手机有屏幕按钮、按钮带 aria-label，
          完整按键表与版本说明见 README；那块默认收起、8s 自动收回的长文案从未被看到。 -->
     <div id="panel-row" data-ui-region>
+      <button id="lab-toggle" class="fold-pill" data-ui-button type="button" aria-expanded="false" aria-controls="lab-panel" aria-label="展开测试工位">工位 ▸</button>
       <button id="hud-toggle" class="fold-pill" data-ui-button type="button" aria-expanded="false" aria-controls="hud" aria-label="展开状态读数">状态 ▸</button>
       <button id="motiondbg-toggle" class="fold-pill" data-ui-button type="button" aria-expanded="false" aria-controls="motiondbg" aria-label="展开手感调试面板">手感 ▸</button>
       <button id="debug-toggle" class="fold-pill" data-ui-button type="button" aria-expanded="false" aria-controls="debug-panel" aria-label="展开调试面板">调试 ▸</button>
     </div>
     <div id="panel-stack" data-ui-region>
+      <div id="lab-panel" class="panel"></div>
       <div id="hud" class="panel is-compact" aria-live="off"></div>
       <div id="motiondbg" class="panel is-off"></div>
       <div id="debug-panel" class="panel"></div>

@@ -239,6 +239,27 @@ function desiredDirection(
   } else if (dist > EPS) {
     facing = Math.atan2(nx, nz);
   }
+
+  // v9s.15 · 牵引半径：追击型假人离 home 超过 leashRadius 时，方向按超出量平滑改回 home。
+  // 边界处按 over 线性混合（over=1 时完全回家），不会在「追 / 回」之间来回抖；
+  // leashRadius = 0 精确回到旧行为（可自由追遍全场）。
+  if (cfg.leashRadius > EPS && s.mode !== 'wander' && s.mode !== 'idle') {
+    const hx = s.position.x - s.homeX;
+    const hz = s.position.z - s.homeZ;
+    const hd = Math.hypot(hx, hz);
+    if (hd > cfg.leashRadius) {
+      const over = Math.min(1, (hd - cfg.leashRadius) / Math.max(cfg.leashRadius * 0.5, 0.5));
+      const bx = -hx / hd;
+      const bz = -hz / hd;
+      x = x * (1 - over) + bx * over;
+      z = z * (1 - over) + bz * over;
+      const len = Math.hypot(x, z);
+      if (len > EPS) {
+        x /= len;
+        z /= len;
+      }
+    }
+  }
   return { x, z, facing };
 }
 

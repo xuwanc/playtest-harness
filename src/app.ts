@@ -8,6 +8,7 @@ import type { Intents, WeaponId } from './core';
 import { CORE_CONFIG, SCENE_CONFIG, VIEW_CONFIG } from './config';
 import { createDebugPanel } from './presentation/debug-panel';
 import type { DebugState } from './presentation/debug-panel';
+import { createLabPanel } from './presentation/lab-panel';
 import { createMotionDebug } from './presentation/motion-debug';
 import { createHud } from './presentation/hud';
 import { createPanelRow } from './presentation/overlay-fold';
@@ -50,7 +51,7 @@ export function startApp(): void {
 
   // 组装层是唯一同时认识 Core 与 Web 的地方；换平台时只重写这一层。
   const world = createWorld(CORE_CONFIG, SCENE_CONFIG);
-  const view = createSceneView(container, world, VIEW_CONFIG);
+  const view = createSceneView(container, world, VIEW_CONFIG, SCENE_CONFIG.stations);
   const clock = createClock(world);
   const hud = createHud(hudEl);
   // v9r：状态 / 手感 / 调试收成一排胶囊，默认全部收起；v9s：点画布不再自动收起，
@@ -95,6 +96,8 @@ export function startApp(): void {
     paused: false,
     showColliders: VIEW_CONFIG.showColliders,
     showGrid: VIEW_CONFIG.showGrid,
+    showLab: VIEW_CONFIG.lab.enabled,
+    showLabLabels: VIEW_CONFIG.lab.showLabels,
   };
 
   // v8e：用户缩放倍率（纯表现层状态，不进 Core / 快照）；游戏复位时归 1
@@ -124,18 +127,32 @@ export function startApp(): void {
   // 点击沿事件必须喂进一个 step 才算消费；暂停 / 低帧率时暂存到下一帧，避免丢输入
   let pendingDummyClick = 0;
 
+  /** v8e：用户缩放归 1（恢复基础镜头距离），调试面板与工位面板共用同一份实现 */
+  const resetZoom = (): void => {
+    userZoom = 1;
+    view.setZoom(1);
+  };
+
   const panel = createDebugPanel(world, VIEW_CONFIG, debug, {
     singleStep: () => clock.singleStep(lastFrame.intents),
     reset: () => {
       userZoom = 1;
       clock.singleStep({ ...EMPTY_INTENTS, resetPressed: true });
     },
-    resetZoom: () => {
-      userZoom = 1;
-      view.setZoom(1);
-    },
+    resetZoom,
     onToggleColliders: (v) => view.setCollidersVisible(v),
     onToggleGrid: (v) => view.setGridVisible(v),
+    onToggleLab: (v) => view.setLabVisible(v),
+    onToggleLabLabels: (v) => view.setLabLabelsVisible(v),
+  });
+
+  // v9s.15：测试工位 —— 点名字直接传送到该工位的落点，相机瞬移不滑行；
+  // 桌面端 [ / ] 循环、\ 召回假人。传送只清玩家侧瞬时状态，不重开一局。
+  const lab = createLabPanel({
+    stations: SCENE_CONFIG.stations ?? [],
+    world,
+    view,
+    onResetZoom: resetZoom,
   });
 
   // v9r：把两个后创建的面板控制钩子交给胶囊行，显隐 / 文案只有这一份状态源
@@ -163,6 +180,13 @@ export function startApp(): void {
     speedSamples: () => motionDebug.samples(),
     // v9n：停步收相 / 侧移偏转 / 双腿姿态读数（验收用手感诊断）
     gaitDebug: () => view.gaitDebug(),
+    // v9s.15：测试工位 —— 自动化验收可直接 goto 逐个工位截图 / 取状态
+    lab: {
+      stations: SCENE_CONFIG.stations ?? [],
+      goto: (id: string | number) => lab.goto(id),
+      current: () => lab.current(),
+      recall: () => lab.recall(),
+    },
   };
 
   let last = performance.now();
@@ -207,6 +231,7 @@ export function startApp(): void {
 
     syncWeaponButtons(world.combat.weapon);
     view.render(world, dt);
+    lab.tick();
     motionDebug.update(world, lastFrame, view.getGroundBasis());
     const diag = view.diagnostics();
     hud.update(world, fps, steps, lastFrame, debug, {

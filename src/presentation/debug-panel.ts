@@ -7,6 +7,9 @@ export type DebugState = {
   paused: boolean;
   showColliders: boolean;
   showGrid: boolean;
+  /** v9s.15：测试工位地面盘 / 浮动标牌 */
+  showLab: boolean;
+  showLabLabels: boolean;
 };
 
 export type DebugPanel = {
@@ -22,6 +25,8 @@ export type DebugActions = {
   resetZoom(): void;
   onToggleColliders(v: boolean): void;
   onToggleGrid(v: boolean): void;
+  onToggleLab(v: boolean): void;
+  onToggleLabLabels(v: boolean): void;
 };
 
 /**
@@ -59,6 +64,8 @@ export function createDebugPanel(
   sim.add({ reset: actions.reset }, 'reset').name('复位全部');
   sim.add(state, 'showColliders').name('碰撞盒线框').onChange(actions.onToggleColliders);
   sim.add(state, 'showGrid').name('地面网格').onChange(actions.onToggleGrid);
+  sim.add(state, 'showLab').name('工位地面盘').onChange(actions.onToggleLab);
+  sim.add(state, 'showLabLabels').name('工位标牌').onChange(actions.onToggleLabLabels);
   const mods = sub(sim, '模块开关');
   mods.add(world.modules, 'movement').name('movement');
   mods.add(world.modules, 'combat').name('combat');
@@ -127,6 +134,8 @@ export function createDebugPanel(
   dummies.add(dm, 'keepDeadZone', 0.1, 2, 0.05).name('保持死区');
   dummies.add(dm, 'attackRange', 0.5, 5, 0.1).name('攻击距离');
   dummies.add(dm, 'attackInterval', 0.3, 5, 0.1).name('攻击间隔 (s)');
+  // 0 = 旧行为（会追着玩家跑遍全场）；>0 = 离 home 超过该半径就逐渐走回工位
+  dummies.add(dm, 'leashRadius', 0, 8, 0.1).name('牵引半径 (0=不限)');
 
   /* ---------------------------------------------------------------- *
    * 3) 步态 / 停步：程序化步态、收相、停步惯性、击退步态、足部 IK、惯性倾斜

@@ -21,13 +21,13 @@
     "spawn": {
       "x": 0,
       "y": 0,
-      "z": 8
+      "z": 0
     },
     "worldBounds": {
-      "minX": -13.5,
-      "maxX": 13.5,
-      "minZ": -13.5,
-      "maxZ": 13.5
+      "minX": -15.5,
+      "maxX": 15.5,
+      "minZ": -15.5,
+      "maxZ": 15.5
     },
     "orientation": {
       "bodyTurnRate": 7,
@@ -413,31 +413,24 @@
       "saturation": 2.6
     },
     "dummies": {
-      "count": 4,
+      "count": 6,
       "spawn": [
-        {
-          "x": -6,
-          "z": 5
-        },
-        {
-          "x": -2,
-          "z": 5
-        },
-        {
-          "x": 2,
-          "z": 5
-        },
-        {
-          "x": 6,
-          "z": 5
-        }
+        { "x": -11.1, "z": -8.35 },
+        { "x": -9.5, "z": -8.35 },
+        { "x": -7.9, "z": -8.35 },
+        { "x": 0, "z": -10.2 },
+        { "x": -9.5, "z": 0 },
+        { "x": -9.5, "z": 7.2 }
       ],
       "initialModes": [
-        "wander",
-        "follow",
+        "idle",
         "keep-distance",
-        "attack"
+        "attack",
+        "attack",
+        "follow",
+        "idle"
       ],
+      "leashRadius": 2.4,
       "radius": 0.3,
       "height": 1.2,
       "moveSpeed": 2.6,
@@ -457,86 +450,54 @@
   },
   "scene": {
     "ground": {
-      "size": 28,
+      "size": 32,
       "thickness": 0.4
     },
     "steps": [
-      {
-        "id": "step-025",
-        "x": -7.5,
-        "z": 2,
-        "width": 2.4,
-        "depth": 2.4,
-        "height": 0.25
-      },
-      {
-        "id": "step-040",
-        "x": -4.5,
-        "z": 2,
-        "width": 2.4,
-        "depth": 2.4,
-        "height": 0.4
-      },
-      {
-        "id": "step-060",
-        "x": -1.5,
-        "z": 2,
-        "width": 2.4,
-        "depth": 2.4,
-        "height": 0.6
-      },
-      {
-        "id": "step-090",
-        "x": 1.5,
-        "z": 2,
-        "width": 2.4,
-        "depth": 2.4,
-        "height": 0.9
-      },
-      {
-        "id": "step-120",
-        "x": 4.5,
-        "z": 2,
-        "width": 2.4,
-        "depth": 2.4,
-        "height": 1.2
-      }
+      { "id": "stair-1", "x": 6.6, "z": -5.6, "width": 2.4, "depth": 0.9, "height": 0.2 },
+      { "id": "stair-2", "x": 6.6, "z": -6.5, "width": 2.4, "depth": 0.9, "height": 0.4 },
+      { "id": "stair-3", "x": 6.6, "z": -7.4, "width": 2.4, "depth": 0.9, "height": 0.6 },
+      { "id": "stair-4", "x": 6.6, "z": -8.3, "width": 2.4, "depth": 0.9, "height": 0.8 },
+      { "id": "plateau", "x": 6.6, "z": -9.6, "width": 2.4, "depth": 1.6, "height": 0.8 },
+      { "id": "block-060", "x": 11.4, "z": -6.0, "width": 1.4, "depth": 1.4, "height": 0.6 },
+      { "id": "block-090", "x": 11.4, "z": -7.9, "width": 1.4, "depth": 1.4, "height": 0.9 },
+      { "id": "block-120", "x": 11.4, "z": -9.8, "width": 1.4, "depth": 1.4, "height": 1.2 }
     ],
     "doorways": [
       {
-        "id": "door-wide",
-        "x": -3,
-        "z": -3,
+        "id": "gate-wide",
+        "x": 6.6,
+        "z": -4.3,
         "openingWidth": 2.4,
-        "openingHeight": 1.7,
-        "wallThickness": 0.6,
-        "wallSpan": 3.2,
-        "wallHeight": 2.4
+        "openingHeight": 1.85,
+        "wallThickness": 0.5,
+        "wallSpan": 1.1,
+        "wallHeight": 2
       },
       {
-        "id": "door-narrow",
-        "x": 4,
-        "z": -3,
+        "id": "gate-narrow",
+        "x": 11.4,
+        "z": -4.3,
         "openingWidth": 0.5,
-        "openingHeight": 1.7,
-        "wallThickness": 0.6,
-        "wallSpan": 2.4,
-        "wallHeight": 2.4
+        "openingHeight": 1.85,
+        "wallThickness": 0.5,
+        "wallSpan": 1.1,
+        "wallHeight": 2
       }
     ],
     "obstacles": [
       {
-        "id": "wall-a",
-        "x": 7.5,
-        "z": 1,
-        "width": 3.5,
-        "depth": 0.6,
-        "height": 2
+        "id": "crate-hub",
+        "x": 2.5,
+        "z": -2.5,
+        "width": 1.1,
+        "depth": 1.1,
+        "height": 0.8
       },
       {
-        "id": "pillar-a",
-        "x": -8,
-        "z": -7,
+        "id": "pillar-sw",
+        "x": -14.3,
+        "z": 12.8,
         "width": 1.2,
         "depth": 1.2,
         "height": 2.2
@@ -544,11 +505,118 @@
     ],
     "grid": {
       "cellSize": 0.5,
-      "minX": -14,
-      "maxX": 14,
-      "minZ": -14,
-      "maxZ": 14
-    }
+      "minX": -16,
+      "maxX": 16,
+      "minZ": -16,
+      "maxZ": 16
+    },
+    "stations": [
+      {
+        "id": "hub",
+        "index": 1,
+        "name": "中央 8 向",
+        "hint": "推杆走 8 个方向 · 松手看停步收相 / 转身踏步",
+        "shape": "circle",
+        "x": 0,
+        "z": 0,
+        "radius": 3.6,
+        "spawnX": 0,
+        "spawnZ": 0,
+        "labelX": 0,
+        "labelZ": -3.1,
+        "color": "#8fe7ff"
+      },
+      {
+        "id": "rings",
+        "index": 2,
+        "name": "环状态色阶",
+        "hint": "同距三假人：中立蓝 / 戒备黄 / 敌对红 · 点选看 3/4 环",
+        "shape": "circle",
+        "x": -9.5,
+        "z": -8.2,
+        "radius": 3.4,
+        "spawnX": -9.5,
+        "spawnZ": -5.2,
+        "labelX": -9.5,
+        "labelZ": -10.9,
+        "color": "#ffc85a"
+      },
+      {
+        "id": "windup",
+        "index": 3,
+        "name": "起手预警",
+        "hint": "走进 1.6m：脚下红弧填满 = 命中帧",
+        "shape": "circle",
+        "x": 0,
+        "z": -10,
+        "radius": 3.2,
+        "spawnX": 0,
+        "spawnZ": -7,
+        "labelX": 0,
+        "labelZ": -12.6,
+        "color": "#ff5a4a"
+      },
+      {
+        "id": "terrain",
+        "index": 4,
+        "name": "地形 / 门洞",
+        "hint": "宽门 2.4m / 窄门 0.5m · 0.2m 台阶可走，0.6/0.9/1.2m 要跳",
+        "shape": "square",
+        "x": 8.9,
+        "z": -7.4,
+        "radius": 5.2,
+        "spawnX": 8.9,
+        "spawnZ": -2.8,
+        "labelX": 8.9,
+        "labelZ": -11.9,
+        "color": "#7fb8d8"
+      },
+      {
+        "id": "meter",
+        "index": 5,
+        "name": "进度弧",
+        "hint": "弓长按 = 黄弧 · 法杖技2 = 紫弧 · 冲刺后 = 青弧冷却",
+        "shape": "circle",
+        "x": -9.5,
+        "z": 8.6,
+        "radius": 3.2,
+        "spawnX": -9.5,
+        "spawnZ": 11.4,
+        "labelX": -9.5,
+        "labelZ": 9.9,
+        "color": "#b48cff"
+      },
+      {
+        "id": "dash",
+        "index": 6,
+        "name": "冲刺标尺",
+        "hint": "沿刻度跑：翻滚 3.2m / 闪现 5m，看落点差多少",
+        "shape": "square",
+        "x": 9.8,
+        "z": 8.2,
+        "radius": 5.2,
+        "spawnX": 9.8,
+        "spawnZ": 12.8,
+        "labelX": 7.0,
+        "labelZ": 4.2,
+        "color": "#bfe8ff"
+      },
+      {
+        "id": "gait",
+        "index": 7,
+        "name": "侧后方步态",
+        "hint": "面向假人贴到 1.2m，沿引线按 90 / 135 / 180 走",
+        "shape": "circle",
+        "x": -9.5,
+        "z": 0,
+        "radius": 3.2,
+        "spawnX": -9.5,
+        "spawnZ": 2.6,
+        "labelX": -9.5,
+        "labelZ": -2.5,
+        "color": "#6fc9a0"
+      }
+    ]
   },
   "view": {
     "camera": {
@@ -781,6 +849,12 @@
       "areaOpacity": 0.5,
       "landingOpacity": 0.55,
       "areaExpandSec": 0.22
+    },
+    "lab": {
+      "enabled": true,
+      "showLabels": true,
+      "padOpacity": 0.55,
+      "labelTextHeight": 0.82
     },
     "colors": {
       "ground": "#2b3440",

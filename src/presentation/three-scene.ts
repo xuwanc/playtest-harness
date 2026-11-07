@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import type { GroundBasis } from '../adapters/input';
-import type { Box, ViewConfig, World } from '../core';
+import type { Box, StationSpec, ViewConfig, World } from '../core';
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
+import { createLabLayer } from './lab-scene';
 import {
   areaOpen, createArcMeter, createAreaRing, createGroundRing, dummyWindupWarning, fadeTowards,
   ringGroundHeight,
@@ -71,6 +72,12 @@ export type SceneView = {
       zoom: number;
     };
   };
+  /** v9s.15：整层测试工位标识（地面盘 + 标牌）显隐，纯表现开关 */
+  setLabVisible(v: boolean): void;
+  /** v9s.15：只关浮动标牌，保留地面盘 */
+  setLabLabelsVisible(v: boolean): void;
+  /** v9s.15：传送后把相机跟随目标瞬移过去，避免跨场地滑行 */
+  snapCamera(x: number, y: number, z: number): void;
   dispose(): void;
 };
 
@@ -89,7 +96,12 @@ function colorFor(kind: Box['kind'], view: ViewConfig): string {
  * Three.js 薄实现。渲染层只消费 World 数据，不反向写入 Core。
  * 换 Babylon / Unity 时，整体替换本文件即可，Core 与输入层零改动。
  */
-export function createSceneView(container: HTMLElement, world: World, view: ViewConfig): SceneView {
+export function createSceneView(
+  container: HTMLElement,
+  world: World,
+  view: ViewConfig,
+  stations?: StationSpec[],
+): SceneView {
   const w0 = Math.max(1, container.clientWidth);
   const h0 = Math.max(1, container.clientHeight);
 
@@ -144,6 +156,10 @@ export function createSceneView(container: HTMLElement, world: World, view: View
   grid.position.y = 0.002;
   grid.visible = view.showGrid;
   scene.add(grid);
+
+  // ---- v9s.15 测试工位标识（纯表现：地面盘 / 标牌 / 量具） ----
+  const lab = createLabLayer(stations, view);
+  scene.add(lab.group);
 
   // ---- 体素角色 ----
   // playerRoot 承担「位置 + 身体平滑朝向」；rig 自身只承担翻滚旋转。
@@ -702,6 +718,15 @@ export function createSceneView(container: HTMLElement, world: World, view: View
     setGridVisible(v): void {
       grid.visible = v;
     },
+    setLabVisible(v): void {
+      lab.setVisible(v);
+    },
+    setLabLabelsVisible(v): void {
+      lab.setLabelsVisible(v);
+    },
+    snapCamera(x, y, z): void {
+      cam.snap(x, y, z);
+    },
     setZoom(next): void {
       cam.setZoom(next);
     },
@@ -777,6 +802,7 @@ export function createSceneView(container: HTMLElement, world: World, view: View
     },
     dispose(): void {
       voxel.dispose();
+      lab.dispose();
       for (const rig of dummyRigs) rig.dispose();
       playerRing.dispose();
       for (const ring of dummyRings) ring.dispose();

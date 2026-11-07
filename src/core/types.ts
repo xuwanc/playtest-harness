@@ -65,12 +65,47 @@ export type GridMeta = {
   maxZ: number;
 };
 
+/**
+ * v9s.15 · 测试工位（纯场景元数据，不参与碰撞）。
+ *
+ * 一块场地 = 一个可复现的测试工位：地面盘 + 浮动工位牌 + 一键传送落点。
+ * 只在 `scene.stations` 里描述，由表现层绘制标识、由组装层执行传送；
+ * Core 的碰撞白盒仍只由 steps / doorways / obstacles 生成 —— 工位是「怎么看」，
+ * 不是「怎么撞」，两者分开后改布局不会牵动物理。
+ */
+export type StationShape = 'circle' | 'square';
+
+export type StationSpec = {
+  id: string;
+  /** 面板序号（1 起）与 [ / ] 循环顺序 */
+  index: number;
+  name: string;
+  /** 一句话说明「来这里测什么」，显示在地面标牌上 */
+  hint: string;
+  shape: StationShape;
+  /** 工位中心（地面盘 / 标牌定位） */
+  x: number;
+  z: number;
+  /** 识别半径：玩家进入即视为站在该工位 */
+  radius: number;
+  /** 传送落点（一般放在工位南侧，落地面向工位） */
+  spawnX: number;
+  spawnZ: number;
+  /** 浮动工位牌的锚点（默认放在工位北侧，不挡视线） */
+  labelX: number;
+  labelZ: number;
+  /** 地面盘主色 */
+  color: string;
+};
+
 export type SceneConfig = {
   ground: { size: number; thickness: number };
   steps: StepSpec[];
   doorways: DoorwaySpec[];
   obstacles: ObstacleSpec[];
   grid: GridMeta;
+  /** v9s.15：测试工位（表现层标识 + 传送），Core 不消费 */
+  stations?: StationSpec[];
 };
 
 /* ---------------- 武器 / 战斗契约 ---------------- */
@@ -702,6 +737,12 @@ export type DummyConfig = {
   attackWindup: number;
   attackActive: number;
   attackRecovery: number;
+  /**
+   * v9s.15：牵引半径（米，0 = 关闭 = 旧行为）。
+   * 追击 / 保持距离的假人离开 home 超过该半径时，移动方向按超出量逐渐改回 home，
+   * 让每个测试工位只留自己的假人，不会追着玩家跑遍全场。
+   */
+  leashRadius: number;
 };
 
 export type DummyAttackPhase = 'idle' | 'windup' | 'active' | 'recovery';
@@ -1414,8 +1455,18 @@ export type ViewConfig = {
   hurt: HurtViewConfig;
   /** v9s.9：脚下指示半环（玩家 / 假人） */
   groundRing: GroundRingViewConfig;
+  /** v9s.15：测试工位地面标识 / 浮动标牌（纯表现层，可整体关闭看画面） */
+  lab: LabViewConfig;
   colors: ColorConfig;
   dummies: DummyViewConfig;
+};
+
+export type LabViewConfig = {
+  enabled: boolean;
+  showLabels: boolean;
+  padOpacity: number;
+  /** 地面工位铭牌的字高（米） */
+  labelTextHeight: number;
 };
 
 export type AppConfig = { core: CoreConfig; scene: SceneConfig; view: ViewConfig };
