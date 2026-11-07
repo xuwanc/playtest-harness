@@ -393,6 +393,7 @@
       "bodyTurnRate": 7,
       "headTurnRate": 30,
       "enterThreshold": 0.05,
+      "reactToAttack": true,
       "modeWeight": {
         "idle": 0.2,
         "wander": 0.45,

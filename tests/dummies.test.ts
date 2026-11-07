@@ -99,6 +99,7 @@ describe('测试假人：四种 AI 行为', () => {
     // 静止时若假人绕到背后会自动触发（合法新行为），会改变 facing/bodyYaw。
     // 隔离该模块以守住无伤害 / 无位移的旧契约；新行为由 v9s-feel.test.ts 单独覆盖。
     w.modules.turnInPlace = false;
+    w.modules.gaze = false;   // v9s.5：被攻击时玩家会进入威胁注视（改写朝向），隔离以守住「假人不写玩家状态」契约
     const playerBefore = JSON.stringify(w.character);
     let attacks = 0;
     for (let i = 0; i < 600; i++) {

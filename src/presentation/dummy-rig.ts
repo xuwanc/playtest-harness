@@ -183,13 +183,7 @@ export function createDummyRig(
   upper.add(arc);
 
   // 头顶标签
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 72;
-  const ctx = canvas.getContext('2d');
-  const labelTex = new THREE.CanvasTexture(canvas);
   const labelMat = new THREE.SpriteMaterial({
-    map: labelTex,
     transparent: true,
     depthTest: false,
     depthWrite: false,
@@ -200,8 +194,12 @@ export function createDummyRig(
   label.renderOrder = 20;
   upper.add(label);
 
-  function drawLabel(mode: DummyMode): void {
-    if (!ctx) return;
+  function paintLabel(mode: DummyMode): HTMLCanvasElement {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 72;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
     ctx.clearRect(0, 0, 256, 72);
     ctx.fillStyle = view.labelBg;
     ctx.fillRect(0, 0, 256, 72);
@@ -213,8 +211,18 @@ export function createDummyRig(
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(`${id} ${MODE_LABEL[mode]}`, 128, 38);
-    labelTex.needsUpdate = true;
+    return canvas;
   }
+
+  // v9s.5：预生成所有模式的标签纹理 —— 切换假人状态时只换 `map`，不再运行时重绘 canvas
+  // 并同步上传纹理。鸿蒙 / 移动端上 CanvasTexture 上传会造成 1~2 帧卡顿，表现为
+  // 「点击假人切换状态时卡一下」；预生成后切换是纯指针替换，零上传。
+  const labelTexByMode = {} as Record<DummyMode, THREE.CanvasTexture>;
+  for (const m of Object.keys(MODE_LABEL) as DummyMode[]) {
+    labelTexByMode[m] = new THREE.CanvasTexture(paintLabel(m));
+  }
+  const labelTex = labelTexByMode.idle;
+  labelMat.map = labelTex;
 
   const tintColor = new THREE.Color(tint);
   const hurtColor = new THREE.Color(hurtCfg.flashColor);
@@ -262,10 +270,10 @@ export function createDummyRig(
       root.rotation.y = s.bodyYaw;
       headPivot.rotation.y = ((s.headYaw - s.bodyYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 
-      // 模式变化：重绘标签 + 一次短暂高亮，给点击一个明确反馈
+      // 模式变化：换预生成纹理（零上传）+ 一次短暂高亮，给点击一个明确反馈
       if (s.mode !== lastMode) {
         lastMode = s.mode;
-        drawLabel(s.mode);
+        labelMat.map = labelTexByMode[s.mode];
         flash = 1;
       }
       flash = Math.max(0, flash - frameDt * 2.2);
@@ -591,7 +599,7 @@ export function createDummyRig(
           else m.dispose();
         }
       });
-      labelTex.dispose();
+      for (const m of Object.keys(labelTexByMode) as DummyMode[]) labelTexByMode[m].dispose();
       labelMat.dispose();
     },
   };

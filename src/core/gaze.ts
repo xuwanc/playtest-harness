@@ -55,6 +55,9 @@ export function gazeUpdate(world: World, _dt: number, intents: Intents): void {
   const threats: T[] = [];
   let sumW = 0;
   let inRecovery = false;
+  // v9s.5：是否有敌人「正在 / 即将攻击自己」——起手(windup)与挥砍(active)都算。
+  // 这是「被敌人攻击都不转身」的根因：旧口径只认 aimActive，玩家没瞄准时永远不进入注视。
+  let incoming = false;
   for (const d of world.dummies) {
     const w = weightOf(d, cfg.threatRange);
     if (w > 0) {
@@ -65,15 +68,23 @@ export function gazeUpdate(world: World, _dt: number, intents: Intents): void {
       sumW += w;
     }
     if (weightOf(d, cfg.recoveryDist) > 0) inRecovery = true;
+    if (d.attackPhase === 'windup' || d.attackPhase === 'active') {
+      const dist = Math.hypot(d.position.x - p.x, d.position.z - p.z);
+      if (dist <= cfg.threatRange) incoming = true;
+    }
   }
 
   const threat = sumW <= 0 ? 0 : clamp(sumW / (sumW + Math.max(EPS, cfg.saturation)), 0, 1);
   const inThreat = threats.length > 0;
   const prevActive = g.active;
 
-  // 进入：主动瞄准 + 范围内有威胁 + 强度过阈值；保持：仍瞄准且威胁仍在 recoveryDist 内
-  const desired = intents.aimActive && inThreat && threat >= cfg.enterThreshold;
-  const hold = intents.aimActive && prevActive && inRecovery;
+  // 进入：主动瞄准 **或有敌人正在攻击自己**（v9s.5）；且范围内有威胁、强度过阈值。
+  // 保持：仍在 recoveryDist 内，且（瞄准中 / 仍被攻击 / 威胁仍在 threatRange 内）——
+  // 攻击间隙(recovery)与敌人退开几米都不会立刻交还，避免门口反复横跳。
+  const reactive = cfg.reactToAttack && incoming;
+  const trigger = intents.aimActive || reactive;
+  const desired = trigger && inThreat && threat >= cfg.enterThreshold;
+  const hold = prevActive && inRecovery && (intents.aimActive || reactive || inThreat);
   g.active = desired || hold;
 
   if (!g.active) {

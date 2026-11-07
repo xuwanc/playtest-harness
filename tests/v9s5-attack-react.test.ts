@@ -1,0 +1,94 @@
+import { describe, expect, it } from 'vitest';
+import { wrapAngle, gazeUpdate, step } from '../src/core';
+import { makeWorld, intent } from './helpers';
+
+const DT = 1 / 60;
+const DEG = Math.PI / 180;
+
+type Phase = 'idle' | 'windup' | 'active' | 'recovery';
+
+/** 清空默认假人（推到威胁范围外），再按坐标摆回指定假人。 */
+function placeOnly(
+  w: ReturnType<typeof makeWorld>,
+  specs: Array<[i: number, x: number, z: number, phase?: Phase]>,
+): void {
+  for (const d of w.dummies) {
+    d.position.x = 0;
+    d.position.z = -5;   // 玩家 (0,0,8) → dist 13 > recoveryDist
+    d.mode = 'idle';
+    d.attackPhase = 'idle';
+  }
+  for (const [i, x, z, phase = 'idle'] of specs) {
+    const d = w.dummies[i];
+    d.position.x = x;
+    d.position.z = z;
+    d.mode = 'attack';
+    d.attackPhase = phase;
+  }
+}
+
+describe('v9s.5 被攻击触发威胁注视（无需主动瞄准）', () => {
+  it('敌人在起手(windup) → 无瞄准也进入威胁注视，身体转向威胁', () => {
+    const w = makeWorld();
+    w.modules.dummies = false;          // 冻结 AI，attackPhase 由测试控制
+    placeOnly(w, [[0, -6, 8, 'windup']]); // 正左方，dist 6
+    gazeUpdate(w, DT, intent({}));
+    expect(w.gaze.active).toBe(true);
+    expect(Math.abs(wrapAngle(w.gaze.mainYaw + Math.PI / 2))).toBeLessThan(2 * DEG);
+    expect(w.gaze.threatCount).toBe(1);
+  });
+
+  it('敌人挥砍中(active) → 同样进入；只是站着(idle) → 不进入', () => {
+    const w = makeWorld();
+    w.modules.dummies = false;
+    placeOnly(w, [[0, -6, 8, 'active']]);
+    gazeUpdate(w, DT, intent({}));
+    expect(w.gaze.active).toBe(true);
+
+    const w2 = makeWorld();
+    w2.modules.dummies = false;
+    placeOnly(w2, [[0, -6, 8, 'idle']]);
+    gazeUpdate(w2, DT, intent({}));
+    expect(w2.gaze.active).toBe(false);
+  });
+
+  it('reactToAttack 关闭 → 回到「必须瞄准」旧口径（A/B 开关）', () => {
+    const w = makeWorld();
+    w.modules.dummies = false;
+    placeOnly(w, [[0, -6, 8, 'windup']]);
+    w.config.gaze.reactToAttack = false;
+    gazeUpdate(w, DT, intent({}));
+    expect(w.gaze.active).toBe(false);
+    gazeUpdate(w, DT, intent({ aimActive: true, aimX: 0, aimZ: 1 }));
+    expect(w.gaze.active).toBe(true);
+  });
+
+  it('攻击间隙保持：进入后敌人回到 idle，只要仍在 threatRange 内就继续盯住', () => {
+    const w = makeWorld();
+    w.modules.dummies = false;
+    placeOnly(w, [[0, -6, 8, 'windup']]);
+    gazeUpdate(w, DT, intent({}));
+    expect(w.gaze.active).toBe(true);
+
+    w.dummies[0].attackPhase = 'idle';   // 一刀打完，站住
+    gazeUpdate(w, DT, intent({}));
+    expect(w.gaze.active).toBe(true);    // 距离未变 → hold
+
+    w.dummies[0].position.z = -5;        // dist 13 > recoveryDist → 交还
+    gazeUpdate(w, DT, intent({}));
+    expect(w.gaze.active).toBe(false);
+  });
+
+  it('集成：无瞄准被攻击时，完整 step 也会让身体 / 头部转向威胁', () => {
+    const w = makeWorld();
+    w.modules.dummies = false;
+    placeOnly(w, [[0, -6, 8, 'active']]);
+    for (let i = 0; i < 150; i++) step(w, DT, intent({}));
+
+    expect(w.gaze.active).toBe(true);
+    expect(Math.abs(wrapAngle(w.character.bodyYaw - w.gaze.centroidYaw))).toBeLessThan(12 * DEG);
+    expect(Math.abs(wrapAngle(w.character.headYaw - w.gaze.mainYaw))).toBeLessThan(12 * DEG);
+    // 朝左（-90°），不是继续朝初始 +Z
+    expect(Math.abs(w.character.bodyYaw + Math.PI / 2)).toBeLessThan(12 * DEG);
+  });
+});

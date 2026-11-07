@@ -591,6 +591,11 @@ export type GazeConfig = {
   headTurnRate: number;
   /** 进入威胁注视的最小归一化威胁阈值（0..1），低于不进入 */
   enterThreshold: number;
+  /**
+   * v9s.5：范围内有敌人正在 / 即将攻击自己（attackPhase = windup / active）时，
+   * 即使没有主动瞄准也进入威胁注视（接敌准备）。关掉则回到「必须瞄准」的旧口径。
+   */
+  reactToAttack: boolean;
   /** 各假人行为模式基础威胁倍率（复用相机口径） */
   modeWeight: Record<DummyMode, number>;
   /** 假人挥砍 active 帧额外加权 */
