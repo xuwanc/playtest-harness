@@ -57,11 +57,35 @@ export const POSE_CHANNELS = [
    * 用户看到的「前两击剑尖都在头顶」就是这么来的。
    */
   'bladePitch',
-  /** 副手（左手）单独覆盖；缺省时由主手镜像推导 */
+  /**
+   * 副手（主挥手之外的那只手）单独覆盖；缺省时由主手镜像推导。
+   *
+   * v9s.26：`lead=L` 时它指向右手 —— 双持段 2「左手挥、右手往右后方收」写的就是这组。
+   * 「往同侧后方收」= pitch 正（后摆）+ yaw 指向自己那侧 + elbow 负（屈肘），
+   * 与大剑的双手握持（副手由 IK 拉回柄上）不冲突。
+   */
   'armLPitch',
   'armLYaw',
   'armLRoll',
   'elbowL',
+  /**
+   * v9s.26 · 整体转体（rad）：整个人绕世界 Y 轴带转，与 bodyYaw（腰椎扭转）叠加。
+   *
+   * 只拧腰椎到不了 135°：体素方块人拧过 ±0.9 rad 后头会甩到背后、副手也够不到柄。
+   * 真实的大幅度横扫是「脚掌碾地 + 整个人带转」完成的，所以幅度拆成两层：
+   *   bodyYaw  = 上身相对骨盆的拧（造型细节，±0.9 内）
+   *   rootYaw  = 整个人绕重心的转（幅度主力，可到 ±1.2）
+   * 两者相加才是剑尖真正扫过的世界角度。
+   */
+  'rootYaw',
+  /**
+   * v9s.26 · 副手武器挂点仰角（rad，0 = 水平）。语义同 bladePitch，但作用于**另一只手**。
+   *
+   * 双持「武器展开」时两把剑都要能被单独摆角度；剑盾「盾猛顶」时盾面要朝前
+   * （盾不是刃，用同一套「挂点反解」把盾牌从竖直翻到正对前方）。
+   * null（缺省）= 不接管，沿用武器默认挂点。
+   */
+  'bladePitchOff',
 ] as const;
 
 export type PoseChannel = (typeof POSE_CHANNELS)[number];
@@ -79,13 +103,40 @@ export type PoseKey = {
   pose: PoseFrame;
 };
 
+/**
+ * v9s.26 · 剪辑级「原地整圈旋转」。
+ *
+ * 为什么不写成 `rootYaw` 通道：通道按**挥击曲线** `swing = −1→+1→0` 采样，
+ * 收势时会回摆，转到一半又倒回去；而「转一圈」需要按**攻击进度**单调推进到 2π，
+ * 结束时 2π ≡ 0 正好回到原朝向，不留残余。所以它是剪辑级元数据，不是通道。
+ *
+ * 这也是「表现层带转 ≠ 判定范围」的边界：Core 的攻击扇形 / 索敌完全不看它，
+ * 只改角色朝向的观感；要扩判定范围得另配 Core 参数。
+ */
+export type PoseSpin = {
+  /** 转几圈：1 = 原地一整圈，−1 = 反向一整圈，0.5 = 半圈 */
+  turns: number;
+  /**
+   * 在 attackProgress 达到多少时转满（0..1，缺省 1）。
+   *
+   * 连击的 `cancelWindow` 会在 recovery 过半就接下一段，实测段内 progress 最多只到
+   * ~0.71 —— 若按线性进度转，永远转不满一圈就被打断。把 span 设成 0.6 可让转体
+   * 在换段前完成，之后一直停在 2π ≡ 0（正对前方），收招与换段都不甩头。
+   */
+  span?: number;
+  /** 沿 attackProgress/span 的缓动，缺省 linear（inOut 起停更柔和） */
+  ease?: PoseEase;
+};
+
 export type PoseClip = {
-  /** 语义类型，调试 / 验收读（right-left / left-right / overhead / 任意字符串） */
+  /** 语义类型，调试 / 验收读（right-left / left-right / overhead / spin / bash / 任意字符串） */
   kind?: string;
   /** 作者备注（不影响采样，方便以后几十种技能靠数据自查） */
   note?: string;
   /** 主挥手：R = 右手（默认），L = 左手（双剑第二段） */
   lead?: 'R' | 'L';
+  /** v9s.26：整段动作的整体转体（按 attackProgress 单调，不参与 key 采样） */
+  spin?: PoseSpin;
   keys: PoseKey[];
 };
 
@@ -143,6 +194,24 @@ export function samplePoseClip(clip: PoseClip, t: number): PoseSample {
 }
 
 /**
+ * v9s.26 · 采样整圈旋转，返回本帧应叠加的**世界 Y 轴角度**（rad）。
+ *
+ * @param progress 攻击进度 0..1（单调），与挥击曲线 swing 无关。
+ * 返回 `turns · 2π · ease(progress)`：进度 1 时正好是整圈（2π ≡ 0），
+ * 收招后 rootYaw 归零不会出现「转回去」的甩头。
+ */
+export function sampleSpin(clip: PoseClip | null | undefined, progress: number): number {
+  const spin = clip?.spin;
+  if (!spin || !Number.isFinite(spin.turns) || spin.turns === 0) return 0;
+  const ease = spin.ease ?? 'linear';
+  // span 把「转到满」的时刻提前到换段之前；超出后 clamp 到 1，角度停在 turns·2π ≡ 0。
+  const span = Number.isFinite(spin.span) && (spin.span as number) > 0
+    ? Math.min(1, spin.span as number) : 1;
+  const u = easeValue(ease, progress / span);
+  return spin.turns * Math.PI * 2 * u;
+}
+
+/**
  * 校验一条剪辑，返回错误描述（空数组 = 合法）。
  *
  * 放在 Core 侧的纯函数里，`portable.test.ts` 会把 game.json 里全部剪辑过一遍：
@@ -152,6 +221,21 @@ export function validatePoseClip(clip: PoseClip): string[] {
   const errs: string[] = [];
   if (!clip || !Array.isArray(clip.keys) || clip.keys.length === 0) {
     return ['keys 为空'];
+  }
+  if (clip.spin) {
+    if (typeof clip.spin.turns !== 'number' || !Number.isFinite(clip.spin.turns)) {
+      errs.push('spin.turns 不是有限数');
+    } else if (Math.abs(clip.spin.turns) > 4) {
+      errs.push(`spin.turns=${clip.spin.turns} 过大（|turns| ≤ 4）`);
+    }
+    if (clip.spin.ease && !['linear', 'in', 'out', 'inOut'].includes(clip.spin.ease)) {
+      errs.push(`spin.ease=${clip.spin.ease} 非法`);
+    }
+    if (clip.spin.span !== undefined
+      && (typeof clip.spin.span !== 'number' || !Number.isFinite(clip.spin.span)
+        || clip.spin.span <= 0 || clip.spin.span > 1)) {
+      errs.push(`spin.span=${clip.spin.span} 超出 (0, 1]`);
+    }
   }
   let prev = -Infinity;
   clip.keys.forEach((k, i) => {

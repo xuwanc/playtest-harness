@@ -1,7 +1,7 @@
 import type {
   PoseClip, PoseSample, SwingClipRef, SwingPoseViewConfig, WeaponId,
 } from '../core';
-import { clipHasChannel, samplePoseClip } from '../core';
+import { clipHasChannel, samplePoseClip, sampleSpin } from '../core';
 
 /**
  * v9s.25 · 近战挥击的「身体 / 手臂 / 剑身」姿态 —— 从硬编码曲线改成**数据采样**。
@@ -31,8 +31,19 @@ export type SwingArm = {
 };
 
 export type SwingPose = {
-  /** 上身相对骨盆的扭转（+ = 转向角色右侧，即 +X 侧） */
+  /** 上身相对骨盆的扭转（+ = 转向角色右侧，即 +X 侧）；只拧腰椎，不含整体转体 */
   yaw: number;
+  /**
+   * v9s.26 · 整体带转（rad，写进 rig root.rotation.y，与 yaw 叠加）。
+   * 由 `rootYaw` 通道按挥击曲线采样，随 `body` 幅度缩放 —— 大幅横扫的幅度主力。
+   */
+  rootYaw: number;
+  /**
+   * v9s.26 · 整圈旋转（rad，同样写进 root.rotation.y）。
+   * 由剪辑级 `spin` 按 **attackProgress** 单调推进，与挥击曲线无关；
+   * 进度 1 时 = turns·2π ≡ 0，收招归零不甩头。段间过渡不插值这一项（见 blendSwingPose）。
+   */
+  spinYaw: number;
   /** 上身前后倾（+ = 前压） */
   pitch: number;
   /** 上身侧倾（+ = 向角色左侧倒，与 THREE rotation.z 正方向一致） */
@@ -53,6 +64,8 @@ export type SwingPose = {
    * 这样无论手臂怎么抬，剑身都停在作者指定的仰角上。
    */
   bladePitch: number | null;
+  /** v9s.26：副手武器挂点仰角；null = 沿用默认挂点。双持展开 / 盾猛顶时显式给。 */
+  bladePitchOff: number | null;
   /** 本段主挥手（决定哪只手的剑要按 bladePitch 反解） */
   lead: 'R' | 'L';
   /** 本段类型，供调试 / 验收读 */
@@ -97,6 +110,7 @@ function emptySample(): PoseSample {
     bodyYaw: 0, bodyPitch: 0, bodyRoll: 0, pelvisX: 0, pelvisZ: 0,
     armPitch: 0, armYaw: 0, armRoll: 0, elbow: 0, bladePitch: 0,
     armLPitch: 0, armLYaw: 0, armLRoll: 0, elbowL: 0,
+    rootYaw: 0, bladePitchOff: 0,
   };
 }
 
@@ -127,12 +141,14 @@ function sampleFallback(seg: number, u: number): PoseSample {
  * @param comboIndex 连击段号 1..N（0 / 越界按 1 处理）
  * @param swing     挥击曲线 −1..1（−1 = 蓄势满，+1 = 挥出满，0 = 中立 / 收势）
  * @param cfg       挥击层配置（含剪辑库）
+ * @param progress  攻击进度 0..1（单调），仅用于剪辑级 `spin` 整圈旋转；缺省 0 = 不转
  */
 export function solveSwingPose(
   weapon: WeaponId,
   comboIndex: number,
   swing: number,
   cfg: SwingPoseViewConfig,
+  progress = 0,
 ): SwingPose {
   const list = cfg.combo?.[weapon] ?? [];
   const count = Math.max(1, list.length);
@@ -156,6 +172,12 @@ export function solveSwingPose(
 
   const pose: SwingPose = {
     yaw: sample.bodyYaw * body,
+    // 整体带转跟躯干扭转一样吃 body 幅度：bodyScale=0 的 A/B 对照要把「身体」
+    // 整个停住（含脚掌碾地），否则「只有手臂在挥」的对照不成立。
+    rootYaw: sample.rootYaw * body,
+    // 整圈旋转是剪辑级语义，按攻击进度单调推进，不吃任何幅度倍率
+    //（缩放会转不满一圈，收招时朝向回不去）。
+    spinYaw: sampleSpin(clip, clamp(progress, 0, 1)),
     pitch: sample.bodyPitch * body,
     roll: sample.bodyRoll * body,
     pelvisZ: sample.pelvisZ * body,
@@ -164,6 +186,9 @@ export function solveSwingPose(
     armL: null,
     // 剑身仰角是世界语义，不吃幅度倍率：乘 0.62 会让短剑的剑身莫名上翘。
     bladePitch: sample.bladePitch,
+    // 副手挂点仰角只有数据显式给了才接管：缺省 null = 沿用武器默认挂点，
+    // 否则双持待机时左手会被莫名翻成水平。
+    bladePitchOff: clip && clipHasChannel(clip, 'bladePitchOff') ? sample.bladePitchOff : null,
     lead,
     kind,
     strike: u,
@@ -175,12 +200,14 @@ export function solveSwingPose(
     roll: sample.armRoll * amplitude,
     elbow: sample.elbow * amplitude,
   };
-  // 副手：剪辑里显式给了就用数据；否则按主手镜像一个合理初值交给副手握持 IK
-  const hasLeft = clip
+  // v9s.26：`armL*` 统一表示**副手**（主挥手之外的那只手），与 lead 无关。
+  // lead=L 时它指向右手 —— 双持段 2「左手挥、右手往右后方收」就是写这组通道。
+  // 没写时按主手镜像一个合理初值交给副手握持 IK。
+  const hasOff = clip
     ? (clipHasChannel(clip, 'armLPitch') || clipHasChannel(clip, 'armLYaw')
       || clipHasChannel(clip, 'armLRoll') || clipHasChannel(clip, 'elbowL'))
     : false;
-  const left: SwingArm = hasLeft
+  const off: SwingArm = hasOff
     ? {
       pitch: sample.armLPitch * amplitude,
       yaw: sample.armLYaw * amplitude,
@@ -188,7 +215,7 @@ export function solveSwingPose(
       elbow: sample.elbowL * amplitude,
     }
     : {
-      pitch: arm.pitch + (weapon === 'greatsword' ? 0.08 : 0),
+      pitch: arm.pitch + (weapon === 'greatsword' ? 0.08 : 0.1),
       yaw: arm.yaw * 0.8,
       roll: weapon === 'greatsword' ? 0.40 : -arm.roll * 0.6,
       elbow: arm.elbow,
@@ -196,12 +223,14 @@ export function solveSwingPose(
 
   if (lead === 'L') {
     pose.armL = arm;
-    // 主挥换到左手：右手给一个反向收势姿态（双剑段 2 的观感）
-    pose.armR = weapon === 'greatsword' ? null : { ...left, pitch: arm.pitch + 0.1 };
+    // 主挥换到左手：右手给副手姿态（双剑段 2 的「右后方收」由 armL* 通道给出）
+    pose.armR = weapon === 'greatsword' ? null : off;
   } else {
     pose.armR = arm;
-    // 剑盾：左臂持盾，不接管；其余武器给副手初值
-    if (weapon === 'greatsword' || weapon === 'dual-swords') pose.armL = left;
+    // 剑盾平时左臂持盾、不接管（交还步态摆臂）；但剪辑**显式**给了副手通道时
+    // 必须放行 —— 盾猛顶就是靠数据驱动盾臂前顶的。复用大剑横扫剪辑的段位
+    // 没写 armL* 通道，所以旧行为逐帧不变。
+    if (weapon === 'greatsword' || weapon === 'dual-swords' || hasOff) pose.armL = off;
   }
   return pose;
 }
@@ -221,6 +250,12 @@ export function blendSwingPose(a: SwingPose, b: SwingPose, t: number): SwingPose
   };
   return {
     yaw: lerp(a.yaw, b.yaw, k),
+    rootYaw: lerp(a.rootYaw, b.rootYaw, k),
+    // 整圈旋转不参与段间插值：它是「本段按 attackProgress 单调推进」的时间轴语义，
+    // 换段瞬间 progress 归零，spinYaw 就该直接回到 0。若在这里线性插值，
+    // 段 3 末的 2π 会被插值回 0（中途经过 π），观感是收招时整个角色倒转半圈。
+    // 2π ≡ 0，直接取目标值在旋转上没有任何视觉跳变。
+    spinYaw: b.spinYaw,
     pitch: lerp(a.pitch, b.pitch, k),
     roll: lerp(a.roll, b.roll, k),
     pelvisZ: lerp(a.pelvisZ, b.pelvisZ, k),
@@ -230,6 +265,9 @@ export function blendSwingPose(a: SwingPose, b: SwingPose, t: number): SwingPose
     bladePitch: a.bladePitch === null || b.bladePitch === null
       ? (k < 0.5 ? a.bladePitch : b.bladePitch)
       : lerp(a.bladePitch, b.bladePitch, k),
+    bladePitchOff: a.bladePitchOff === null || b.bladePitchOff === null
+      ? (k < 0.5 ? a.bladePitchOff : b.bladePitchOff)
+      : lerp(a.bladePitchOff, b.bladePitchOff, k),
     lead: b.lead,
     // 段号在换段瞬间就更新了，kind 也跟目标段保持一致（否则诊断读到「段 1 / overhead」）
     kind: b.kind,

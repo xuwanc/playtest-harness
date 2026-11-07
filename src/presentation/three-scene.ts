@@ -85,12 +85,16 @@ export type SceneView = {
   weaponDebug(): { wristPitch: number; wristTwist: number };
   /** v9s.24：副手握持读数（握持权重 / 实际握点 / 到肩距离） */
   gripDebug(): { active: boolean; dist: number; gy: number; pitch: number; joint: number; grip: number };
-  /** v9s.23：本帧挥击姿态（段号 / 段类型 / 躯干三轴 / 两肩位置），供验收与真机诊断 */
+  /** v9s.23：本帧挥击姿态（段号 / 段类型 / 躯干三轴 / 整体转体 / 两肩位置），供验收与真机诊断 */
   swingDebug(): {
     seg: number; kind: string; yaw: number; pitch: number; roll: number; strike: number;
+    rootYaw: number; spinYaw: number; rootTurn: number;
     shoulderL: { x: number; y: number; z: number };
     shoulderR: { x: number; y: number; z: number };
   };
+  /** v9s.26：刃身两端的世界坐标 —— 斜俯视截图会把「水平指向远方」看成「竖直」，
+   *  验收横扫幅度 / 仰角必须读世界坐标，不能只看截图。纯观测。 */
+  bladeWorld(): { base: { x: number; y: number; z: number }; tip: { x: number; y: number; z: number } } | null;
   /** v9s.15：传送后把相机跟随目标瞬移过去，避免跨场地滑行 */
   snapCamera(x: number, y: number, z: number): void;
   dispose(): void;
@@ -626,6 +630,9 @@ export function createSceneView(
     },
     swingDebug() {
       return voxel.swingDebug();
+    },
+    bladeWorld() {
+      return voxel.weaponBlade();
     },
     weaponDebug() {
       return voxel.weaponDebug();

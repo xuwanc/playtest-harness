@@ -182,6 +182,8 @@ export function startApp(): void {
     gaitDebug: () => view.gaitDebug(),
     // v9s.23：挥击姿态（段号 / 方向 / 躯干三轴 / 肩部位移）
     swingDebug: () => view.swingDebug(),
+    // v9s.26：刃身两端世界坐标（验收横扫仰角，避免被斜俯视截图误导）
+    bladeWorld: () => view.bladeWorld(),
     // v9s.24：腕部滞后读数（武器相对手的自由度）
     weaponDebug: () => view.weaponDebug(),
     gripDebug: () => view.gripDebug(),

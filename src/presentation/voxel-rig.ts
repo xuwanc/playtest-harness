@@ -91,6 +91,10 @@ export type VoxelRig = {
     seg: number;
     kind: string;
     yaw: number;
+    /** v9s.26：整体带转 / 整圈旋转 / 两者之和（= root.rotation.y） */
+    rootYaw: number;
+    spinYaw: number;
+    rootTurn: number;
     pitch: number;
     roll: number;
     strike: number;
@@ -649,8 +653,12 @@ export function createVoxelRig(
   let lastShoulder = { lx: 0, ly: 0, lz: 0, rx: 0, ry: 0, rz: 0 };
   /** 本帧挥击层要求的剑身仰角（null = 用武器默认挂点） */
   let swingBladePitch: number | null = null;
+  /** v9s.26：本帧副手武器挂点仰角（null = 用副手默认挂点） */
+  let swingBladePitchOff: number | null = null;
   /** 本帧主挥手：决定按哪条手臂链反解挂点 */
   let swingLead: 'R' | 'L' = 'R';
+  /** 本帧整体转体（rootYaw + spinYaw），供 swingDebug 读 */
+  let lastRootTurn = 0;
 
   // ---- v8c 程序动画分层状态（全部纯表现，不进入 Core / 快照）----
   /** 攻击姿态混合系数 0..1：指数平滑进出攻击，避免下盘姿态单帧跳变 */
@@ -797,7 +805,11 @@ export function createVoxelRig(
   function swingCurve(t: number): number {
     if (t < 0.22) return -1;
     if (t < 0.5) return -1 + ((t - 0.22) / 0.28) * 2;
-    return Math.max(0, 1 - (t - 0.5) / 0.5);
+    // v9s.26：命中后先保持挥出满 0.08（≈ 一次攻击 8% 的时间），再回落收势。
+    // 旧版 0.5 立刻回落，大剑 233° 的横扫会在 3 帧内从「左后方」弹回「左前方」，
+    // 观感像没扫到位；保持段让「扫到对侧后方」这一下先站住再收。
+    if (t < 0.58) return 1;
+    return Math.max(0, 1 - (t - 0.58) / 0.42);
   }
 
   /**
@@ -1012,11 +1024,20 @@ export function createVoxelRig(
     armR.wrist.rotation.set(wristPitch, 0, wristTwist);
   }
 
-  /** 某把武器、某只手的默认挂点俯仰（与 applyMountPose 保持一致）。 */
+  /** 主手默认挂点俯仰（与 applyMountPose 的 rp 保持一致）。 */
   function mountBasePitch(w: WeaponId): number {
     const d = Math.PI / 180;
     if (w === 'greatsword') return mountCfg.greatswordPitchDeg * d;
     if (w === 'staff') return mountCfg.staffPitchDeg * d;
+    if (w === 'bow') return mountCfg.bowPitchDeg * d;
+    return mountCfg.swordPitchDeg * d;
+  }
+
+  /** 副手默认挂点俯仰（与 applyMountPose 的 lp 保持一致）：盾是 8°，双剑 68°，大剑 58°。 */
+  function mountOffBasePitch(w: WeaponId): number {
+    const d = Math.PI / 180;
+    if (w === 'sword-shield') return mountCfg.shieldPitchDeg * d;
+    if (w === 'greatsword') return mountCfg.greatswordPitchDeg * d;
     if (w === 'bow') return mountCfg.bowPitchDeg * d;
     return mountCfg.swordPitchDeg * d;
   }
@@ -1042,19 +1063,40 @@ export function createVoxelRig(
   function applyBladeTarget(combat: CombatState, torsoPitch: number): void {
     const w = combat.weapon;
     if (w === 'staff' || w === 'bow') return;
-    const arm = swingLead === 'R' ? armR : armL;
-    const mount = swingLead === 'R' ? mountR : mountL;
-    const drag = w === 'greatsword' && swingLead === 'R' ? dragAngle : 0;
+    const leadR = swingLead === 'R';
+    const arm = leadR ? armR : armL;
+    const mount = leadR ? mountR : mountL;
+    const offArm = leadR ? armL : armR;
+    const offMount = leadR ? mountL : mountR;
+    const drag = w === 'greatsword' && leadR ? dragAngle : 0;
+
+    // ---- 主手 ----
     const e = swingBladePitch;
     if (e === null) {
       mount.rotation.x = mountBasePitch(w) + drag;
-      return;
+    } else {
+      // 刻意**不**把腕角算进补偿链：腕滞后是「剑比手慢半拍」的那一层，
+      // 抵消掉它就等于把 v9s24 的白做了（实测剑尖相对手只差 1cm）。这里只抵消
+      // 躯干 + 肩 + 肘，让剑停在目标仰角附近，再叠加腕部的甩动。
+      const chain = torsoPitch + arm.root.rotation.x + arm.joint.rotation.x;
+      mount.rotation.x = Math.PI / 2 - e - chain;
     }
-    // 刻意**不**把腕角算进补偿链：腕滞后是「剑比手慢半拍」的那一层，
-    // 抵消掉它就等于把 v9s24 的白做了（实测剑尖相对手只差 1cm）。这里只抵消
-    // 躯干 + 肩 + 肘，让剑停在目标仰角附近，再叠加腕部的甩动。
-    const chain = torsoPitch + arm.root.rotation.x + arm.joint.rotation.x;
-    mount.rotation.x = Math.PI / 2 - e - chain;
+
+    // ---- 副手（v9s.26）----
+    // 每帧都写：镜头没给 bladePitchOff 时写回默认挂点，收招后不会残留上一击的翻腕。
+    // 反解基准按武器几何区分：剑是「长轴 +Y」→ 基准 π/2（0 = 剑水平）；
+    // 盾是「法线 +Z」的平板 → 基准 = 默认挂点角（0 = 盾面正对前方），
+    // 于是盾猛顶时数据只要写 0，盾面就始终保持朝前，不管左臂前顶到哪个角度。
+    const eo = swingBladePitchOff;
+    if (eo === null) {
+      offMount.rotation.x = mountOffBasePitch(w);
+    } else {
+      const offBase = w === 'sword-shield'
+        ? mountOffBasePitch(w)
+        : Math.PI / 2;
+      const offChain = torsoPitch + offArm.root.rotation.x + offArm.joint.rotation.x;
+      offMount.rotation.x = offBase - eo - offChain;
+    }
   }
 
   /**
@@ -1066,7 +1108,14 @@ export function createVoxelRig(
    */
   function writeSwingPose(p: SwingPose): void {
     swingBladePitch = p.bladePitch;
+    swingBladePitchOff = p.bladePitchOff;
     swingLead = p.lead;
+    // v9s.26 整体转体：写在 rig 的 root.rotation.y 上（three-scene 设的是外层
+    // playerRoot，两者叠加，不冲突）。rootYaw 是随挥击曲线摆的带转，spinYaw 是
+    // 按攻击进度单调推的整圈；两者直接相加，收招时 spinYaw=2π≡0、rootYaw=0，
+    // root 自动回正，不需要额外的归零过渡。
+    lastRootTurn = p.rootYaw + p.spinYaw;
+    root.rotation.y = lastRootTurn;
     upper.rotation.y += p.yaw;
     upper.rotation.x += p.pitch;
     upper.rotation.z += p.roll;
@@ -1097,6 +1146,7 @@ export function createVoxelRig(
   function solveSwingFor(combat: CombatState, dt: number): SwingPose {
     const target = solveSwingPose(
       combat.weapon, combat.comboIndex, swingCurve(combat.attackProgress), swingCfg,
+      combat.attackProgress,
     );
     if (combat.comboIndex !== swingSeg) {
       swingFrom = swingPose;
@@ -1207,6 +1257,7 @@ export function createVoxelRig(
       swingSeg = 0;
       swingFade = 1;
       swingBladePitch = null;
+      swingBladePitchOff = null;
       // 收招：握点回到默认位置（否则下一轮起手会从上一轮滑到的地方开始）
       gripSlide = NaN;
       // 内收量也归位（否则最后一段停在举顶时会带着 0 内收进待机）
@@ -1331,6 +1382,11 @@ export function createVoxelRig(
       turn?: TurnInPlaceState,
     ): void {
       setWeapon(combat.weapon);
+      // v9s.26：整体转体每帧归零，只有 writeSwingPose 会写它。
+      // 不能靠 idle 分支单独清 —— 换武器 / 受击 / 引导等早退分支都会跳过挥击层，
+      // 残留的 root.rotation.y 会让角色「斜着站」。
+      root.rotation.y = 0;
+      lastRootTurn = 0;
       upper.rotation.x = 0;
       upper.rotation.z = 0;
       // 每帧把骨盆复位到髋部基准：applyStep / applyHurt / 落地缓冲 / 挥击跨步
@@ -1974,6 +2030,9 @@ export function createVoxelRig(
         seg: swingSeg,
         kind: p?.kind ?? 'right-left',
         yaw: p?.yaw ?? 0,
+        rootYaw: p?.rootYaw ?? 0,
+        spinYaw: p?.spinYaw ?? 0,
+        rootTurn: lastRootTurn,
         pitch: p?.pitch ?? 0,
         roll: p?.roll ?? 0,
         strike: p?.strike ?? 0,

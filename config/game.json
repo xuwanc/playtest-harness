@@ -897,83 +897,79 @@
         "segBlend": 0.1,
         "weaponScale": {
           "greatsword": 1.0,
-          "sword-shield": 0.62,
-          "dual-swords": 0.55
+          "sword-shield": 0.78,
+          "dual-swords": 0.9
         },
         "combo": {
           "greatsword": ["gs.right-left", "gs.left-right", "gs.overhead"],
-          "sword-shield": ["gs.right-left", "gs.left-right", "gs.overhead"],
-          "dual-swords": [
-            "gs.right-left",
-            { "clip": "gs.left-right", "lead": "L" },
-            "gs.overhead"
-          ]
+          "sword-shield": ["gs.right-left", "gs.left-right", "ss.shield-bash"],
+          "dual-swords": ["ds.right-left", "ds.left-right", "ds.spin"]
         },
         "clips": {
           "gs.right-left": {
             "kind": "right-left",
-            "note": "段 1：躯干 +49° 拧到 −54°，剑身保持水平，从右后扫到左前",
+            "note": "段 1：从右后方扫到左后方。rootYaw 整体带转 ±0.55 rad（≈31°）叠在腰椎 ±60° 上，大剑刃尖水平扫角约 210°",
             "keys": [
               {
                 "t": 0,
                 "ease": "in",
                 "pose": {
-                  "bodyYaw": 0.85, "bodyPitch": -0.12, "bodyRoll": -0.14,
-                  "pelvisX": 0.045, "pelvisZ": -0.06,
-                  "armPitch": -1.2, "armYaw": -0.42, "armRoll": 0.16, "elbow": -0.48,
-                  "bladePitch": 0.3
+                  "bodyYaw": 1.05, "bodyPitch": -0.14, "bodyRoll": -0.18,
+                  "pelvisX": 0.06, "pelvisZ": -0.07,
+                  "armPitch": -1.15, "armYaw": -0.55, "armRoll": 0.2, "elbow": -0.5,
+                  "rootYaw": 0.55, "bladePitch": 0.3, "bladePitchOff": 0.25
                 }
               },
               {
                 "t": 0.55,
                 "pose": {
-                  "bodyYaw": 0.05, "bodyPitch": 0.02, "bodyRoll": 0.06,
+                  "bodyYaw": 0.05, "bodyPitch": 0.02, "bodyRoll": 0.08,
                   "pelvisX": 0.01, "pelvisZ": -0.01,
-                  "armPitch": -1.34, "armYaw": -0.52, "armRoll": 0.04, "elbow": -0.34,
-                  "bladePitch": 0.12
+                  "armPitch": -1.4, "armYaw": -0.75, "armRoll": 0.04, "elbow": -0.3,
+                  "rootYaw": 0.0, "bladePitch": 0.12, "bladePitchOff": 0.1
                 }
               },
               {
                 "t": 1,
                 "pose": {
-                  "bodyYaw": -0.95, "bodyPitch": 0.14, "bodyRoll": 0.17,
-                  "pelvisX": -0.05, "pelvisZ": 0.1,
-                  "armPitch": -1.46, "armYaw": -0.6, "armRoll": -0.1, "elbow": -0.14,
-                  "bladePitch": -0.05
+                  "bodyYaw": -1.15, "bodyPitch": 0.16, "bodyRoll": 0.2,
+                  "pelvisX": -0.07, "pelvisZ": 0.11,
+                  "armPitch": -1.5, "armYaw": -0.9, "armRoll": -0.14, "elbow": -0.12,
+                  "rootYaw": -0.55, "bladePitch": -0.05, "bladePitchOff": -0.05
                 }
               }
             ]
           },
           "gs.left-right": {
             "kind": "left-right",
-            "note": "段 2：承接段 1 左侧收势，反向拧 +53°，剑身仍水平",
+            "note": "段 2：承接段 1 左后方收势，整体带转 −0.55→+0.55 rad 反向拧回右后方，剑身仍水平",
             "keys": [
               {
                 "t": 0,
                 "ease": "in",
                 "pose": {
-                  "bodyYaw": -0.75, "bodyPitch": -0.08, "bodyRoll": 0.14,
-                  "pelvisX": -0.04, "pelvisZ": -0.04,
-                  "armPitch": -1.28, "armYaw": -0.58, "armRoll": -0.12, "elbow": -0.5,
-                  "bladePitch": 0.3
+                  "bodyYaw": -1.0, "bodyPitch": -0.1, "bodyRoll": 0.18,
+                  "pelvisX": -0.05, "pelvisZ": -0.05,
+                  "armPitch": -1.2, "armYaw": -0.75, "armRoll": -0.16, "elbow": -0.5,
+                  "rootYaw": -0.55, "bladePitch": 0.3, "bladePitchOff": 0.25
                 }
               },
               {
                 "t": 0.55,
                 "pose": {
-                  "bodyYaw": -0.05, "bodyPitch": 0.02, "bodyRoll": -0.02,
-                  "pelvisX": -0.01, "pelvisZ": 0.01,
-                  "armPitch": -1.36, "armYaw": -0.5, "armRoll": 0.02, "elbow": -0.34,
-                  "bladePitch": 0.12
+                  "bodyYaw": 0.05, "bodyPitch": 0.02, "bodyRoll": -0.04,
+                  "pelvisX": 0.01, "pelvisZ": 0.01,
+                  "armPitch": -1.42, "armYaw": -0.6, "armRoll": 0.02, "elbow": -0.32,
+                  "rootYaw": 0.0, "bladePitch": 0.12, "bladePitchOff": 0.1
                 }
               },
               {
                 "t": 1,
                 "pose": {
-                  "bodyYaw": 0.92, "bodyPitch": 0.15, "bodyRoll": -0.18,
-                  "pelvisX": 0.05, "pelvisZ": 0.1,
-                  "armPitch": -1.48, "armYaw": -0.4, "armRoll": 0.12, "elbow": -0.13,
-                  "bladePitch": -0.05
+                  "bodyYaw": 1.1, "bodyPitch": 0.16, "bodyRoll": -0.2,
+                  "pelvisX": 0.07, "pelvisZ": 0.11,
+                  "armPitch": -1.52, "armYaw": -0.35, "armRoll": 0.16, "elbow": -0.12,
+                  "rootYaw": 0.55, "bladePitch": -0.05, "bladePitchOff": -0.05
                 }
               }
             ]
@@ -1011,10 +1007,162 @@
                 }
               }
             ]
+          },
+          "ds.right-left": {
+            "kind": "right-left",
+            "note": "双持段 1：右手横扫到左后方，左手同时向左后方收（后摆 + 屈肘），两把剑都保持水平",
+            "lead": "R",
+            "keys": [
+              {
+                "t": 0,
+                "ease": "in",
+                "pose": {
+                  "bodyYaw": 1.0, "bodyPitch": -0.12, "bodyRoll": -0.16,
+                  "pelvisX": 0.05, "pelvisZ": -0.06,
+                  "armPitch": -1.15, "armYaw": -0.5, "armRoll": 0.18, "elbow": -0.45,
+                  "armLPitch": 0.5, "armLYaw": -0.45, "armLRoll": 0.12, "elbowL": -1.15,
+                  "rootYaw": 0.5, "bladePitch": 0.1, "bladePitchOff": 0.05
+                }
+              },
+              {
+                "t": 0.55,
+                "pose": {
+                  "bodyYaw": 0.05, "bodyPitch": 0.02, "bodyRoll": 0.06,
+                  "pelvisX": 0.01, "pelvisZ": -0.01,
+                  "armPitch": -1.4, "armYaw": -0.7, "armRoll": 0.04, "elbow": -0.3,
+                  "armLPitch": 0.6, "armLYaw": -0.5, "armLRoll": 0.15, "elbowL": -1.25,
+                  "rootYaw": 0.0, "bladePitch": 0.06, "bladePitchOff": 0.05
+                }
+              },
+              {
+                "t": 1,
+                "pose": {
+                  "bodyYaw": -1.1, "bodyPitch": 0.14, "bodyRoll": 0.18,
+                  "pelvisX": -0.06, "pelvisZ": 0.1,
+                  "armPitch": -1.5, "armYaw": -0.85, "armRoll": -0.12, "elbow": -0.12,
+                  "armLPitch": 0.65, "armLYaw": -0.55, "armLRoll": 0.18, "elbowL": -1.3,
+                  "rootYaw": -0.5, "bladePitch": 0.02, "bladePitchOff": 0.02
+                }
+              }
+            ]
+          },
+          "ds.left-right": {
+            "kind": "left-right",
+            "note": "双持段 2：左手横扫回右后方，右手同时向右后方收（段 1 的镜像，主挥换到左手）",
+            "lead": "L",
+            "keys": [
+              {
+                "t": 0,
+                "ease": "in",
+                "pose": {
+                  "bodyYaw": -1.0, "bodyPitch": -0.1, "bodyRoll": 0.18,
+                  "pelvisX": -0.05, "pelvisZ": -0.05,
+                  "armPitch": -1.2, "armYaw": -0.75, "armRoll": -0.16, "elbow": -0.5,
+                  "armLPitch": 0.5, "armLYaw": 0.45, "armLRoll": -0.12, "elbowL": -1.15,
+                  "rootYaw": -0.5, "bladePitch": 0.1, "bladePitchOff": 0.05
+                }
+              },
+              {
+                "t": 0.55,
+                "pose": {
+                  "bodyYaw": 0.05, "bodyPitch": 0.02, "bodyRoll": -0.04,
+                  "pelvisX": 0.01, "pelvisZ": 0.01,
+                  "armPitch": -1.42, "armYaw": -0.6, "armRoll": 0.02, "elbow": -0.32,
+                  "armLPitch": 0.6, "armLYaw": 0.5, "armLRoll": -0.15, "elbowL": -1.25,
+                  "rootYaw": 0.0, "bladePitch": 0.06, "bladePitchOff": 0.05
+                }
+              },
+              {
+                "t": 1,
+                "pose": {
+                  "bodyYaw": 1.1, "bodyPitch": 0.16, "bodyRoll": -0.2,
+                  "pelvisX": 0.07, "pelvisZ": 0.11,
+                  "armPitch": -1.52, "armYaw": -0.35, "armRoll": 0.16, "elbow": -0.12,
+                  "armLPitch": 0.65, "armLYaw": 0.55, "armLRoll": -0.18, "elbowL": -1.3,
+                  "rootYaw": 0.5, "bladePitch": 0.02, "bladePitchOff": 0.02
+                }
+              }
+            ]
+          },
+          "ds.spin": {
+            "kind": "spin",
+            "note": "双持段 3：双剑水平展开（主副手 roll 外张到 ±1.15），整个人原地转一整圈。spin 按 attackProgress 单调推进到 2π≡0，收招自动回正",
+            "lead": "R",
+            "spin": { "turns": 1, "ease": "inOut", "span": 0.6 },
+            "keys": [
+              {
+                "t": 0,
+                "ease": "in",
+                "pose": {
+                  "bodyYaw": 0.1, "bodyPitch": -0.14, "bodyRoll": 0,
+                  "pelvisX": 0, "pelvisZ": -0.05,
+                  "armPitch": -1.1, "armYaw": -0.3, "armRoll": 0.25, "elbow": -0.5,
+                  "armLPitch": -1.1, "armLYaw": 0.3, "armLRoll": -0.25, "elbowL": -0.5,
+                  "bladePitch": 0.05, "bladePitchOff": 0.05
+                }
+              },
+              {
+                "t": 0.5,
+                "pose": {
+                  "bodyYaw": 0, "bodyPitch": 0.04, "bodyRoll": 0,
+                  "pelvisX": 0, "pelvisZ": 0.04,
+                  "armPitch": -1.55, "armYaw": -0.55, "armRoll": 1.15, "elbow": -0.05,
+                  "armLPitch": -1.55, "armLYaw": 0.55, "armLRoll": -1.15, "elbowL": -0.05,
+                  "bladePitch": 0, "bladePitchOff": 0
+                }
+              },
+              {
+                "t": 1,
+                "pose": {
+                  "bodyYaw": -0.1, "bodyPitch": 0.12, "bodyRoll": 0,
+                  "pelvisX": 0, "pelvisZ": 0.08,
+                  "armPitch": -1.3, "armYaw": -0.35, "armRoll": 0.6, "elbow": -0.25,
+                  "armLPitch": -1.3, "armLYaw": 0.35, "armLRoll": -0.6, "elbowL": -0.25,
+                  "bladePitch": 0.02, "bladePitchOff": 0.02
+                }
+              }
+            ]
+          },
+          "ss.shield-bash": {
+            "kind": "bash",
+            "note": "剑盾段 3：收盾蓄力 → 左臂持盾猛前顶（臂前伸 + 肘伸直 + 身体前压 + 骨盆前冲）。bladePitchOff 反解让盾面始终正对前方",
+            "lead": "R",
+            "keys": [
+              {
+                "t": 0,
+                "ease": "in",
+                "pose": {
+                  "bodyYaw": 0.12, "bodyPitch": -0.28, "bodyRoll": -0.04,
+                  "pelvisX": 0.01, "pelvisZ": -0.08,
+                  "armPitch": 0.1, "armYaw": -0.2, "armRoll": 0.1, "elbow": -0.7,
+                  "armLPitch": -0.7, "armLYaw": 0.1, "armLRoll": 0.15, "elbowL": -0.9,
+                  "bladePitch": 0.2, "bladePitchOff": 0.1
+                }
+              },
+              {
+                "t": 0.55,
+                "pose": {
+                  "bodyYaw": 0.04, "bodyPitch": 0.15, "bodyRoll": 0,
+                  "pelvisX": 0, "pelvisZ": 0.08,
+                  "armPitch": 0.2, "armYaw": -0.15, "armRoll": 0.05, "elbow": -0.6,
+                  "armLPitch": -1.1, "armLYaw": 0.05, "armLRoll": 0.1, "elbowL": -0.45,
+                  "bladePitch": 0.1, "bladePitchOff": 0.02
+                }
+              },
+              {
+                "t": 1,
+                "pose": {
+                  "bodyYaw": 0, "bodyPitch": 0.5, "bodyRoll": 0.02,
+                  "pelvisX": 0, "pelvisZ": 0.18,
+                  "armPitch": 0.25, "armYaw": -0.1, "armRoll": 0, "elbow": -0.5,
+                  "armLPitch": -1.55, "armLYaw": 0, "armLRoll": 0.05, "elbowL": -0.05,
+                  "bladePitch": 0.05, "bladePitchOff": 0
+                }
+              }
+            ]
           }
         }
-      }
-    },
+      }    },
     "weaponMount": {
       "swordPitchDeg": 68,
       "swordYawDeg": 16,
