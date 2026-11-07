@@ -163,7 +163,12 @@ export function turnInPlaceUpdate(world: World, dt: number, intents: Intents): v
   if (t.phase === 'active') {
     const dur = Math.max(cfg.durationSec, world.config.fixedDt);
     t.progress = Math.min(1, t.progress + dt / dur);
-    c.bodyYaw = wrapAngle(t.fromYaw + (t.targetYaw - t.fromYaw) * ease(t.progress));
+    // v9s.2：必须用「最短弧」插值。t.targetYaw 本身已 wrapAngle，若与 t.fromYaw 跨 ±π
+    // 接缝，原始差 (t.targetYaw - t.fromYaw) 会比最短弧多/少一个 2π，本帧插值会走「长弧」
+    // （≈360° 反向整圈）—— 正是「锁定目标转几圈、停步后反向转几圈」的根因。先 wrapAngle
+    // 取最短弧再乘进度，无论接缝如何，转身永远走 dir 决定的短弧。
+    const turnDelta = wrapAngle(t.targetYaw - t.fromYaw);
+    c.bodyYaw = wrapAngle(t.fromYaw + turnDelta * ease(t.progress));
     // 非拖拽时让面朝向跟随身体一起旋转：否则完成帧回到 idle 后，orientation 的
     // approach 会以旧 facing 为目标把身体慢慢拉回去，转身等于白做。
     // v9s 修正：原先写死 c.facing = t.targetYaw，激活当帧就把 facing 从旧值瞬间
