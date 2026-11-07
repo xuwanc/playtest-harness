@@ -3,6 +3,8 @@ import type { GroundBasis } from '../adapters/input';
 import type { Box, ViewConfig, World } from '../core';
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
+import { createGroundRing } from './ground-ring';
+import { dummyThreatLevel, isHostileDummy } from '../core';
 import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
 import { createVoxelRig } from './voxel-rig';
 import type { HurtPose } from './hurt-pose';
@@ -174,17 +176,43 @@ export function createSceneView(container: HTMLElement, world: World, view: View
   const dummyGroups = dummyRigs.map((r) => r.group);
   const raycaster = new THREE.Raycaster();
 
-  // ---- 当前锁定目标的脚下指示环（世界坐标，不随玩家旋转） ----
-  const ringR = view.targeting.ringRadius;
-  const targetRingMat = new THREE.MeshBasicMaterial({
-    color: view.targeting.ringColor, transparent: true, opacity: 0.9,
-    side: THREE.DoubleSide, depthWrite: false,
+  // ---- v9s.9 脚下指示半环（玩家 / 假人同构，世界坐标，不随角色旋转） ----
+  // 默认半环、两端渐变；假人被锁定时涨到 3/4 环、略微放大、透明度降低，
+  // 颜色读 Core 的威胁等级：中立冷色，敌对低威胁黄 → 高威胁红。
+  const ringCfg = view.groundRing;
+  const playerRing = createGroundRing({
+    radius: ringCfg.playerRadius,
+    thickness: ringCfg.thickness,
+    arcRad: (ringCfg.arcDeg * Math.PI) / 180,
+    edgeFade: ringCfg.edgeFade,
+    color: ringCfg.playerColor,
+    opacity: ringCfg.opacity,
+    y: 0.028,
+    renderOrder: 6,
   });
-  const targetRing = new THREE.Mesh(new THREE.RingGeometry(ringR - 0.07, ringR, 28), targetRingMat);
-  targetRing.rotation.x = -Math.PI / 2;
-  targetRing.position.y = 0.03;
-  targetRing.visible = false;
-  scene.add(targetRing);
+  playerRing.mesh.name = 'player-ground-ring';
+  scene.add(playerRing.mesh);
+
+  const dummyRings = world.dummies.map((s) => {
+    const ring = createGroundRing({
+      radius: ringCfg.dummyRadius,
+      thickness: ringCfg.thickness,
+      arcRad: (ringCfg.arcDeg * Math.PI) / 180,
+      edgeFade: ringCfg.edgeFade,
+      color: ringCfg.neutralColor,
+      opacity: ringCfg.opacity,
+      y: 0.022,
+      renderOrder: 5,
+    });
+    ring.mesh.name = `dummy-ground-ring-${s.id}`;
+    scene.add(ring.mesh);
+    return ring;
+  });
+  const ringColor = new THREE.Color();
+  const playerRingColor = new THREE.Color(ringCfg.playerColor);
+  const neutralRingColor = new THREE.Color(ringCfg.neutralColor);
+  const lowThreatRingColor = new THREE.Color(ringCfg.lowThreatColor);
+  const highThreatRingColor = new THREE.Color(ringCfg.highThreatColor);
 
   // ---- 战斗特效（全部挂在角色朝向锚点上，局部 +Z = 前方） ----
   const fxAnchor = new THREE.Group();
@@ -357,12 +385,38 @@ export function createSceneView(container: HTMLElement, world: World, view: View
         if (w.dummies[i]) dummyRigs[i].update(w.dummies[i], frameDt);
       }
 
-      // 目标指示环跟随锁定假人，轻微呼吸，让「智能选目标」看得见
-      const target = w.targeting.hasTarget ? w.dummies[w.targeting.targetId - 1] : undefined;
-      targetRing.visible = !!target;
-      if (target) {
-        targetRing.position.set(target.position.x, target.position.y + 0.03, target.position.z);
-        targetRing.scale.setScalar(1 + 0.07 * Math.sin(w.time * 6));
+      // v9s.9：脚下半环 —— 弧心朝相机侧（屏幕下方），假人颜色读 Core 威胁等级
+      const camPos = cam.camera.position;
+      const ringYaw = Math.atan2(camPos.x - c.position.x, camPos.z - c.position.z);
+      playerRing.mesh.position.set(c.position.x, c.position.y + 0.028, c.position.z);
+      playerRing.update(
+        (ringCfg.arcDeg * Math.PI) / 180, ringCfg.opacity, 1, playerRingColor, ringYaw,
+      );
+      for (let i = 0; i < dummyRings.length; i++) {
+        const d = w.dummies[i];
+        const ring = dummyRings[i];
+        if (!d) {
+          ring.mesh.visible = false;
+          continue;
+        }
+        const selected = w.targeting.hasTarget && w.targeting.targetId === d.id;
+        if (isHostileDummy(w, d)) {
+          const level = dummyThreatLevel(w, d);
+          ringColor.copy(lowThreatRingColor).lerp(highThreatRingColor, level);
+        } else {
+          ringColor.copy(neutralRingColor);
+        }
+        const arcDeg = selected ? ringCfg.selectedArcDeg : ringCfg.arcDeg;
+        // 选中：透明度降低 + 略微变大（带一点呼吸，避免像静态贴图）
+        const breath = selected ? 1 + 0.015 * Math.sin(w.time * 2.2 + d.id) : 1;
+        ring.mesh.position.set(d.position.x, d.position.y + 0.022, d.position.z);
+        ring.update(
+          (arcDeg * Math.PI) / 180,
+          selected ? ringCfg.selectedOpacity : ringCfg.opacity,
+          selected ? ringCfg.selectedScale * breath : 1,
+          ringColor,
+          ringYaw,
+        );
       }
 
       fxAnchor.position.set(c.position.x, c.position.y, c.position.z);
@@ -558,8 +612,8 @@ export function createSceneView(container: HTMLElement, world: World, view: View
     dispose(): void {
       voxel.dispose();
       for (const rig of dummyRigs) rig.dispose();
-      targetRing.geometry.dispose();
-      targetRingMat.dispose();
+      playerRing.dispose();
+      for (const ring of dummyRings) ring.dispose();
       slash.geometry.dispose();
       slashMat.dispose();
       boltGeo.dispose();

@@ -743,7 +743,7 @@ export type DummyState = {
 export type DummyViewConfig = {
   /** 按 id 顺序取色，数量不足时回绕 */
   colors: string[];
-  labelBg: string;
+  /** 挥砍攻击弧颜色 */
   attackArcColor: string;
 };
 
@@ -1283,10 +1283,40 @@ export type HurtViewConfig = {
   shoulder: HurtPoseProfile;
 };
 
-/** 当前锁定目标的脚下指示环。 */
-export type TargetViewConfig = {
-  ringColor: string;
-  ringRadius: number;
+/**
+ * v9s.9 · 脚下指示半环（玩家 / 假人同构，纯观感）。
+ *
+ * 环贴地、半透明、两端渐隐；弧心朝屏幕下方（相机侧）。假人默认半环，
+ * 被锁定（选中）时弧长涨到 3/4 环、整体略微放大、透明度降低；
+ * 颜色由 Core 的威胁读数决定：中立单位冷色，敌对单位低威胁黄 → 高威胁红。
+ */
+export type GroundRingViewConfig = {
+  /** 玩家环半径（米） */
+  playerRadius: number;
+  /** 假人环半径（米） */
+  dummyRadius: number;
+  /** 环带宽度（米） */
+  thickness: number;
+  /** 默认弧长（度），180 = 半环 */
+  arcDeg: number;
+  /** 选中弧长（度），270 = 3/4 环 */
+  selectedArcDeg: number;
+  /** 默认透明度 */
+  opacity: number;
+  /** 选中透明度（降低 = 更淡，避免长期锁定太抢眼） */
+  selectedOpacity: number;
+  /** 选中放大倍率 */
+  selectedScale: number;
+  /** 两端渐变占整段弧的比例（0..0.5） */
+  edgeFade: number;
+  /** 玩家环颜色（中性，不随威胁变化） */
+  playerColor: string;
+  /** 中立单位（idle / wander）环颜色 */
+  neutralColor: string;
+  /** 敌对单位低威胁色 */
+  lowThreatColor: string;
+  /** 敌对单位高威胁色 */
+  highThreatColor: string;
 };
 
 export type ColorConfig = {
@@ -1327,7 +1357,8 @@ export type ViewConfig = {
   links: LinkViewConfig;
   dash: DashViewConfig;
   hurt: HurtViewConfig;
-  targeting: TargetViewConfig;
+  /** v9s.9：脚下指示半环（玩家 / 假人） */
+  groundRing: GroundRingViewConfig;
   colors: ColorConfig;
   dummies: DummyViewConfig;
 };

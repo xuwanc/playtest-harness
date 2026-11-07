@@ -745,9 +745,20 @@
         "arm": -0.35
       }
     },
-    "targeting": {
-      "ringColor": "#ffd166",
-      "ringRadius": 0.58
+    "groundRing": {
+      "playerRadius": 0.72,
+      "dummyRadius": 0.58,
+      "thickness": 0.075,
+      "arcDeg": 180,
+      "selectedArcDeg": 270,
+      "opacity": 0.4,
+      "selectedOpacity": 0.3,
+      "selectedScale": 1.12,
+      "edgeFade": 0.2,
+      "playerColor": "#8fe7ff",
+      "neutralColor": "#7fb8d8",
+      "lowThreatColor": "#ffc85a",
+      "highThreatColor": "#ff3b30"
     },
     "colors": {
       "ground": "#2b3440",
@@ -772,7 +783,6 @@
         "#b58fe0",
         "#e26d6d"
       ],
-      "labelBg": "rgba(12,18,26,0.82)",
       "attackArcColor": "#ff6b5e"
     }
   }

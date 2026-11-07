@@ -163,3 +163,29 @@ export function gazeUpdate(world: World, _dt: number, intents: Intents): void {
 export function gazeCentroidYaw(world: World): number {
   return world.gaze.centroidYaw;
 }
+
+/** 敌对判定：行为模式倍率达到 hostileModeWeight 才算「会主动接近」的单位。 */
+export function isHostileDummy(world: World, d: World['dummies'][number]): boolean {
+  const cfg = world.config.gaze;
+  return (cfg.modeWeight[d.mode] ?? 0.5) >= cfg.hostileModeWeight;
+}
+
+/**
+ * v9s.9 · 单个假人的威胁读数 0..1，供表现层给脚下半环上色（越红 = 威胁越大）。
+ *
+ * 与威胁注视 / 智能相机同源：proximity × modeWeight（+ 挥砍 active 帧 attackBoost），
+ * 以「近距攻击单位」为满值归一。纯几何读取，不改任何状态，不做时间累积。
+ */
+export function dummyThreatLevel(world: World, d: World['dummies'][number]): number {
+  const cfg = world.config.gaze;
+  if (!cfg.enabled || !world.modules.gaze) return 0;
+  const p = world.character.position;
+  const dist = Math.hypot(d.position.x - p.x, d.position.z - p.z);
+  if (dist < EPS || dist > cfg.threatRange) return 0;
+  const span = Math.max(EPS, cfg.threatRange - cfg.nearDistance);
+  const prox = clamp((cfg.threatRange - dist) / span, 0, 1);
+  let raw = prox * (cfg.modeWeight[d.mode] ?? 0.5);
+  if (d.attackPhase === 'active') raw += cfg.attackBoost * prox;
+  const maxRaw = Math.max(EPS, cfg.modeWeight.attack ?? 1.5);
+  return clamp(raw / maxRaw, 0, 1);
+}
