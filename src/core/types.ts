@@ -1521,6 +1521,84 @@ export type ProgramAnimViewConfig = {
   /** v8d：攻击跨步的等效驱动与姿态幅度（两条下半身路径共用） */
   stride: AttackStrideViewConfig;
   landing: LandingViewConfig;
+  /** v9s.22：四肢 squash & stretch（纯表现，可整体关闭） */
+  stretch: StretchViewConfig;
+  /** v9s.22：挥击拖尾（纯表现，可整体关闭） */
+  trail: TrailViewConfig;
+};
+
+/**
+ * v9s.22 · 挥击拖尾（刀光）参数。
+ *
+ * 打击感来自**轨迹**而不是姿势：同一套攻击关键帧，有刀光和没刀光判若两作。
+ * 拖尾按「刃尖速度超过阈值」才记录，静止时不会常亮；采样点按年龄淡出，
+ * 所以挥得越快轨迹越长、越亮。
+ */
+/**
+ * v9s.22 · 命中定格（hitstop）。
+ *
+ * 格斗游戏里最便宜、最有效的一招：命中瞬间把角色动画冻 50~90ms，Core 照常推进。
+ * 冻结期间画面静止一瞬，玩家会把它读成「打实了」，冲击力成倍放大，
+ * 而且完全不用改物理、判定或任何 Core 逻辑。
+ */
+export type HitstopViewConfig = {
+  enabled: boolean;
+  /** 冻结时长（秒），60fps 下 3~5 帧最自然 */
+  duration: number;
+};
+
+export type TrailViewConfig = {
+  enabled: boolean;
+  /** 最多采样点数（≈ 帧数），越大轨迹越长 */
+  maxSamples: number;
+  /** 相邻采样点的最小世界距离（m），避免静止时堆点 */
+  minStep: number;
+  /** 单个采样点存活时长（秒） */
+  life: number;
+  /** 触发拖尾的最低刃尖速度（m/s） */
+  minSpeed: number;
+  /** 颜色（十六进制） */
+  color: string;
+  /** 亮度倍率（加色混合） */
+  intensity: number;
+  /** 刃尖额外提亮 0..1 */
+  tipBoost: number;
+};
+
+/**
+ * v9s.22 · 四肢伸缩 / 挤压（squash & stretch）。
+ *
+ * 现状的痛点是「动作幅度不够夸张」：方块人手臂只有 0.36 m（比肩宽 0.6 还短），
+ * 挥击看上去就是在原地比划。业界 2D 动画靠「拉长、压扁」把力量感做出来
+ * （Disney 十二原则里的 squash & stretch），3D 里就是给骨骼段做非均匀缩放。
+ *
+ * 这里刻意**不做**无限伸缩：骨骼变长会把体素拉成面条，且手的位置会和碰撞盒脱节。
+ * 只允许「短促、峰值小、带体积补偿」的形变 —— 拉伸时自动收细、压扁时自动变粗，
+ * 模拟橡皮的泊松效应，观感才不会廉价。
+ */
+export type StretchViewConfig = {
+  /** 总开关：false = 所有 scale 恒为 1（精确回到旧姿态） */
+  enabled: boolean;
+  /** 挥出瞬间手臂沿骨长的峰值（1 = 不拉长；1.15 = 峰值拉长 15%） */
+  swingArm: number;
+  /** 蓄势 / 收招时手臂的压缩（<1 变短变粗，例如 0.94） */
+  chargeArm: number;
+  /** 跑动时腿部沿骨长的峰值（1 = 不拉长） */
+  runLeg: number;
+  /** 躯干随挥击的拉伸幅度，相对手臂的增益（0 = 躯干不参与） */
+  torsoGain: number;
+  /** 命中瞬间的整体挤压量（0..1，0 = 不做命中 squash） */
+  impactSquash: number;
+  /** 撞击脉冲的衰减速率（1/s），约 1/decay 秒回到原状 */
+  impactDecay: number;
+  /**
+   * 体积补偿指数：along^-this 作为垂直方向缩放。
+   * 0.5 ≈ 体积守恒（拉长就变细）；0 = 完全不变粗细（真正的「拉长条」）；
+   * 1.5 = 反向夸张（拉长还变粗，卡通感更强）。
+   */
+  volumeExp: number;
+  /** scale 的指数平滑速率（1/s），避免姿态跳变时手臂「啪」地弹一下 */
+  smoothing: number;
 };
 
 export type OrientationViewConfig = {
@@ -1587,6 +1665,24 @@ export type WeaponMountConfig = {
   staffPitchDeg: number;
   shieldPitchDeg: number;
   bowPitchDeg: number;
+
+  /* ---- v9s.22：双手握持（副手 IK） ---- */
+  /**
+   * 主手武器向身体中线内收的距离（m）。只对双手武器生效。
+   * 方块人的肩距 0.6 而单臂只有 0.42，武器挂在体外侧时副手永远够不到，
+   * 所以双手武器必须整体往中线挪一点 —— 这是「双手拿不到」的物理前提。
+   */
+  twoHandInsetX: number;
+  /**
+   * 副握点在武器局部 Y 轴上的位置（负 = 柄下段，向手后方）。
+   * 越小（越负）离主手越远，越考验副手臂展。
+   */
+  twoHandGripY: number;
+  /**
+   * 副手够不到时允许的臂长拉伸上限（倍）。1 = 不拉伸（手会停在臂展处指向刀柄）。
+   * 超过 1.35 会明显「拉面条」，建议 1.15~1.3。
+   */
+  twoHandMaxStretch: number;
 };
 
 /** 受击动画表现参数（弧度 / 强度），只影响观感。 */
@@ -1778,6 +1874,10 @@ export type ViewConfig = {
   lab: LabViewConfig;
   /** v9s.16：箭矢 / 奥术飞弹 / 斩击弧的实体尺寸与发光参数（纯观感） */
   projectiles: ProjectileViewConfig;
+  /** v9s.22：挥击拖尾（刀光） */
+  weaponTrail: TrailViewConfig;
+  /** v9s.22：命中定格（纯表现，只冻角色姿态，不冻 Core） */
+  hitstop: HitstopViewConfig;
   colors: ColorConfig;
   dummies: DummyViewConfig;
 };

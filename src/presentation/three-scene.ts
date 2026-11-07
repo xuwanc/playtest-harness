@@ -12,6 +12,7 @@ import {
 import { dummyThreatLevel, isHostileDummy } from '../core';
 import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
 import { createVoxelRig } from './voxel-rig';
+import { createWeaponTrail } from './weapon-trail';
 import type { HurtPose } from './hurt-pose';
 
 export type SceneView = {
@@ -76,6 +77,10 @@ export type SceneView = {
   setLabVisible(v: boolean): void;
   /** v9s.15：只关浮动标牌，保留地面盘 */
   setLabLabelsVisible(v: boolean): void;
+  /** v9s.22：挥击拖尾读数（采样点数 / 是否可见），供验收与调试面板 */
+  trailDebug(): { count: number; visible: boolean };
+  /** v9s.22：角色本帧四肢形变读数（1 = 原长） */
+  stretchDebug(): { arm: number; leg: number; torso: number; impact: number };
   /** v9s.15：传送后把相机跟随目标瞬移过去，避免跨场地滑行 */
   snapCamera(x: number, y: number, z: number): void;
   dispose(): void;
@@ -168,6 +173,9 @@ export function createSceneView(
     view.voxel, view.colors, world.config.moveSpeed, view.orientation, view.gait,
     view.weaponMount, view.lean, view.hurt, view.animation, view.ik, view.links,
   );
+  // v9s.22：挥击拖尾挂在场景根节点（世界坐标采样，不随角色层级变换）
+  const playerTrail = createWeaponTrail(view.weaponTrail);
+  scene.add(playerTrail.object);
   const playerRoot = new THREE.Group();
   // 翻滚枢轴放在身体中心高度：若直接绕脚底原点旋转，前滚到 90° 以后头部会插进地面。
   // rollPivot 上抬 ROLL_PIVOT_Y，rig 内部反向偏移同样高度，净位置不变，
@@ -588,13 +596,34 @@ export function createSceneView(
     };
   }
 
+  // v9s.22 命中定格（hitstop）：纯表现层状态，不写 World / 快照。
+  // Core 照常推进（位置、判定、冷却都在走），这里只是「不把新姿态刷到骨架上」，
+  // 于是画面在命中瞬间静止一两帧 —— 玩家读成「打实了」。
+  let prevHitCount = 0;
+  let freezeLeft = 0;
+
   return {
     gaitDebug() {
       return voxel.gaitDebug();
     },
+    trailDebug() {
+      return playerTrail.debug();
+    },
+    stretchDebug() {
+      const s = voxel.stretch();
+      return { arm: s.arm, leg: s.leg, torso: s.torso, impact: s.impact };
+    },
     render(w, frameDt): void {
       const c = w.character;
       const cb = w.combat;
+
+      // 只在「命中数增加」的那一帧触发；连续命中不会叠加成长时间定格。
+      if (view.hitstop.enabled && w.hitCount > prevHitCount && freezeLeft <= 0) {
+        freezeLeft = Math.max(0, view.hitstop.duration);
+      }
+      prevHitCount = w.hitCount;
+      const frozen = freezeLeft > 0;
+      if (frozen) freezeLeft -= frameDt;
 
       playerRoot.position.set(c.position.x, c.position.y, c.position.z);
       // 身体用平滑朝向（bodyYaw），头 / 腿由 rig 内部按各自角度分离驱动
@@ -608,10 +637,26 @@ export function createSceneView(
       rollPivot.rotation.x = rolling ? rollT * Math.PI * 2 : 0;
       rollPivot.position.y = ROLL_PIVOT_Y - (rolling ? 0.2 * Math.sin(Math.PI * rollT) : 0);
       // coreTime 传 Core 的 world.time：落地缓冲脉冲因此与暂停 / 时间缩放 / 单步同步
-      voxel.update(c, cb, w.playerHurt, frameDt, w.abilities.channeling, w.time, w.playerLink, w.turnInPlace);
+      if (!frozen) {
+        voxel.update(c, cb, w.playerHurt, frameDt, w.abilities.channeling, w.time, w.playerLink, w.turnInPlace);
+      }
 
-      for (let i = 0; i < dummyRigs.length; i++) {
-        if (w.dummies[i]) dummyRigs[i].update(w.dummies[i], frameDt);
+      // v9s.22：挥击拖尾 —— 取本帧武器的刃根/刃尖世界坐标，只在攻击/冲刺期间记录。
+      // 拖尾是「轨迹」而不是「姿势」，是打击感最直接的来源（对应 2D 的 smear frame）。
+      playerTrail.update(
+        frozen ? 0 : frameDt,
+        frozen ? null : voxel.weaponBlade(),
+        !frozen && (
+          cb.phase === 'active' || cb.phase === 'windup'
+          || w.playerLink.phase === 'active'
+          || (rolling && w.dash.duration > 0)
+        ),
+      );
+
+      if (!frozen) {
+        for (let i = 0; i < dummyRigs.length; i++) {
+          if (w.dummies[i]) dummyRigs[i].update(w.dummies[i], frameDt);
+        }
       }
 
       // v9s.9 / v9s.10：脚下半环 —— 弧心朝相机侧（屏幕下方），假人颜色读 Core 威胁等级
@@ -787,8 +832,11 @@ export function createSceneView(
         if (r.life <= 0) r.mesh.visible = false;
       }
 
-      const showSlash = cb.phase === 'active' && cb.comboIndex > 0;
-      slashMat.opacity = showSlash ? 0.9 : 0;
+      // v9s.22：轻击不再画「斩击弧」—— 那是一个固定在身前的白色环，和真实刀轨
+      // 没关系，反而会盖住贴刀身的拖尾。只有 comboIndex >= 3 的重击保留弧光，
+      // 作为「这一下特别重」的额外信号。
+      const showSlash = cb.phase === 'active' && cb.comboIndex >= 3;
+      slashMat.opacity = showSlash ? 0.7 : 0;
       slashGlowMat.opacity = showSlash ? pfx.slashGlowOpacity : 0;
       if (showSlash) {
         slashGroup.rotation.z = -1.2 + cb.attackProgress * 3.2;
@@ -993,6 +1041,7 @@ export function createSceneView(
       for (const ring of dummyRings) ring.dispose();
       for (const halo of dummyHalos) halo.dispose();
       playerMeter.dispose();
+      playerTrail.dispose();
       for (const m of dummyWarns) m.dispose();
       landingPreview.dispose();
       slashGeo.dispose();

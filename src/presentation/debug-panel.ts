@@ -263,6 +263,28 @@ export function createDebugPanel(
   fight.add(cb.bow, 'autoFire').name('蓄满自动放箭 (按住连射)');
   fight.add(cb.bow, 'recoilSpeed', 0, 5, 0.1).name('射击后坐力 (m/s)');
   fight.add(cb.bow, 'recoilDecay', 1, 30, 0.5).name('后坐力衰减 (1/s)');
+
+  // v9s.22：夸张化（squash & stretch / 刀光 / 命中定格）
+  const exagg = sub(fightRoot, '夸张化 (v9s.22)');
+  const sq = view.animation.stretch;
+  exagg.add(sq, 'enabled').name('四肢伸缩 开');
+  exagg.add(sq, 'swingArm', 1, 1.8, 0.01).name('挥出时手臂拉伸');
+  exagg.add(sq, 'chargeArm', 0.7, 1, 0.01).name('蓄力时手臂压缩');
+  exagg.add(sq, 'impactSquash', 0, 0.5, 0.01).name('命中挤压量');
+  exagg.add(sq, 'impactDecay', 2, 30, 0.5).name('挤压回弹速率 (1/s)');
+  exagg.add(sq, 'torsoGain', 0, 1, 0.05).name('躯干跟随比例');
+  exagg.add(sq, 'volumeExp', 0, 1.5, 0.05).name('体积补偿指数');
+  const tr = view.weaponTrail;
+  exagg.add(tr, 'enabled').name('挥击刀光 开');
+  exagg.add(tr, 'life', 0.04, 0.4, 0.01).name('刀光残留 (s)');
+  exagg.add(tr, 'intensity', 0, 1.5, 0.05).name('刀光亮度');
+  exagg.add(tr, 'minStep', 0.005, 0.1, 0.005).name('采样最小位移 (m)');
+  exagg.add(view.hitstop, 'enabled').name('命中定格 开');
+  exagg.add(view.hitstop, 'duration', 0, 0.2, 0.005).name('定格时长 (s)');
+  const wm = view.weaponMount;
+  exagg.add(wm, 'twoHandInsetX', 0, 0.3, 0.01).name('双手武器内收 (m)');
+  exagg.add(wm, 'twoHandGripY', -0.5, 0, 0.01).name('副握点在柄上的位置');
+  exagg.add(wm, 'twoHandMaxStretch', 1, 1.8, 0.01).name('副手臂长拉伸上限');
   fight.add(cb.bow.trajectory, 'gravity', 0, 24, 0.5).name('箭矢重力 (m/s²)');
   fight.add(cb.bow.trajectory, 'speedMax', 8, 32, 0.5).name('满蓄初速 (m/s)');
   fight.add(cb.bow.trajectory, 'homingRange', 0, 30, 1).name('自动瞄准距离 (m)');

@@ -21,7 +21,12 @@ import { emptyHurtPose, solveHurtPose } from './hurt-pose';
 import type { HurtPose } from './hurt-pose';
 import { solveInertiaPose } from './inertia';
 import { applyFootIK, captureIKBase, EMPTY_IK_DIAGNOSTICS } from './rig-ik';
+import { blendIKAngles, solveTwoBoneIK } from './ik';
 import type { IKDiagnostics, IKLimb } from './rig-ik';
+import {
+  decayImpact, NEUTRAL_STRETCH, smoothStretch, solveStretch,
+} from './limb-stretch';
+import type { StretchConfig, StretchPose } from './limb-stretch';
 
 export type VoxelRig = {
   group: THREE.Group;
@@ -61,6 +66,10 @@ export type VoxelRig = {
   hurt(): HurtPose;
   /** v8g：本帧足部 IK 锚定读数（是否生效 / 权重 / 钳制数 / 钉地残差）。 */
   ik(): IKDiagnostics;
+  /** v9s.22：本帧四肢 squash & stretch 读数（1 = 原长），含命中脉冲强度。 */
+  stretch(): StretchPose & { impact: number };
+  /** v9s.22：副手握持读数（目标距离 / 实际采用的握点位置 / 解出的角度），调试用。 */
+  gripDebug(): { active: boolean; dist: number; gy: number; pitch: number; joint: number };
   /** 下盘相对身体的连续偏航（v8b），供验收「引导/后退时跨朝向不跳变」。 */
   hipYaw(): number;
   /** v9n：停步收相进度（-1 = 未接管）与本帧双腿姿态，供浏览器验收过渡是否平滑。
@@ -79,6 +88,14 @@ export type VoxelRig = {
   gaitYaw(): number;
   /** 箭（局部 +Z）在世界空间的单位方向，用于验收「弓箭朝正前方」。 */
   arrowDirection(): { x: number; y: number; z: number };
+  /**
+   * v9s.22：当前武器「刃根 / 刃尖」的世界坐标，供挥击拖尾取样。
+   * 无刃武器（弓）或未装备时返回 null。
+   */
+  weaponBlade(): {
+    base: { x: number; y: number; z: number };
+    tip: { x: number; y: number; z: number };
+  } | null;
   dispose(): void;
 };
 
@@ -88,7 +105,16 @@ function clamp(v: number, lo: number, hi: number): number {
 
 const EPS = 1e-6;
 
-type Limb = { root: THREE.Group; joint: THREE.Group; hand: THREE.Group };
+type Limb = {
+  root: THREE.Group;
+  joint: THREE.Group;
+  hand: THREE.Group;
+  /** v9s.22：两段骨头的 mesh，供 squash & stretch 缩放 */
+  upperMesh: THREE.Mesh;
+  lowerMesh: THREE.Mesh;
+  /** 单段骨长（m），缩放后 root/joint 的 position 由它推导 */
+  segLen: number;
+};
 /** 腿额外带一个末端标记，供 IK 取世界锚点（小腿末端，不含鞋的视觉偏移）。 */
 type Leg = Limb & { tip: THREE.Object3D };
 
@@ -249,6 +275,12 @@ export function createVoxelRig(
     chargeColor: '#7fd4ff', ringRadius: 1.25, fxDuration: 0.42,
     leanDeg: 16, shieldPitchDeg: 42, pelvisReach: 0.12,
   };
+  // v9s.22：老调用方（单测里手工构造的 config）可能没有 stretch 段，缺省为关闭，
+  // 保证「不传 = 旧姿态逐字节一致」。
+  const stretchCfg: StretchConfig = animCfg.stretch ?? {
+    enabled: false, swingArm: 1, chargeArm: 1, runLeg: 1, torsoGain: 0,
+    impactSquash: 0, impactDecay: 12, volumeExp: 0.5, smoothing: 26,
+  };
   // ---- v8f 合理骨架层级：共享骨盆 → 上 / 下半身分离 ----
   // 旧结构里 lower 与上半身组都直接挂在 root（原点 = 脚底），于是上半身 rotation.x 是
   // 「整个人绕脚底刚性倾倒」，腿完全不动 —— 用户反馈的「脚底锚定身体倾斜」。
@@ -336,12 +368,15 @@ export function createVoxelRig(
     tip.position.y = -legLen / 2;
     knee.add(tip);
 
-    return { root: hip, joint: knee, hand: group(), tip };
+    return { root: hip, joint: knee, hand: group(), tip, upperMesh: thigh, lowerMesh: shin, segLen: legLen / 2 };
   };
 
   const makeArm = (sx: number): Limb => {
     const shoulder = group();
     shoulder.name = sx < 0 ? 'shoulderL' : 'shoulderR';
+    // v9s.22：与腿同构的 ZYX —— 两骨 IK 要求 roll 与 pitch 共面（R = Rz·Rx），
+    // 默认 XYZ 是 Rx·Rz，roll≠0 时余弦定理无解析解。副手握持 IK 依赖这一点。
+    shoulder.rotation.order = 'ZYX';
     shoulder.position.set(sx * (bodyW / 2 + t / 2), bodyH - 0.04, 0); // 相对骨盆
     upper.add(shoulder);
 
@@ -359,6 +394,7 @@ export function createVoxelRig(
     elbow.add(fore);
 
     const hand = group();
+    hand.name = sx < 0 ? 'handL' : 'handR';
     hand.position.y = -armLen / 2;
     elbow.add(hand);
 
@@ -366,7 +402,7 @@ export function createVoxelRig(
     palm.position.y = 0.045;
     hand.add(palm);
 
-    return { root: shoulder, joint: elbow, hand };
+    return { root: shoulder, joint: elbow, hand, upperMesh: upperArm, lowerMesh: fore, segLen: armLen / 2 };
   };
 
   const legL = makeLeg(-1);
@@ -388,6 +424,8 @@ export function createVoxelRig(
   // 握持挂点：给武器一个基础姿态，让它从前臂「斜向前伸出」而不是贴着手臂竖直朝上
   const mountR = group();
   const mountL = group();
+  mountR.name = 'mountR';
+  mountL.name = 'mountL';
   armR.hand.add(mountR);
   armL.hand.add(mountL);
 
@@ -410,6 +448,31 @@ export function createVoxelRig(
     parts[id].right.visible = false;
     parts[id].left.visible = false;
   }
+
+  /**
+   * v9s.22：在武器上打两个「刃根 / 刃尖」标记，供表现层的挥击拖尾取样。
+   *
+   * 为什么不用固定长度常量去算：武器内部有护手、柄、球头等分段，
+   * 各武器长度差 2 倍以上；把标记挂在武器 Group 上，取世界坐标时自动带上
+   * 手部姿态、mount 俯仰、攻击旋身和 v9s.22 的手臂形变，零额外推导。
+   */
+  function markBlade(g: THREE.Object3D, baseY: number, tipY: number): void {
+    const b = new THREE.Object3D();
+    b.name = 'bladeBase';
+    b.position.y = baseY;
+    g.add(b);
+    const t = new THREE.Object3D();
+    t.name = 'bladeTip';
+    t.position.y = tipY;
+    g.add(t);
+  }
+  // 刃根只取「靠近刀尖的一小段」：整条刀身都参与的话，拖尾会变成一根
+  // 和刀一样长的白棍（实测 0.69 m 宽），读不出「划过的轨迹」。
+  markBlade(parts['sword-shield'].right, 0.40, 0.55);
+  markBlade(parts['dual-swords'].right, 0.40, 0.55);
+  markBlade(parts['dual-swords'].left, 0.40, 0.55);
+  markBlade(parts.greatsword.right, 0.64, 0.85);
+  markBlade(parts.staff.right, 0.70, 0.92);
 
   let currentWeapon: WeaponId | null = null;
 
@@ -484,6 +547,16 @@ export function createVoxelRig(
   /** v9s：本帧原地转身踏步脉冲强度（诊断用） */
   let lastTurnStep = 0;
 
+  // ---- v9s.22 squash & stretch 状态（纯表现，不进 Core / 快照）----
+  /** 本帧输出的形变量（诊断用） */
+  let lastStretch: StretchPose = { ...NEUTRAL_STRETCH };
+  /** 命中 / 砍到底的冲击脉冲 0..1，指数衰减 */
+  let impactPulse = 0;
+  /** 上一帧挥击曲线值，用于检测「从高位回落」这个拐点 */
+  let prevSwingVal = 0;
+  /** v9s.22：副手握持诊断读数 */
+  let lastGrip = { active: false, dist: 0, gy: 0, pitch: 0, joint: 0 };
+
   // ---- v8c 程序动画分层状态（全部纯表现，不进入 Core / 快照）----
   /** 攻击姿态混合系数 0..1：指数平滑进出攻击，避免下盘姿态单帧跳变 */
   let attackBlend = 0;
@@ -533,6 +606,12 @@ export function createVoxelRig(
     }
     mountR.rotation.set(rp, 0, rz);
     mountL.rotation.set(lp, 0, lz);
+    // v9s.22：双手武器把武器本体往身体中线挪一点。
+    // 方块人肩距 0.6、单臂只有 0.42，武器挂在体外侧时副手永远够不到；
+    // 内收 9cm 后副手 IK 才可能真正握到柄上（而不是停在臂展处指着刀柄）。
+    mountR.position.x = w === 'greatsword'
+      ? -Math.max(0, mountCfg.twoHandInsetX ?? 0)
+      : 0;
   }
 
   function setWeapon(w: WeaponId): void {
@@ -619,6 +698,106 @@ export function createVoxelRig(
     return Math.max(0, 1 - (t - 0.62) / 0.38);
   }
 
+  /**
+   * v9s.22：把 squash & stretch 姿态写进骨骼。
+   *
+   * 关键点不是 scale 本身，而是**子关节的 position 必须同步放大** ——
+   * 只缩放 mesh 会让前臂 / 手掌留在原来的位置上，手臂从肘部断开。
+   * 这里统一按 `segLen × along` 重算 joint / hand / footTip 的局部 y，
+   * 于是「骨长变化」在整条链上自洽，武器挂点也跟着手自然前移。
+   */
+  function applyStretchPose(s: StretchPose): void {
+    for (const arm of [armL, armR]) {
+      arm.upperMesh.scale.set(s.girthArm, s.arm, s.girthArm);
+      arm.upperMesh.position.y = (-arm.segLen / 2) * s.arm;
+      arm.joint.position.y = -arm.segLen * s.arm;
+      arm.lowerMesh.scale.set(s.girthArm, s.arm, s.girthArm);
+      arm.lowerMesh.position.y = (-arm.segLen / 2) * s.arm;
+      arm.hand.position.y = -arm.segLen * s.arm;
+    }
+    for (const leg of [legL, legR]) {
+      leg.upperMesh.scale.set(s.girthLeg, s.leg, s.girthLeg);
+      leg.upperMesh.position.y = (-leg.segLen / 2) * s.leg;
+      leg.joint.position.y = -leg.segLen * s.leg;
+      leg.lowerMesh.scale.set(s.girthLeg, s.leg, s.girthLeg);
+      leg.lowerMesh.position.y = (-leg.segLen / 2) * s.leg;
+      leg.tip.position.y = -leg.segLen * s.leg;
+    }
+    torso.scale.set(s.girthTorso, s.torso, s.girthTorso);
+    torso.position.y = (bodyH / 2) * s.torso;
+  }
+
+  /**
+   * v9s.22：副手握持 —— 左臂两骨 IK 到武器柄上的副握点。
+   *
+   * 旧版大剑的「双手持握」只是给左臂写死两个角度（`rotation.x = both + 0.06`、
+   * `rotation.z = 0.38`），左手和剑柄之间没有任何几何关系，所以永远握不住：
+   * 实测左肩到柄上副握点 0.7 m，而单臂只有 0.42 m —— 差了一倍还多。
+   *
+   * 现在反过来解：先取柄上副握点的**世界坐标**，转进上半身局部空间，
+   * 再用两骨 IK 反解左肩 / 左肘角度。够不到时按 `twoHandMaxStretch` 把骨长
+   * 按需拉长（体积守恒收细），而不是硬钳制 —— 手会真的贴在柄上。
+   *
+   * `root` 需要先刷新世界矩阵（调用方负责），否则读到的是上一帧的柄位置。
+   */
+  function applySecondaryGrip(weight: number): void {
+    const gripY = mountCfg.twoHandGripY ?? -0.16;
+    const maxStretch = Math.max(1, mountCfg.twoHandMaxStretch ?? 1.25);
+    const maxReach = armLen * maxStretch * 0.99;
+    const sx = armL.root.position.x;
+    const sy = armL.root.position.y;
+    const sz = armL.root.position.z;
+
+    /**
+     * 「握点滑动」：副握点在柄上是可滑动的。
+     *
+     * 举剑过顶（windup）时主手离身体很远，固定副握点会超出副手臂展 ——
+     * 手就悬在空气里。这里沿柄轴把目标按 0.45 的比例一步步向主手收，
+     * 收到可达为止：左手虽然握得偏上，但**始终在柄上**。
+     * 这是「双手够不到」和「拉面条」之间的折中，也是真实动画里常用的做法。
+     */
+    let t = { x: 0, y: 0, z: 0 };
+    let dist = Infinity;
+    let gy = gripY;
+    for (let k = 0; k < 5; k++) {
+      const world = mountR.localToWorld(new THREE.Vector3(0, gy, 0));
+      const local = upper.worldToLocal(world.clone());
+      t = { x: local.x - sx, y: local.y - sy, z: local.z - sz };
+      dist = Math.hypot(t.x, t.y, t.z);
+      if (!Number.isFinite(dist) || dist <= EPS) return;
+      if (dist <= maxReach) break;
+      gy *= 0.45;
+    }
+    const stretch = clamp(dist / Math.max(EPS, armLen), 1, maxStretch);
+    const seg = (armLen / 2) * stretch;
+    // 肘向前折（bend = -1）：与手臂沿 -Y 伸出的骨架约定一致。
+    const sol = solveTwoBoneIK(t, seg, seg, -1);
+    const angles = blendIKAngles(
+      {
+        rootPitch: armL.root.rotation.x,
+        rootRoll: armL.root.rotation.z,
+        jointPitch: armL.joint.rotation.x,
+      },
+      sol,
+      weight,
+      0.55,
+    );
+    armL.root.rotation.x = angles.rootPitch;
+    armL.root.rotation.z = angles.rootRoll;
+    // 留一点肘弯：IK 在可达范围内会把手肘解到「完全伸直」（jointPitch ≈ 0），
+    // 视觉上像把胳膊锁死；夹到 -0.06 rad（约 3.4°）读起来仍是「握住」。
+    armL.joint.rotation.x = Math.min(angles.jointPitch, -0.06);
+    // 骨长按 IK 需要拉伸；覆盖 stretch 层对本臂的写入（本臂此刻由 IK 独占）
+    const g = 1 / Math.sqrt(stretch);
+    armL.upperMesh.scale.set(g, stretch, g);
+    armL.upperMesh.position.y = (-seg) / 2;
+    armL.joint.position.y = -seg;
+    armL.lowerMesh.scale.set(g, stretch, g);
+    armL.lowerMesh.position.y = (-seg) / 2;
+    armL.hand.position.y = -seg;
+    lastGrip = { active: true, dist, gy, pitch: angles.rootPitch, joint: armL.joint.rotation.x };
+  }
+
   /** 攻击跨步：每段攻击在挥出时向前跨一步，连击左右腿交替（combo 段奇偶决定方向），
    * 同时重心下沉，让「每一次前移动画都表现出一个跨步」，且连击节奏连贯而非原地比划。 */
   function applyStep(combat: CombatState): void {
@@ -695,7 +874,16 @@ export function createVoxelRig(
       armR.joint.rotation.x = -(0.25 + back * 0.4);
       armL.root.rotation.x = both + 0.06;
       armL.joint.rotation.x = -(0.32 + back * 0.4);
-      armL.root.rotation.z = 0.38; // 左肩内收，双手聚拢身前
+      // 双肩内收：双手要「合握」，两只手必须都往中线靠。
+      // 只收左肩（旧版）等于让左臂横跨整个肩宽去够右手，几何上不可能。
+      armL.root.rotation.z = 0.42;
+      armR.root.rotation.z = 0;
+      // 关键：手臂已经前举（rotation.x ≈ -1.6）时绕 Z 转几乎无效 ——
+      // 向量本来就沿着 Z，绕 Z 不改变方向。要让右手往身体中线收，必须绕 Y 摆。
+      // 而且符号要跟着「手在身前还是身后」翻：前举时往左侧收，后摆时往右侧收。
+      // 用 tanh 平滑过零，避免挥到中立位时 yaw 跳变。
+      const armFwd = -Math.sin(armR.root.rotation.x);
+      armR.root.rotation.y = -0.72 * Math.tanh(armFwd * 4);
       upper.rotation.y = -0.2 * swing * heavy;
     } else {
       // 剑类三连击：段1 右上劈、段2 左横斩、段3 双手大力下劈
@@ -1141,9 +1329,11 @@ export function createVoxelRig(
         // v8g：肘朝身前折（负号）；顺手修旧版 armR 误用 gait.armL 的取值
         armL.joint.rotation.x = -(0.18 + gait.armL * 0.2);
         armR.joint.rotation.x = -(0.18 + gait.armR * 0.2);
-        // 手臂 roll 每帧归零：applyCombatPose 的大剑双手分支会写 armL.root.rotation.z
+        // 手臂 roll / yaw 每帧归零：applyCombatPose 的大剑双手分支会写这两项
         armL.root.rotation.z = 0;
         armR.root.rotation.z = 0;
+        armL.root.rotation.y = 0;
+        armR.root.rotation.y = 0;
         // 骨盆起伏 / 左右重心转移 / 侧倾统一写在共享 pelvis 上：
         // 上下半身由层级自动联动，不必再分别给两个并列组手动对齐同一份位移。
         pelvis.position.x = gait.pelvisX;
@@ -1279,6 +1469,33 @@ export function createVoxelRig(
         pelvis.rotation.z += stride.pelvisRoll * s;
       }
 
+      // 2.9) v9s.22 四肢 squash & stretch：放在所有姿态层之后、朝向与 IK 之前。
+      //  形变只影响骨骼长度与粗细，不写 position / rotation，所以不会和受击、跨步、
+      //  落地缓冲打架；足部 IK 在下一步读 footTip 世界坐标，读到的是形变后的脚位。
+      if (stretchCfg.enabled) {
+        const swinging = combat.phase !== 'idle' && !combat.charging;
+        const sw = swinging ? swingCurve(combat.attackProgress) : 0;
+        // 「砍到底」的拐点：swing 从高位掉头向下 —— 与 Core 的 active 末段一致。
+        // 用它当命中脉冲，不需要从 Core 借事件通道，也不会漏掉空挥（空挥也该有回弹）。
+        if (swinging && prevSwingVal > 0.55 && sw < prevSwingVal - 1e-4) impactPulse = 1;
+        prevSwingVal = sw;
+        impactPulse = decayImpact(impactPulse, dt, stretchCfg.impactDecay);
+        const target = solveStretch(
+          {
+            swing: sw,
+            charge: combat.charging ? combat.charge : 0,
+            impact: impactPulse,
+            speedRatio,
+            grounded: c.grounded,
+          },
+          stretchCfg,
+        );
+        lastStretch = smoothStretch(lastStretch, target, dt, stretchCfg.smoothing);
+      } else {
+        lastStretch = { ...NEUTRAL_STRETCH };
+      }
+      applyStretchPose(lastStretch);
+
       // 3) 朝向三段分离：root 已由 three-scene 设为 bodyYaw
       //    下盘 = 上面算出的连续 hipYaw（v8b：跟随移动方向带转，但绝不跨 ±π 跳变）；
       //    头部先于身体转向目标（补偿攻击旋身，仍用 wrapAngle 走最短弧，但其限幅很小、
@@ -1297,6 +1514,14 @@ export function createVoxelRig(
       // 叠加在上面的惯性前倾之上 —— 「整个人抬眼看」，而不是头单独在脖子上折。
       headPivot.rotation.x = -clamp(c.headPitch ?? 0, -0.7, 0.7);
       upper.rotation.x += -clamp(c.bodyPitch ?? 0, -0.4, 0.4);
+
+      // 3.5) v9s.22 副手握持：必须在朝向 / 胸偏转都写完之后解算 ——
+      //  上半身一转动，柄的世界位置就变了，早一步解会「握在空气里」。
+      //  只在双手武器挥击期间接管，其余时间（走路 / 收刀）保持步态摆臂。
+      if (combat.weapon === 'greatsword' && combat.phase !== 'idle' && !combat.charging) {
+        root.updateWorldMatrix(true, true);
+        applySecondaryGrip(clamp(attackBlend, 0, 1));
+      }
 
       // 4) v8g 足部 IK 锚定：放在所有姿态层之后，把「骨盆被额外推走」的差值
       //    反解进髋 / 膝角。空中不钉脚（让腿随身体收起）；enabled=false 时整层跳过，
@@ -1332,6 +1557,12 @@ export function createVoxelRig(
     },
     ik(): IKDiagnostics {
       return lastIK;
+    },
+    stretch(): StretchPose & { impact: number } {
+      return { ...lastStretch, impact: impactPulse };
+    },
+    gripDebug() {
+      return { ...lastGrip };
     },
     attackBlend(): number {
       return attackBlend;
@@ -1373,6 +1604,21 @@ export function createVoxelRig(
       const z = e[10];
       const len = Math.hypot(x, y, z) || 1;
       return { x: x / len, y: y / len, z: z / len };
+    },
+    weaponBlade() {
+      if (!currentWeapon) return null;
+      const g = parts[currentWeapon].right;
+      const b = g.getObjectByName('bladeBase');
+      const t = g.getObjectByName('bladeTip');
+      if (!b || !t) return null;
+      b.updateWorldMatrix(true, false);
+      t.updateWorldMatrix(true, false);
+      const bp = b.getWorldPosition(new THREE.Vector3());
+      const tp = t.getWorldPosition(new THREE.Vector3());
+      return {
+        base: { x: bp.x, y: bp.y, z: bp.z },
+        tip: { x: tp.x, y: tp.y, z: tp.z },
+      };
     },
     dispose(): void {
       root.traverse((obj) => {

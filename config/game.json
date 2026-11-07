@@ -798,7 +798,7 @@
       "bodyHeight": 0.4,
       "limbThickness": 0.14,
       "legLength": 0.4,
-      "armLength": 0.36
+      "armLength": 0.42
     },
     "orientation": {
       "legYawScale": 0.35,
@@ -878,6 +878,17 @@
         "minScale": 0.45,
         "jumpAnticipation": 0.32,
         "anticipationDuration": 0.13
+      },
+      "stretch": {
+        "enabled": true,
+        "swingArm": 1.45,
+        "chargeArm": 0.88,
+        "runLeg": 1.0,
+        "torsoGain": 0.5,
+        "impactSquash": 0.2,
+        "impactDecay": 11,
+        "volumeExp": 0.5,
+        "smoothing": 30
       }
     },
     "weaponMount": {
@@ -887,7 +898,10 @@
       "greatswordYawDeg": 10,
       "staffPitchDeg": 16,
       "shieldPitchDeg": 8,
-      "bowPitchDeg": 6
+      "bowPitchDeg": 6,
+      "twoHandInsetX": 0.15,
+      "twoHandGripY": -0.1,
+      "twoHandMaxStretch": 1.3
     },
     "lean": {
       "accelGain": 0.02,
@@ -1009,6 +1023,20 @@
       "boltTrailScale": 2.2,
       "slashThickness": 0.075,
       "slashGlowOpacity": 0.34
+    },
+    "weaponTrail": {
+      "enabled": true,
+      "maxSamples": 22,
+      "minStep": 0.02,
+      "life": 0.2,
+      "minSpeed": 5.5,
+      "color": "#a8d8ff",
+      "intensity": 0.5,
+      "tipBoost": 0.35
+    },
+    "hitstop": {
+      "enabled": true,
+      "duration": 0.07
     },
     "lab": {
       "enabled": true,
