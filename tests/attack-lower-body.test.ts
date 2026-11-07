@@ -178,6 +178,8 @@ describe('v8d 攻击下半身：两条权重路径各自都能驱动下盘', () 
   it('法杖引导（按住攻击可移动）不算攻击：下盘步态照常摆动，不误伤 v8b 修复', () => {
     const w = makeWorld();
     w.modules.targeting = false;
+    // v9s.17：引导是有限波次；本用例只关心「引导期间下盘照常摆动」，拉长波数保持引导态
+    w.config.abilities.arcane.waves = 999;
     const rig = makeRig(w.config.moveSpeed, animCfg());
     run(w, 1, intent({ weaponSlot: 4 }));
     const hold: Intents = intent({

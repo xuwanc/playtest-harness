@@ -1,6 +1,7 @@
 import { overlapsAny, resolveHorizontal, supportHeight } from './collision';
 import { resetCombat } from './combat';
 import { resetAbilities } from './abilities';
+import { clearArrows } from './arrows';
 import { resetDash } from './dash';
 import { resetLink } from './links';
 import { resetTurnInPlace } from './turn-in-place';
@@ -79,6 +80,7 @@ export function warpTo(world: World, x: number, z: number): void {
   resetLink(world);
   resetDash(world);
   resetAbilities(world);
+  clearArrows(world);
   resetTurnInPlace(world);
   const t = world.targeting;
   t.targetId = 0;

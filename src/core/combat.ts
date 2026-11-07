@@ -1,4 +1,5 @@
 import { resolveFacingYaw } from './aim';
+import { fireArrow } from './arrows';
 import { cancelLink } from './links';
 import { WEAPON_ORDER } from './types';
 import type { AttackTimings, EventType, Intents, World } from './types';
@@ -128,6 +129,9 @@ function startBowRelease(world: World, intents: Intents, charge: number): void {
     },
     0,
   );
+  // v9s.17：箭是 Core 实体（重力弹道 + 命中插住），在释放瞬间从弓口生成。
+  // 表现层不再用 attackId 自己「放一支动画箭」，只按 world.arrows 渲染。
+  fireArrow(world, charge, world.combat.attackFacing);
   emit(world, 'charge-release', charge);
 }
 

@@ -1,4 +1,5 @@
 import { abilitiesUpdate } from './abilities';
+import { updateArrows } from './arrows';
 import { cameraUpdate, resetCameraIntent } from './camera';
 import { combatUpdate } from './combat';
 import { dashUpdate } from './dash';
@@ -79,6 +80,9 @@ export function step(world: World, dt: number, intents: Intents): World {
   decayLinks(world, dt);
   // 法杖技能独立于 dummies 开关运行（引导是玩家能力）；其命中结算内部遵守 hits/dummies 开关
   if (world.modules.abilities) abilitiesUpdate(world, dt, intents);
+  // v9s.17：弓箭实体（重力弹道 + 插住驻留）—— 与 abilities 同段推进，
+  // 命中写入的 hurt 同样不会被本帧的 decayHurt 再衰减一次。
+  if (world.modules.combat) updateArrows(world, dt);
   if (world.modules.dummies) {
     hitsUpdate(world, dt);
     if (world.modules.separation) {

@@ -161,7 +161,42 @@ export type CombatConfig = {
     minChargeToFire: number;
     chargeMoveMultiplier: number;
     release: CastProfile;
+    /**
+     * v9s.17：弹道参数。箭由 Core 自己积分（不依赖表现层计时），
+     * 因此暂停 / 时间缩放 / 快照回放下的落点完全一致。
+     */
+    trajectory: BowTrajectoryConfig;
   };
+};
+
+/** 弓箭弹道：蓄力只影响初速，仰角固定；重力让「远射要抬一点」这件事真的存在。 */
+export type BowTrajectoryConfig = {
+  /** 最小 / 满蓄初速（米/秒） */
+  speedMin: number;
+  speedMax: number;
+  /** 出弓仰角（度）：轻微上抬，让弹道是一条看得出的弧线 */
+  launchPitchDeg: number;
+  /** 重力（米/秒²）：比现实 9.8 略小，保证 9m 内落点可控 */
+  gravity: number;
+  /** 飞行寿命（秒），超时移除（防止飞出场地后长期存在） */
+  maxLife: number;
+  /** 命中半径（米），与假人半径叠加 */
+  radius: number;
+  /** 插住后的驻留时长（秒） */
+  stickSec: number;
+  /**
+   * 插地时的最小仰角（度）。
+   * 平射落地时入射角很小，箭会「躺」在地上、读不出是插进去的；
+   * 给一个下限（默认 42°）让箭尾明显翘起，视觉上才成立。
+   */
+  stickMinPitchDeg: number;
+  /**
+   * 插地时箭中点离地高度（米）。
+   * 箭的长度是表现层参数（0.72m），Core 只存中点；若直接把中点贴到 y=0，
+   * 斜插时箭头会埋进地面 0.3m、只露出半截。这里抬一个箭半长的经验值，
+   * 让箭头刚好入土、箭杆完整露出来。
+   */
+  groundStickLift: number;
 };
 
 /** idle → windup → active → recovery → settle → idle；settle 是「每段前移后的停顿」。 */
@@ -429,7 +464,7 @@ export type ProjectileState = {
   x: number;
   y: number;
   z: number;
-  /** 单位飞行方向（世界 XZ） */
+  /** 单位飞行方向（世界 XZ）；制导每帧按 turnRate 限幅转向后更新 */
   dirX: number;
   dirZ: number;
   speed: number;
@@ -437,6 +472,57 @@ export type ProjectileState = {
   life: number;
   /** 命中半径（米），叠加假人半径判定 */
   radius: number;
+  /**
+   * v9s.17：制导目标（假人**索引**，-1 = 无目标直飞）。
+   * 发射时在引导朝向的锥形范围内选最近目标快照下来，飞行中只做「轻微转向修正」，
+   * 不做全向追踪 —— 目标横移过快时仍会打偏，保留弹道手感。
+   */
+  targetIndex: number;
+  /** v9s.17：最大转向角速度（弧度/秒），0 = 完全不制导 */
+  turnRate: number;
+  /**
+   * v9s.17：剩余制导时间（秒）。只在出膛后的前 homingTime 内允许转向，
+   * 之后锁定直飞 —— 否则「限速转向」会变成绕目标画圈（转弯半径 = 速度 / 角速度）。
+   */
+  homing: number;
+  /** v9s.17：所属引导波次（0 起），表现层可用它做齐射的错帧效果 */
+  wave: number;
+};
+
+/**
+ * v9s.17 · 弓箭实体：Core 自己算抛物线，命中 / 落地后「插住」并驻留。
+ *
+ * 设计取舍：箭不是与假人无关的纯表现特效 —— 它要能插在**移动中的目标身上**，
+ * 落地位置还要尊重台阶高度。所以位置 / 速度 / 插住状态都放进 Core（确定性、可快照），
+ * 表现层只按状态渲染。插在假人身上时存相对偏移（不随假人转身，只跟随平移），
+ * 避免假人原地转身把箭「甩」出去。
+ */
+export type ArrowState = {
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+  /** 速度（米/秒），y 分量每帧受重力衰减 */
+  vx: number;
+  vy: number;
+  vz: number;
+  /** 飞行剩余寿命（秒）：超时直接移除，不插住 */
+  life: number;
+  /** true = 已插住（目标 / 地面），不再推进 */
+  stuck: boolean;
+  /** 插在哪个假人上（-1 = 插在地面） */
+  stuckDummy: number;
+  /** 插在假人身上时相对其世界位置的偏移 */
+  offX: number;
+  offY: number;
+  offZ: number;
+  /** 插住后的朝向：yaw 为水平朝向，pitch 为插角（负 = 箭尾朝上） */
+  yaw: number;
+  pitch: number;
+  /** 插住后剩余驻留时间（秒），归零移除 */
+  rest: number;
+  /** 是否命中过假人（插在地上为 false） */
+  hit: boolean;
 };
 
 /** 电环：原地放置，存活期内按脉冲对范围内假人结算「僵直 + 轻微击退」。世界坐标，不随玩家移动。 */
@@ -462,8 +548,20 @@ export type AbilityState = {
   channeling: boolean;
   /** 引导朝向（每帧用 resolveFacingYaw 刷新，支持拖拽辅助朝向） */
   channelYaw: number;
-  /** 距下一发飞弹的剩余时间（秒） */
+  /** 距下一波飞弹的剩余时间（秒） */
   fireTimer: number;
+  /** v9s.17：本次引导已发射的波数（0..waves） */
+  waveIndex: number;
+  /** v9s.17：引导 / 齐射结束后的剩余冷却（秒）；>0 时无法开始新的引导 */
+  cooldown: number;
+  /**
+   * v9s.17：必须松开攻击键才能重新开始引导。
+   * 5 波放完或进入冷却后置位 —— 否则按住不放会在冷却结束的下一帧自动重开，
+   * 「一次引导 5 波」就变成了挂机连发。
+   */
+  needsRelease: boolean;
+  /** v9s.17：每次引导递增，表现层据此触发一次起手效果 */
+  channelId: number;
   /** 累计发射数，表现层 / 事件据此触发一次性效果，持久递增不倒退 */
   volleyId: number;
   projectiles: ProjectileState[];
@@ -476,8 +574,26 @@ export type AbilityState = {
 export type AbilityConfig = {
   /** 奥术飞弹引导（攻击键按住，可移动） */
   arcane: {
-    /** 发射间隔（秒） */
-    fireInterval: number;
+    /**
+     * v9s.17：改为「波次齐射」。
+     * 一次引导按 waveInterval 发 waves 波，每波 perWave 枚、带 spreadDeg 散布；
+     * 放完 / 松手 / 被打断都进入 cooldown，冷却结束且松手后才能再按。
+     */
+    perWave: number;
+    waves: number;
+    /** 波间隔（秒）；第一波在按下瞬间立即发射 */
+    waveInterval: number;
+    /** 同一波内相邻飞弹的角度差（度），总散布 = (perWave-1) × 该值 */
+    spreadDeg: number;
+    /** 制导：发射时在引导朝向 homingConeDeg 锥形内、homingRange 米内选最近目标 */
+    homingRange: number;
+    homingConeDeg: number;
+    /** 制导最大转向角速度（度/秒）：越小越「轻微」，0 = 直飞 */
+    turnRateDeg: number;
+    /** 出膛后允许转向的时长（秒）：之后锁定直飞，避免长距离绕圈 */
+    homingTime: number;
+    /** 引导结束 / 打断后的冷却（秒） */
+    cooldown: number;
     /** 飞弹速度（米/秒） */
     speed: number;
     /** 飞弹存活时长（秒） */
@@ -1496,6 +1612,10 @@ export type ProjectileViewConfig = {
   /** 飞弹颜色 / 光晕颜色 */
   boltColor: string;
   boltGlowColor: string;
+  /** 菱形飞弹的三轴比例（沿飞行方向为 Z）：横向要窄、纵向要长，才读得出「梭形」 */
+  boltShapeX: number;
+  boltShapeY: number;
+  boltShapeZ: number;
   /** 飞弹光晕直径 = 光晕倍数 × 飞弹半径 */
   boltGlowScale: number;
   /** 飞弹拖尾长度 = 倍数 × 飞弹半径 */
@@ -1581,6 +1701,12 @@ export type EventType =
   | 'channel-end'
   /** 每发射一枚奥术飞弹，value = volleyId */
   | 'projectile-fire'
+  /** v9s.17：一波齐射开始，value = 波次索引（0 起） */
+  | 'arcane-wave'
+  /** v9s.17：弓箭射出，value = 蓄力值 0..1 */
+  | 'arrow-shot'
+  /** v9s.17：箭命中假人（value = 假人 id）/ 落地（value = -1） */
+  | 'arrow-land'
   /** 原地放置电环，value = ring id */
   | 'ring-place'
   /** 电环一次命中脉冲，value = ring id */
@@ -1695,6 +1821,14 @@ export type World = {
   gaze: GazeState;
   /** v9a：玩家派生招运行时状态（与每个假人的 link 同构） */
   playerLink: LinkState;
+  /**
+   * v9s.17：弓箭实体（飞行 + 插住驻留）。
+   * 放在 World 而不是 combat 里：它是**世界坐标的实体**，与玩家状态机解耦，
+   * 也方便表现层按数组直读、复位时统一清空。
+   */
+  arrows: ArrowState[];
+  /** 箭矢实例 id 自增（持久不倒退，复位也不清零） */
+  arrowSeq: number;
   /** 测试假人，四种 AI 行为，纯状态数据 */
   dummies: DummyState[];
   /** 假人累计发起的攻击次数（无伤害，仅用于验收观察） */

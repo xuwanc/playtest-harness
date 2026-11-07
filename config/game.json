@@ -121,23 +121,42 @@
         }
       },
       "bow": {
-        "maxChargeTime": 1.4,
-        "minChargeToFire": 0.18,
+        "maxChargeTime": 0.85,
+        "minChargeToFire": 0.15,
         "chargeMoveMultiplier": 0.55,
         "release": {
           "windup": 0.04,
           "active": 0.12,
           "recovery": 0.26,
           "lunge": 0.12
+        },
+        "trajectory": {
+          "speedMin": 9,
+          "speedMax": 16,
+          "launchPitchDeg": 7,
+          "gravity": 9,
+          "maxLife": 2.4,
+          "radius": 0.14,
+          "stickMinPitchDeg": 50,
+          "groundStickLift": 0.32,
+          "stickSec": 4
         }
       }
     },
     "abilities": {
       "arcane": {
-        "fireInterval": 0.28,
-        "speed": 11,
-        "life": 1.1,
-        "radius": 0.42,
+        "perWave": 3,
+        "waves": 5,
+        "waveInterval": 0.2,
+        "spreadDeg": 5,
+        "homingRange": 8,
+        "homingConeDeg": 40,
+        "turnRateDeg": 420,
+        "homingTime": 0.35,
+        "cooldown": 1,
+        "speed": 14,
+        "life": 1.2,
+        "radius": 0.3,
         "hurtType": "light",
         "hurtDuration": 0.2,
         "knockback": 0.12,
@@ -415,12 +434,30 @@
     "dummies": {
       "count": 6,
       "spawn": [
-        { "x": -11.1, "z": -8.35 },
-        { "x": -9.5, "z": -8.35 },
-        { "x": -7.9, "z": -8.35 },
-        { "x": 0, "z": -10.2 },
-        { "x": -9.5, "z": 0 },
-        { "x": -9.5, "z": 7.2 }
+        {
+          "x": -11.1,
+          "z": -8.35
+        },
+        {
+          "x": -9.5,
+          "z": -8.35
+        },
+        {
+          "x": -7.9,
+          "z": -8.35
+        },
+        {
+          "x": 0,
+          "z": -10.2
+        },
+        {
+          "x": -9.5,
+          "z": 0
+        },
+        {
+          "x": -9.5,
+          "z": 7.2
+        }
       ],
       "initialModes": [
         "idle",
@@ -454,14 +491,70 @@
       "thickness": 0.4
     },
     "steps": [
-      { "id": "stair-1", "x": 6.6, "z": -5.6, "width": 2.4, "depth": 0.9, "height": 0.2 },
-      { "id": "stair-2", "x": 6.6, "z": -6.5, "width": 2.4, "depth": 0.9, "height": 0.4 },
-      { "id": "stair-3", "x": 6.6, "z": -7.4, "width": 2.4, "depth": 0.9, "height": 0.6 },
-      { "id": "stair-4", "x": 6.6, "z": -8.3, "width": 2.4, "depth": 0.9, "height": 0.8 },
-      { "id": "plateau", "x": 6.6, "z": -9.6, "width": 2.4, "depth": 1.6, "height": 0.8 },
-      { "id": "block-060", "x": 11.4, "z": -6.0, "width": 1.4, "depth": 1.4, "height": 0.6 },
-      { "id": "block-090", "x": 11.4, "z": -7.9, "width": 1.4, "depth": 1.4, "height": 0.9 },
-      { "id": "block-120", "x": 11.4, "z": -9.8, "width": 1.4, "depth": 1.4, "height": 1.2 }
+      {
+        "id": "stair-1",
+        "x": 6.6,
+        "z": -5.6,
+        "width": 2.4,
+        "depth": 0.9,
+        "height": 0.2
+      },
+      {
+        "id": "stair-2",
+        "x": 6.6,
+        "z": -6.5,
+        "width": 2.4,
+        "depth": 0.9,
+        "height": 0.4
+      },
+      {
+        "id": "stair-3",
+        "x": 6.6,
+        "z": -7.4,
+        "width": 2.4,
+        "depth": 0.9,
+        "height": 0.6
+      },
+      {
+        "id": "stair-4",
+        "x": 6.6,
+        "z": -8.3,
+        "width": 2.4,
+        "depth": 0.9,
+        "height": 0.8
+      },
+      {
+        "id": "plateau",
+        "x": 6.6,
+        "z": -9.6,
+        "width": 2.4,
+        "depth": 1.6,
+        "height": 0.8
+      },
+      {
+        "id": "block-060",
+        "x": 11.4,
+        "z": -6.0,
+        "width": 1.4,
+        "depth": 1.4,
+        "height": 0.6
+      },
+      {
+        "id": "block-090",
+        "x": 11.4,
+        "z": -7.9,
+        "width": 1.4,
+        "depth": 1.4,
+        "height": 0.9
+      },
+      {
+        "id": "block-120",
+        "x": 11.4,
+        "z": -9.8,
+        "width": 1.4,
+        "depth": 1.4,
+        "height": 1.2
+      }
     ],
     "doorways": [
       {
@@ -855,15 +948,18 @@
       "arrowHeadColor": "#fff6d8",
       "arrowTrailColor": "#ffcf86",
       "arrowLength": 0.72,
-      "arrowWidth": 0.05,
+      "arrowWidth": 0.062,
       "arrowHeadSize": 0.16,
       "arrowGlowSize": 0.5,
       "trailLength": 1.05,
       "trailOpacity": 0.42,
       "boltColor": "#a9ecff",
       "boltGlowColor": "#7fe3ff",
-      "boltGlowScale": 2.5,
-      "boltTrailScale": 3.4,
+      "boltShapeX": 0.42,
+      "boltShapeY": 0.42,
+      "boltShapeZ": 0.85,
+      "boltGlowScale": 1.6,
+      "boltTrailScale": 2.2,
       "slashThickness": 0.075,
       "slashGlowOpacity": 0.34
     },

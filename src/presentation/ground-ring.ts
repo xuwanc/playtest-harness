@@ -514,6 +514,12 @@ export type PlayerMeterInput = {
   channeling: boolean;
   fireTimer: number;
   fireInterval: number;
+  /** v9s.17：整轮引导进度 0..1（按波次算）；缺省时退回 fireTimer 的单波进度 */
+  channelProgress?: number;
+  /** v9s.17：法杖波次齐射的剩余冷却（秒） */
+  arcaneCooldown?: number;
+  /** 法杖齐射的冷却总时长（秒） */
+  arcaneCooldownMax?: number;
   /** 冲刺 / 闪现剩余冷却（秒） */
   dashCooldown: number;
   /** 该动作的冷却总时长（秒），用当前武器那一档 */
@@ -530,9 +536,17 @@ export function playerMeterSource(input: PlayerMeterInput): PlayerMeter {
     return { source: 'charge', ratio: Math.min(1, Math.max(0, input.charge)) };
   }
   if (input.channeling) {
+    if (input.channelProgress !== undefined) {
+      return { source: 'channel', ratio: Math.min(1, Math.max(0, input.channelProgress)) };
+    }
     const iv = Math.max(1e-4, input.fireInterval);
-    // fireTimer 是「距下一发还剩多少」，倒过来就是这一发的填充进度
+    // fireTimer 是「距下一波还剩多少」，倒过来就是这一波的填充进度
     return { source: 'channel', ratio: 1 - Math.min(1, Math.max(0, input.fireTimer / iv)) };
+  }
+  const ac = input.arcaneCooldown ?? 0;
+  const acMax = input.arcaneCooldownMax ?? 0;
+  if (ac > 0 && acMax > 0) {
+    return { source: 'cooldown', ratio: 1 - Math.min(1, Math.max(0, ac / acMax)) };
   }
   if (input.dashCooldown > 0 && input.dashCooldownMax > 0) {
     return {

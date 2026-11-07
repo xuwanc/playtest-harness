@@ -21,6 +21,7 @@ export function initialGazeState(): GazeState {
     threat: 0,
   };
 }
+import { clearArrows } from './arrows';
 import { buildBoxes } from './scene';
 import type { CoreConfig, SceneConfig, World } from './types';
 
@@ -50,6 +51,8 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
     },
     combat: initialCombatState(1),
     playerLink: initialLinkState(),
+    arrows: [],
+    arrowSeq: 0,
     abilities: initialAbilityState(),
     impulse: { x: 0, z: 0 },
     targeting: initialTargetState(),
@@ -122,6 +125,7 @@ export function resetWorld(world: World): void {
   h.dirZ = 0;
   world.hitCount = 0;
   resetAbilities(world);
+  clearArrows(world);
   resetDash(world);
   resetCameraIntent(world);
   resetTurnInPlace(world);

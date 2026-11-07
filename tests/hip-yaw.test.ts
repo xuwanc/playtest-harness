@@ -46,6 +46,9 @@ describe('v8b 下盘偏航：引导 / 后退时跨朝向不跳变', () => {
   it('法杖引导 + 拖拽瞄准 + 后退：下盘偏航逐帧连续、有界，不跨 ±π 翻转', () => {
     const w = makeWorld();
     w.modules.targeting = false; // 关锁定，保证 facing 完全由拖拽决定
+    // v9s.17：引导改成「有限波次 + 冷却」，这里要测的是**引导期间**的下盘姿态，
+    // 把波数拉大让引导持续覆盖整个 150 帧观察窗口（与真实节奏无关）。
+    w.config.abilities.arcane.waves = 999;
     const rig = makeRig(w.config.moveSpeed);
 
     // 切到法杖（槽 4），按住攻击键进入引导；拖拽瞄准 +Z，摇杆往 -Z 后退。

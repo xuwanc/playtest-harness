@@ -11,7 +11,6 @@ import {
 } from './ground-ring';
 import { dummyThreatLevel, isHostileDummy } from '../core';
 import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
-import { shotFade, shotOrigin, shotPoint } from './fx-shot';
 import { createVoxelRig } from './voxel-rig';
 import type { HurtPose } from './hurt-pose';
 
@@ -391,62 +390,74 @@ export function createSceneView(
   slashGroup.add(slash, slashGlow);
   slashTilt.add(slashGroup);
 
-  // ---- v9s.16 箭矢：世界坐标独立飞行 ----
-  // 旧版把箭挂在 fxAnchor（朝向锚点）上，而锚点 yaw 在释放动作结束后从 attackFacing
-  // 切回 bodyYaw —— 慢速箭（蓄力不足）还在空中时会被父节点「拽偏」；且 3.5cm 的细杆正对
-  // 镜头时投影成 1px 的线。现改为：起手时快照世界起点 / 朝向，之后每帧自行推进；
-  // 实体 = 箭杆 + 箭头 + 交叉尾羽 + 恒面向镜头的柔光 + 锥形拖尾。
-  const arrowGroup = new THREE.Group();
-  arrowGroup.visible = false;
-  arrowGroup.renderOrder = 6;
-  scene.add(arrowGroup);
-
-  const arrowShaftMat = new THREE.MeshBasicMaterial({ color: pfx.arrowColor, transparent: true });
-  const arrowTipMat = new THREE.MeshBasicMaterial({ color: pfx.arrowHeadColor, transparent: true });
-  const arrowTrailMat = new THREE.MeshBasicMaterial({
-    color: pfx.arrowTrailColor, map: trailTex, transparent: true, opacity: 0,
-    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-  });
-  const arrowGlowMat = new THREE.SpriteMaterial({
-    map: glowTex, color: pfx.arrowColor, transparent: true, opacity: 0.85,
-    blending: THREE.AdditiveBlending, depthWrite: false,
-  });
-
+  // ---- v9s.17 箭矢：Core 实体（重力弹道），表现层只按 world.arrows 渲染 ----
+  // 池化多支：飞行中的箭与插在目标 / 地面上的箭会同时存在（驻留 4s），单支 group 不够用。
+  // 几何共享；材质每支独立，插住淡出各自算。
   const arrowShaftGeo = new THREE.BoxGeometry(pfx.arrowWidth, pfx.arrowWidth, pfx.arrowLength);
-  const arrowShaft = new THREE.Mesh(arrowShaftGeo, arrowShaftMat);
   const arrowTipGeo = new THREE.ConeGeometry(pfx.arrowHeadSize * 0.42, pfx.arrowHeadSize, 4);
   arrowTipGeo.rotateX(Math.PI / 2); // 圆锥默认指向 +Y，转到 +Z（飞行方向）
-  const arrowTip = new THREE.Mesh(arrowTipGeo, arrowTipMat);
-  arrowTip.position.z = pfx.arrowLength / 2 + pfx.arrowHeadSize * 0.42;
-  // 尾羽：一对交叉薄片，侧看能立刻认出「这是箭」
   const arrowFinGeo = new THREE.BoxGeometry(pfx.arrowWidth * 2.6, pfx.arrowWidth * 0.4, 0.1);
-  const arrowFinA = new THREE.Mesh(arrowFinGeo, arrowShaftMat);
-  const arrowFinB = new THREE.Mesh(arrowFinGeo, arrowShaftMat);
-  arrowFinA.position.z = -pfx.arrowLength / 2 + 0.08;
-  arrowFinB.position.z = arrowFinA.position.z;
-  arrowFinB.rotation.z = Math.PI / 2;
-  const arrowGlow = new THREE.Sprite(arrowGlowMat);
-  arrowGlow.scale.setScalar(pfx.arrowGlowSize);
-  arrowGlow.renderOrder = 6;
-  // 锥形拖尾：旋转轴 → -Z，向尾部收细；贴图 UV 让亮度向尾端淡出
+  // 锥形拖尾：轴 → -Z，向尾部收细；贴图 UV 让亮度向尾端淡出
   const arrowTrailGeo = new THREE.CylinderGeometry(
     pfx.arrowWidth * 0.45, pfx.arrowWidth * 1.3, pfx.trailLength, 6, 1, true,
   );
   arrowTrailGeo.rotateX(-Math.PI / 2);
   arrowTrailGeo.translate(0, 0, -pfx.trailLength / 2);
-  const arrowTrail = new THREE.Mesh(arrowTrailGeo, arrowTrailMat);
-  arrowTrail.renderOrder = 5;
-  arrowGroup.add(arrowShaft, arrowTip, arrowFinA, arrowFinB, arrowGlow, arrowTrail);
+
+  type ArrowVisual = {
+    group: THREE.Group;
+    shaftMat: THREE.MeshBasicMaterial;
+    tipMat: THREE.MeshBasicMaterial;
+    glowMat: THREE.SpriteMaterial;
+    trailMat: THREE.MeshBasicMaterial;
+    glow: THREE.Sprite;
+    trail: THREE.Mesh;
+  };
+  const arrowVisuals: ArrowVisual[] = Array.from({ length: 10 }, () => {
+    const group = new THREE.Group();
+    const shaftMat = new THREE.MeshBasicMaterial({ color: pfx.arrowColor, transparent: true });
+    const tipMat = new THREE.MeshBasicMaterial({ color: pfx.arrowHeadColor, transparent: true });
+    const glowMat = new THREE.SpriteMaterial({
+      map: glowTex, color: pfx.arrowColor, transparent: true, opacity: 0.85,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const trailMat = new THREE.MeshBasicMaterial({
+      color: pfx.arrowTrailColor, map: trailTex, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const shaft = new THREE.Mesh(arrowShaftGeo, shaftMat);
+    const tip = new THREE.Mesh(arrowTipGeo, tipMat);
+    tip.position.z = pfx.arrowLength / 2 + pfx.arrowHeadSize * 0.42;
+    // 尾羽：一对交叉薄片，侧看能立刻认出「这是箭」
+    // 尾羽用亮色：插住后光晕很淡，靠这一截亮尾羽仍能认出「一支箭」
+    const finA = new THREE.Mesh(arrowFinGeo, tipMat);
+    const finB = new THREE.Mesh(arrowFinGeo, tipMat);
+    finA.position.z = -pfx.arrowLength / 2 + 0.08;
+    finB.position.z = finA.position.z;
+    finB.rotation.z = Math.PI / 2;
+    const glow = new THREE.Sprite(glowMat);
+    glow.scale.setScalar(pfx.arrowGlowSize);
+    glow.renderOrder = 6;
+    const trail = new THREE.Mesh(arrowTrailGeo, trailMat);
+    trail.renderOrder = 5;
+    group.add(shaft, tip, finA, finB, glow, trail);
+    group.visible = false;
+    scene.add(group);
+    return { group, shaftMat, tipMat, glowMat, trailMat, glow, trail };
+  });
 
   // ---- 法杖技能实体（v7c #12）：奥术飞弹沿世界方向自由飞行、电环贴地脉冲 ----
   // 直接读 world.abilities 的实体状态（自带半径 / 剩余寿命），池化 mesh 按数量显隐，
   // 不引入表现层计时状态 → 暂停 / 时间缩放下与 Core 完全同步。世界坐标，不随 fxAnchor 旋转。
-  const boltGeo = new THREE.IcosahedronGeometry(1, 0);
+  // v9s.17：菱形飞弹 —— 八面体沿飞行方向拉长成梭形（横向窄、纵向长）。
+  // 单位半径建模，整组按 pr.radius 缩放：视觉尺寸只由 Core 命中半径 + boltShape* 决定。
+  const boltGeo = new THREE.OctahedronGeometry(1, 0);
+  const boltShape = new THREE.Vector3(pfx.boltShapeX, pfx.boltShapeY, pfx.boltShapeZ);
   const boltMat = new THREE.MeshBasicMaterial({
     color: pfx.boltColor, transparent: true, opacity: 0.98, depthWrite: false,
   });
   const boltGlowMat = new THREE.SpriteMaterial({
-    map: glowTex, color: pfx.boltGlowColor, transparent: true, opacity: 0.6,
+    map: glowTex, color: pfx.boltGlowColor, transparent: true, opacity: 0.45,
     blending: THREE.AdditiveBlending, depthWrite: false,
   });
   const boltTrailMat = new THREE.MeshBasicMaterial({
@@ -454,12 +465,15 @@ export function createSceneView(
     blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
   });
   // 单位尺寸建模、整组按 pr.radius 缩放：几何与比例只写一次
-  const boltTrailGeo = new THREE.CylinderGeometry(0.14, 0.8, pfx.boltTrailScale, 6, 1, true);
+  // 拖尾：靠核心端粗 0.5、尾端收到 0.03 —— 细长渐隐才不会盖住菱形本体
+  const boltTrailGeo = new THREE.CylinderGeometry(0.5, 0.03, pfx.boltTrailScale, 6, 1, true);
   boltTrailGeo.rotateX(-Math.PI / 2);
   boltTrailGeo.translate(0, 0, -pfx.boltTrailScale / 2);
-  const bolts = Array.from({ length: 16 }, () => {
+  // 池子 24：一波 3 发 × 5 波 = 15 发，寿命 1.2s 内最坏情况约 18 发同时在场
+  const bolts = Array.from({ length: 24 }, () => {
     const group = new THREE.Group();
     const core = new THREE.Mesh(boltGeo, boltMat);
+    core.scale.copy(boltShape);
     const glow = new THREE.Sprite(boltGlowMat);
     glow.scale.setScalar(pfx.boltGlowScale);
     glow.renderOrder = 6;
@@ -539,12 +553,6 @@ export function createSceneView(
   let lastDashId = world.dash.id;
   let lastDashKind = 'none';
 
-  let lastAttackId = 0;
-  // 箭矢：起手瞬间快照世界起点 / 朝向，之后完全由表现层推进（不跟随父节点）
-  let arrowTime = -1;
-  let arrowPower = 1;
-  let arrowOrigin: { x: number; y: number; z: number } = { x: 0, y: 1, z: 0 };
-  let arrowYaw = 0;
 
   // ---- 2.5D 相机（叠加 Core 的智能构图意图） ----
   const cam = createCameraRig(view.camera, view.smartCamera, view.zoom, w0 / h0);
@@ -619,12 +627,21 @@ export function createSceneView(
       playerRing.update(pv.arcRad, pv.opacity, pv.scale, ringColor, ringYaw);
 
       // 进度弧：蓄力 > 引导 > 冲刺冷却，沿主环外侧从左往右填充（close → 满 = 可用）
+      const arcaneCfg = w.config.abilities.arcane;
+      const waves = Math.max(1, Math.floor(arcaneCfg.waves));
+      const waveIv = Math.max(1e-4, arcaneCfg.waveInterval);
       const meter = playerMeterSource({
         charging: cb.charging,
         charge: cb.charge,
         channeling: w.abilities.channeling,
         fireTimer: w.abilities.fireTimer,
-        fireInterval: w.config.abilities.arcane.fireInterval,
+        fireInterval: waveIv,
+        // 整轮进度：已放完的波数 + 当前波内已经过去的时间
+        channelProgress: w.abilities.channeling
+          ? (w.abilities.waveIndex + (1 - Math.min(1, Math.max(0, w.abilities.fireTimer / waveIv)))) / waves
+          : 0,
+        arcaneCooldown: w.abilities.cooldown,
+        arcaneCooldownMax: arcaneCfg.cooldown,
         dashCooldown: w.dash.cooldown,
         dashCooldownMax: w.dash.kind === 'blink'
           ? w.config.dash.blinkCooldown
@@ -766,20 +783,6 @@ export function createSceneView(
         if (r.life <= 0) r.mesh.visible = false;
       }
 
-      if (cb.attackId !== lastAttackId) {
-        lastAttackId = cb.attackId;
-        if (cb.weapon === 'bow' && cb.phase !== 'idle') {
-          // 起手瞬间把「弓口位置 + 锁定朝向」拍成世界坐标：之后即使释放动作结束、
-          // 父锚点切回 bodyYaw，空中的箭也不会被拽偏
-          arrowTime = 0;
-          arrowPower = 0.6 + cb.lastCharge * 0.9;
-          arrowYaw = cb.attackFacing;
-          arrowOrigin = shotOrigin(
-            c.position.x, c.position.y, c.position.z, arrowYaw, 0.6, 0.95,
-          );
-        }
-      }
-
       const showSlash = cb.phase === 'active' && cb.comboIndex > 0;
       slashMat.opacity = showSlash ? 0.9 : 0;
       slashGlowMat.opacity = showSlash ? pfx.slashGlowOpacity : 0;
@@ -819,26 +822,25 @@ export function createSceneView(
         );
       }
 
-      if (arrowTime >= 0) {
-        arrowTime += frameDt;
-        const dist = arrowTime * 14 * arrowPower;
-        // 末端 1.4m 淡出，避免「飞到 9m 突然消失」
-        const fade = shotFade(dist, 9, 1.4);
-        if (fade <= 0.02) {
-          arrowTime = -1;
-          arrowGroup.visible = false;
-        } else {
-          arrowGroup.visible = true;
-          const p = shotPoint(arrowOrigin, arrowYaw, dist);
-          arrowGroup.position.set(p.x, p.y, p.z);
-          arrowGroup.rotation.y = arrowYaw;
-          arrowShaftMat.opacity = fade;
-          arrowTipMat.opacity = fade;
-          arrowGlowMat.opacity = 0.85 * fade;
-          arrowTrailMat.opacity = pfx.trailOpacity * fade;
-        }
-      } else {
-        arrowGroup.visible = false;
+      // ---- 箭矢：直接读 Core 实体（位置 / 俯仰 / 插住状态全部由 Core 算） ----
+      // 飞行中保留光晕与拖尾（任意角度都看得见、读得出速度方向）；
+      // 插住后关掉拖尾、压暗光晕，只在末尾 0.6s 淡出 —— 读起来就是「钉在那儿」。
+      for (let i = 0; i < arrowVisuals.length; i++) {
+        const ar = w.arrows[i];
+        const e = arrowVisuals[i];
+        e.group.visible = !!ar;
+        if (!ar) continue;
+        e.group.position.set(ar.x, ar.y, ar.z);
+        // 先水平朝向、再俯仰：YXZ 的矩阵是 Ry·Rx，正好对应「箭尖朝飞行方向」
+        e.group.rotation.set(ar.pitch, ar.yaw, 0, 'YXZ');
+        const fade = ar.stuck
+          ? Math.min(1, ar.rest / 0.6)
+          : 1;
+        e.shaftMat.opacity = fade;
+        e.tipMat.opacity = fade;
+        e.glowMat.opacity = (ar.stuck ? 0.28 : 0.85) * fade;
+        e.trailMat.opacity = ar.stuck ? 0 : pfx.trailOpacity * fade;
+        e.trail.visible = !ar.stuck;
       }
 
       cam.update(c.position.x, c.position.y, c.position.z, frameDt, w.camera);
@@ -968,10 +970,12 @@ export function createSceneView(
       arrowTipGeo.dispose();
       arrowFinGeo.dispose();
       arrowTrailGeo.dispose();
-      arrowShaftMat.dispose();
-      arrowTipMat.dispose();
-      arrowGlowMat.dispose();
-      arrowTrailMat.dispose();
+      for (const a of arrowVisuals) {
+        a.shaftMat.dispose();
+        a.tipMat.dispose();
+        a.glowMat.dispose();
+        a.trailMat.dispose();
+      }
       glowTex.dispose();
       trailTex.dispose();
       for (const r of dashRings) r.mat.dispose();
