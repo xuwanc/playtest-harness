@@ -113,13 +113,14 @@ const TAP_SLOP_PX = 8;
  * 辅助瞄准的「确认拖拽」门槛（px）。
  * v9.9 真机日志：点按技能2 时拇指自然位移 13px，旧阈值 12px 把它当成了拖拽瞄准，
  * 于是移动方向被改成手指抖动的方向（屏幕上 -78° = 左上），松手 140ms 后才回到摇杆方向。
- * 26px 大于「点按」的正常抖动区间，又小于按钮半径的两倍，有意拖出去仍能触发。
+ * v9s.8 真机反馈「技能按钮的死区有点大」：26px 需要拖出半个按钮才定向，改回 16px
+ * （仍大于 13px 的自然抖动，且配合 10px 的迟滞退出不会在阈值附近闪）。
  */
-const AIM_SLOP_PX = 26;
+const AIM_SLOP_PX = 16;
 /** 已确认拖拽后，缩回到该值以内才撤销瞄准（迟滞，避免在阈值附近来回闪） */
-const AIM_EXIT_SLOP_PX = 16;
+const AIM_EXIT_SLOP_PX = 10;
 /** 按钮手势判定的拖拽门槛；略低于瞄准，但仍高于点按抖动，避免点按被记成 drag */
-const GESTURE_SLOP_PX = 20;
+const GESTURE_SLOP_PX = 14;
 /**
  * v9d：松手后仍保留最后拖拽方向的时长（ms）。
  * 旧版只保留 1 帧，真机上 pointerup 与下一帧之间可能插入合成 move 或系统事件，
@@ -844,7 +845,7 @@ export function createInput(opts: InputOptions): InputAdapter {
       // 拖拽辅助瞄准（v7c #11）：屏幕拖拽 (dx,dy) 用同一套相机地面基向量换算成世界 XZ 单位向量，
       // 与摇杆语义一致（向上拖 = 世界前方、向右拖 = 世界右方）。
       const aimLen = Math.hypot(aimDX, aimDY);
-      // 迟滞两档：拖到 26px 才算「确认拖拽」，缩回 16px 以内才撤销。
+      // 迟滞两档：拖到 16px 才算「确认拖拽」，缩回 10px 以内才撤销。
       // 点按按钮时 10~15px 的自然位移永远够不到，因此不会改动朝向。
       if (aimPointerId !== null) {
         if (aimLen >= AIM_SLOP_PX) aimArmed = true;

@@ -396,6 +396,18 @@ describe('v9p 攻击步幅与相位纯函数', () => {
     expect(half.stride).toBeCloseTo(st.strideScale * 0.25, 9);
   });
 
+  it('v9s.8 移动时步幅淡出回到「真实步幅」，不再掉到 0（修攻击结束后脚滑）', () => {
+    // 玩家攻击结束立刻移动：real.speed > 0，等效步幅必须收敛到 c.stride，
+    // 才能与 Core「按物理 stride 推进 gaitPhase」严格配套（支撑脚零滑步）。
+    const moving = { ...locked, speed: 1.6, localForward: 1.6, stride: 1.15 };
+    const d = attackGaitDrive(moving, 0.5, 1, 0.35, st, 0);
+    const target = st.strideScale * 1.15;
+    expect(d.stride).toBeCloseTo(1.15 + (target - 1.15) * 0.35 * 0.35, 9);
+    // 静止时仍走旧回退路径（stride → 0），保证起手第一帧不把腿一下撑开
+    expect(attackGaitDrive(locked, 0.5, 1, 0.35, st, 0).stride)
+      .toBeCloseTo(st.strideScale * 0.35 * 0.35, 9);
+  });
+
   it('blend=0 原样返回真实输入', () => {
     expect(attackGaitDrive(locked, 0.5, 1, 0, st, 0)).toBe(locked);
   });

@@ -164,12 +164,12 @@ describe('v9i 按钮点按 vs 拖拽瞄准', () => {
     expect(r.input.peekAim().active).toBe(true);
   });
 
-  it('拖出去再缩回 10px：撤销瞄准（迟滞），朝向回到移动输入', () => {
+  it('拖出去再缩回 8px：撤销瞄准（迟滞），朝向回到移动输入', () => {
     const r = setup();
     btnDown(r, 'skill2', 2, 330, 700);
     btnMove(r, 2, 380, 700);                  // 50px，确认
     expect(r.input.sample().intents.aimActive).toBe(true);
-    btnMove(r, 2, 340, 700);                  // 缩回 10px（< 16 退出阈值）
+    btnMove(r, 2, 338, 700);                  // 缩回 8px（< 10px 退出阈值）
     const f = r.input.sample();
     expect(f.intents.aimActive).toBe(false);
     expect(r.input.peekAim().active).toBe(false);

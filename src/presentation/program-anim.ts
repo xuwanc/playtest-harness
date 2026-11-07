@@ -106,15 +106,20 @@ export function attackGaitDrive(
   // 几乎不动，配合放大的步幅也不会出现可见的单帧抽动。
   const phaseArc = wrapPi(drive.phase - real.phase);
   const phaseBlend = b * b * (3 - 2 * b);
+  // v9s.8：等效步幅淡出时回到「真实步幅」而不是 0。
+  // 旧版 `stride * b²` 在 b 变小时趋近 0，solveGait 于是退回「摆幅随速度估算」的
+  // 旧路径，而 Core 的 gaitPhase 仍按物理 stride 推进 → 两者的步幅不一致，
+  // 表现就是「攻击结束后一段时间移动脚在滑」。现在：
+  //   · 玩家在移动（real.speed > 0.05）→ b=0 时精确等于 real.stride（零滑步）；
+  //   · 玩家静止（攻击 / 收势全程）→ b=0 时回到 0（旧回退路径，避免起手第一帧
+  //     拿真实步幅把腿一下撑开造成单帧跳变）。
+  const strideTarget = real.speed > 0.05 ? realStride : 0;
   return {
     speed: real.speed + (drive.speed - real.speed) * b,
     phase: real.phase + phaseArc * phaseBlend,
     localForward: real.localForward + (drive.localForward - real.localForward) * b,
     localRight: real.localRight + (drive.localRight - real.localRight) * b,
-    // v9p：等效步幅从 0 按 b² 淡入（b=0 精确回到旧「stride=0」回退路径）。
-    // 平方淡入让起手 / 收势的过渡帧几乎拿不到放大步幅，只有攻击稳定态（b→1）
-    // 才是满跨步 —— 静止基准与单帧跳变都不被撑大。
-    stride: stride * b * b,
+    stride: strideTarget + (stride - strideTarget) * b * b,
   };
 }
 

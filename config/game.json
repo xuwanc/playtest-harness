@@ -31,7 +31,7 @@
     },
     "orientation": {
       "bodyTurnRate": 7,
-      "headTurnRate": 20,
+      "headTurnRate": 12,
       "maxHeadTurnDeg": 55,
       "facingSmoothRate": 14,
       "facingDeadZone": 0.12,
@@ -579,7 +579,7 @@
       "pelvisReach": 0.12
     },
     "joystick": {
-      "maxRadiusPx": 56,
+      "maxRadiusPx": 28,
       "deadZone": 0.08
     },
     "showGrid": true,
