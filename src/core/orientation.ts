@@ -49,15 +49,28 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   const cb = world.combat;
 
   // 1) 面朝向 = 目标方向
+  //    v9s.4 接敌准备：威胁注视激活（且未被技能/攻击打断）时，面朝向压向威胁加权中心，
+  //    **移动输入不再改写它** —— 边走位边保持面朝威胁，侧移 / 后退由 moveYaw 独立表现。
+  //    攻击、引导、蓄力、冲刺属于主动动作，可打断接敌准备（朝向交还战斗逻辑）。
+  const gazeActive = world.modules.gaze && world.gaze.active;
+  const channeling = world.abilities.channeling;
+  const busy = cb.phase !== 'idle' || cb.charging || channeling || world.dash.phase !== 'idle';
+  const gazeHold = gazeActive && !busy;
   const inputLen = Math.hypot(intents.moveX, intents.moveZ);
   const dragging = intents.aimActive && Math.hypot(intents.aimX, intents.aimZ) > EPS;
-  const channeling = world.abilities.channeling;
   const bowAim = cb.charging && cb.weapon === 'bow'
     && world.config.targeting.targetAssist && world.modules.targeting && world.targeting.hasTarget;
   if (cb.phase !== 'idle') {
     c.facing = cb.attackFacing;
-  } else if (dragging || channeling) {
-    // 拖拽辅助朝向 / 法杖引导（v7c #11 #12）：用统一解析（拖拽 > 锁定目标 > 移动 > 面朝向），
+  } else if (channeling) {
+    // 法杖引导（v7c #11 #12）：技能可打断接敌准备，朝向交还统一解析
+    c.facing = resolveFacingYaw(world, intents);
+  } else if (gazeHold) {
+    // 接敌准备：与身体同速压向威胁中心（沉稳），头部用更高速率先锁主威胁；
+    // 此处刻意不读移动输入 —— 移动时朝向保持，不跟着摇杆跑。
+    c.facing = approach(c.facing, world.gaze.centroidYaw, o.bodyTurnRate, dt);
+  } else if (dragging) {
+    // 拖拽辅助朝向：统一解析（拖拽 > 锁定目标 > 移动 > 面朝向），
     // 与 abilities.channelYaw 同一套优先级，保证身体朝向与飞弹发射方向一致；
     // 手动拖拽覆盖自动锁定，移动方向仍由 moveYaw 独立表现（朝向分离）。
     c.facing = resolveFacingYaw(world, intents);
@@ -97,8 +110,8 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   // 3) 身体平滑追随（慢）
   //    v9s.3：威胁注视激活时，身体趋向「主威胁 + 最近高权威胁」的加权中心（centroidYaw），
   //    而非面朝向 —— 即使边瞄准边走位，身体也始终压向包围中心；普通模式仍追随 facing。
-  const gazeActive = world.modules.gaze && world.gaze.active;
-  const bodyTargetYaw = gazeActive ? world.gaze.centroidYaw : c.facing;
+  //    v9s.4：busy（攻击 / 引导 / 蓄力 / 冲刺）打断接敌准备，body 回到跟随 facing。
+  const bodyTargetYaw = gazeHold ? world.gaze.centroidYaw : c.facing;
   //    v9s：原地转身 active 期间跳过 —— bodyYaw 由 turn-in-place 模块按固定进度驱动，
   //    这里若照常 approach 会把「固定节奏的转身」拖成两套插值叠加，转身起止发飘。
   //    headYaw 仍按本帧的 bodyYaw（上一帧转身写入值）限幅，头先于身体到位的关系不变。
@@ -112,14 +125,17 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   }
 
   // 4) 头部：v9s.3 注视逻辑（快追随 → 头先于身体到位 → 相对身体限幅）
-  //    威胁注视 → 头看主威胁(mainYaw)；普通注视 → 头看可注视目标（拖拽 > 锁定目标），
-  //    无目标则跟随 facing（移动/瞄准方向）。注意：头部**不**做「最近假人」兜底 —— 那是
-  //    turn-in-place（身体）的机制，头部只跟明确的拖拽/锁定意图，未锁定时自然看向移动方向。
-  //    头部相对身体的偏转角超过 headLookLimitDeg 时，平滑转回看「移动方向」（而非硬卡在极限）。
+  //    威胁注视 → 头看主威胁(mainYaw)，**不受 headLookLimitDeg 的「改看移动方向」约束**
+  //    （v9s.4：尽可能看向目标），只受相对身体的 maxHeadTurnDeg 物理限幅；
+  //    普通注视 → 头看可注视目标（拖拽 > 锁定目标），无目标则跟随 facing，
+  //    相对身体超过 headLookLimitDeg 时平滑转回看移动方向。
+  //    注意：头部**不**做「最近假人」兜底 —— 那是 turn-in-place（身体）的机制，头部只跟
+  //    明确的拖拽 / 锁定意图，未锁定时自然看向移动方向。
   let headTarget = c.facing;
   if (gazeActive) {
-    headTarget = world.gaze.mainYaw;
-  } else if (intents.aimActive && Math.hypot(intents.aimX, intents.aimZ) > EPS) {
+    // 技能 / 攻击打断期间随战斗朝向，其余时间盯住主威胁
+    headTarget = gazeHold ? world.gaze.mainYaw : c.facing;
+  } else if (dragging) {
     headTarget = Math.atan2(intents.aimX, intents.aimZ);
   } else if (
     world.config.targeting.targetAssist
@@ -128,11 +144,15 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   ) {
     headTarget = world.targeting.targetYaw;
   }
-  const headLimit = (world.config.gaze.headLookLimitDeg * Math.PI) / 180;
-  if (Math.abs(wrapAngle(headTarget - c.bodyYaw)) > headLimit) {
-    headTarget = c.moveYaw; // 超过头限制角：头看向移动方向
+  if (!gazeActive) {
+    const headLimit = (world.config.gaze.headLookLimitDeg * Math.PI) / 180;
+    if (Math.abs(wrapAngle(headTarget - c.bodyYaw)) > headLimit) {
+      headTarget = c.moveYaw; // 普通注视：超过头限制角 → 头看向移动方向
+    }
   }
-  let head = approach(c.headYaw, headTarget, o.headTurnRate, dt);
+  // 威胁注视用更高速率（gaze.headTurnRate > bodyTurnRate）→ 头先于身体锁住主威胁
+  const headRate = gazeHold ? world.config.gaze.headTurnRate : o.headTurnRate;
+  let head = approach(c.headYaw, headTarget, headRate, dt);
   const maxTurn = (o.maxHeadTurnDeg * Math.PI) / 180;
   const rel = wrapAngle(head - c.bodyYaw);
   if (rel > maxTurn) head = c.bodyYaw + maxTurn;

@@ -391,6 +391,7 @@
       "recoveryDist": 12,
       "maxThreats": 3,
       "bodyTurnRate": 7,
+      "headTurnRate": 30,
       "enterThreshold": 0.05,
       "modeWeight": {
         "idle": 0.2,

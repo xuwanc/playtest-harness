@@ -207,19 +207,20 @@ describe('v9s Core turnInPlace：静止盯视触发、起步攻击立即中止',
     }
   });
 
-  it('目标绕到背后（锁定丢失）时由最近假人兜底，仍能触发', () => {
+  it('v9s.4：附近假人不再触发整身转身（普通注视只转头），身体保持不动', () => {
     const w = makeWorld();
     w.modules.dummies = false;         // 冻结 AI，位置仍保留
-    w.modules.targeting = false;       // 强制不走锁定目标分支
+    w.modules.targeting = false;       // 无锁定
     const p = w.character.position;
     // 只留一个假人放在玩家左后方（约 -135°），其余移到范围外
     w.dummies.forEach((d, i) => {
       d.position.x = p.x + (i === 0 ? -2 : 100);
       d.position.z = p.z + (i === 0 ? -2 : 100);
     });
-    run(w, 10, intent());
-    expect(w.turnInPlace.phase).toBe('active');
-    expect(w.turnInPlace.dir).toBe(-1);   // 左后方 → 左转
+    run(w, 15, intent());
+    // 旧逻辑会「由最近假人兜底」触发原地转身；v9s.4 起普通注视只转头，不拽身体
+    expect(w.turnInPlace.phase).toBe('idle');
+    expect(Math.abs(wrapAngle(w.character.bodyYaw))).toBeLessThan(2 * DEG);
   });
 
   it('转身状态随 World 快照 / 恢复无损，可回放', () => {
@@ -349,12 +350,14 @@ describe('v9s 骨架：停步偏差消化与惯性 IK', () => {
  * v9s.1 · 转身驱动权移交：修 dirJump（无输入单帧 170° 跳变）与「转身卡一下」
  * -------------------------------------------------------------------------- */
 describe('v9s.1 转身驱动权移交：修 dirJump 与卡顿', () => {
-  it('非拖拽：激活帧 facing 不瞬跳到 targetYaw（修遥测 dirJump），激活期跟随 bodyYaw 平滑旋转并收敛', () => {
+  it('非拖拽（锁定背后目标）：激活帧 facing 不瞬跳到 targetYaw（修遥测 dirJump），激活期跟随 bodyYaw 平滑旋转并收敛', () => {
     const w = makeWorld();
-    w.modules.dummies = false; // 冻结假人 AI，避免受击打断转身
+    // v9s.4：无自动兜底后，用「锁定背后目标」构造非拖拽目视方向。
+    // targeting 受 modules.dummies 总闸控制，故保留假人模块（设为 idle 避免攻击打断转身）。
+    w.config.targeting.maxAngleDeg = 180;
     const p = w.character.position;
     // 背后放一个假人（朝向初始 +Z，假人在 -Z = 180°）
-    w.dummies.forEach((d) => { d.position.x = p.x; d.position.z = p.z - 3; });
+    w.dummies.forEach((d) => { d.position.x = p.x; d.position.z = p.z - 3; d.mode = 'idle'; });
     // 跑到激活
     for (let i = 0; i < 30 && w.turnInPlace.phase !== 'active'; i++) run(w, 1, intent());
     expect(w.turnInPlace.phase).toBe('active');

@@ -146,7 +146,7 @@ export function startApp(): void {
   // 玩法实验台的调试钩子：浏览器控制台 / 自动化验收可直接读状态、投影坐标，
   // 以及热改表现层配置（相机、特效时长等），无需重编译
   (window as unknown as { __harness?: unknown }).__harness = {
-    world, view, clock, input, viewConfig: VIEW_CONFIG,
+    world, view, clock, input, viewConfig: VIEW_CONFIG, debug,
     getUserZoom: () => userZoom,
     // v9d：手势接口读数，技能层 / 自动化验收可直接订阅最近一次手势
     getGestures: () => lastFrame.gestures,

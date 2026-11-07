@@ -4,7 +4,7 @@ import type { Intents, TurnInPlaceConfig, TurnInPlaceState, World } from './type
 /**
  * v9s · 原地转身（turn-in-place）状态机 —— 纯状态转移、确定性、可快照。
  *
- * 解决的问题：静止「盯视」时，若目标（技2 拖拽方向 / 锁定目标 / 假人）绕到背后，
+ * 解决的问题：静止「盯视」时，若目标（技2 拖拽 / 锁定目标 / 威胁注视中心）绕到背后，
  * 旧逻辑只有 `bodyYaw = approach(bodyYaw, facing, 7, dt)` 一条纯数值插值，停步收相
  * 结束后 solveGait 已返回 idle、没有任何步态参与 —— 整个人被「抹」过去，观感就是
  * 「下半身平滑滑过去」。这里在夹角超过阈值时触发一次明确的、有脚步配合的原地转身。
@@ -41,14 +41,14 @@ export function resetTurnInPlace(world: World): void {
 }
 
 /**
- * 解析「目视方向」：技2 拖拽 > 智能锁定目标 > 范围内最近的假人。
+ * 解析「目视方向」：威胁注视加权中心 > 技2 拖拽 > 智能锁定目标。
  *
- * 最后一级是关键：targeting 只在当前面朝向 ±maxAngleDeg 扇区内锁定，目标绕到背后
- * 会丢锁（hasTarget=false、targetYaw 停在旧值）。盯视是纯朝向行为，不该被战斗索敌的
- * 扇区限制挡住，所以单独取最近假人、不受 maxAngleDeg 约束；攻击索敌逻辑完全不变。
+ * v9s.4：移除「范围内最近的假人」自动兜底 —— 普通注视只转头，不再让附近 / 路过的假人
+ * 把整个身体拽过去（用户反馈「停下就回转向附近目标」）。原地转身只服务两类**明确意图**：
+ * 威胁注视（身体压向包围中心）与玩家主动拖拽 / 锁定的目标。
  * 返回 null 表示「没有可盯的目标」，不触发转身。
  */
-export function resolveLookYaw(world: World, intents: Intents, lookRange: number): number | null {
+export function resolveLookYaw(world: World, intents: Intents, _lookRange: number): number | null {
   // v9s.3：威胁注视激活时，身体（原地转身）优先朝「主威胁 + 最近高权威胁」的加权中心，
   // 与 orientation 的身体朝向目标一致；瞄准拖拽只决定 facing（战斗起手），不抢身体朝向。
   if (world.modules.gaze && world.gaze.active) {
@@ -61,24 +61,7 @@ export function resolveLookYaw(world: World, intents: Intents, lookRange: number
   if (tg.targetAssist && world.modules.targeting && world.targeting.hasTarget) {
     return world.targeting.targetYaw;
   }
-  // 假人数组在 modules.dummies=false 时依然保留（只是 AI 冻结），盯视仍可读取其位置
-  const p = world.character.position;
-  const range = lookRange > EPS ? lookRange : tg.range;
-  let best = Number.POSITIVE_INFINITY;
-  let yaw = 0;
-  let found = false;
-  for (const d of world.dummies) {
-    const dx = d.position.x - p.x;
-    const dz = d.position.z - p.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist < EPS || dist > range) continue;
-    if (dist < best) {
-      best = dist;
-      yaw = Math.atan2(dx, dz);
-      found = true;
-    }
-  }
-  return found ? yaw : null;
+  return null;
 }
 
 /** 是否处于「允许原地转身」的静止、非动作态。 */

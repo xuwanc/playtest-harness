@@ -584,6 +584,11 @@ export type GazeConfig = {
   maxThreats: number;
   /** 身体朝威胁中心转向速率（1/s） */
   bodyTurnRate: number;
+  /**
+   * v9s.4 威胁注视时头部追随主威胁的速率（1/s），应明显大于 bodyTurnRate。
+   * 接敌准备：身体沉稳步步压向威胁中心，头更快锁住主威胁 → 头先于身体到位。
+   */
+  headTurnRate: number;
   /** 进入威胁注视的最小归一化威胁阈值（0..1），低于不进入 */
   enterThreshold: number;
   /** 各假人行为模式基础威胁倍率（复用相机口径） */
