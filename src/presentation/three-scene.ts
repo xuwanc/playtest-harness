@@ -87,7 +87,7 @@ export type SceneView = {
   gripDebug(): { active: boolean; dist: number; gy: number; pitch: number; joint: number; grip: number };
   /** v9s.23：本帧挥击姿态（段号 / 段类型 / 躯干三轴 / 整体转体 / 两肩位置），供验收与真机诊断 */
   swingDebug(): {
-    seg: number; kind: string; yaw: number; pitch: number; roll: number; strike: number;
+    seg: number; kind: string; lead: 'R' | 'L'; yaw: number; pitch: number; roll: number; strike: number;
     rootYaw: number; spinYaw: number; rootTurn: number;
     shoulderL: { x: number; y: number; z: number };
     shoulderR: { x: number; y: number; z: number };
@@ -102,6 +102,8 @@ export type SceneView = {
   };
   /** clip 工具：世界坐标 → 页面像素。截图标注刃身 / 扫角用，纯只读。 */
   projectPoint(x: number, y: number, z: number): { x: number; y: number };
+  /** v9s.28：clip 工具专用，把剪辑时间轴钉到 t（null = 恢复 progress→swingCurve 映射）。 */
+  setClipT(t: number | null): void;
   /** v9s.15：传送后把相机跟随目标瞬移过去，避免跨场地滑行 */
   snapCamera(x: number, y: number, z: number): void;
   dispose(): void;
@@ -618,11 +620,12 @@ export function createSceneView(
     };
   }
 
-  // v9s.22 命中定格（hitstop）：纯表现层状态，不写 World / 快照。
-  // Core 照常推进（位置、判定、冷却都在走），这里只是「不把新姿态刷到骨架上」，
-  // 于是画面在命中瞬间静止一两帧 —— 玩家读成「打实了」。
-  let prevHitCount = 0;
-  let freezeLeft = 0;
+  // v9s.22 命中定格（hitstop）→ v9s.29 改由 Core 驱动。
+  // Core 的 `combat.hitstop` 会冻结攻击时间轴（进度 / 前冲 / 连击窗口），
+  // 表现层这边只做两件事：冻结骨架刷新 + 命中那一刻的镜头震动。
+  // 旧版自己数 hitCount 并冻结 70ms，Core 却继续走 —— 冻结结束会补一帧滑动；
+  // 现在两边同一份计时，停就是真停。
+  let wasHitstop = false;
 
   return {
     gaitDebug() {
@@ -647,6 +650,9 @@ export function createSceneView(
     projectPoint(x, y, z) {
       return projectToScreen(x, y, z);
     },
+    setClipT(t) {
+      voxel.setClipT(t);
+    },
     weaponDebug() {
       return voxel.weaponDebug();
     },
@@ -657,13 +663,14 @@ export function createSceneView(
       const c = w.character;
       const cb = w.combat;
 
-      // 只在「命中数增加」的那一帧触发；连续命中不会叠加成长时间定格。
-      if (view.hitstop.enabled && w.hitCount > prevHitCount && freezeLeft <= 0) {
-        freezeLeft = Math.max(0, view.hitstop.duration);
+      // 卡肉完全由 Core 计时：这里只读状态，不再自建冻结时长（两边计时不一致会互相打架）。
+      const stopping = view.hitstop.enabled && w.combat.hitstop > 0;
+      const frozen = stopping;
+      if (stopping && !wasHitstop) {
+        // 上升沿：按武器给一记震动。大剑最重，其余收敛 —— 「停 + 震」同帧出现才有重量。
+        cam.addShake(w.combat.weapon === 'greatsword' ? 0.85 : 0.5);
       }
-      prevHitCount = w.hitCount;
-      const frozen = freezeLeft > 0;
-      if (frozen) freezeLeft -= frameDt;
+      wasHitstop = stopping;
 
       playerRoot.position.set(c.position.x, c.position.y, c.position.z);
       // 身体用平滑朝向（bodyYaw），头 / 腿由 rig 内部按各自角度分离驱动

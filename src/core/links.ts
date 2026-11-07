@@ -252,6 +252,11 @@ export function linksUpdate(world: World, dt: number, intents: Intents): void {
   // 每帧先清仲裁标志（只在本帧内对 combat / abilities 生效）
   l.consumedAttack = false;
 
+  // v9s.29 卡肉：派生招的时间轴跟着一起停。
+  // 只冻结攻击方的话，link 的 active 计时仍在走、位移却被卡住 ——
+  // 结果是「冲撞打中后少冲一段」（实测 1.75m 只剩 1.48m）。冻结计时则暂停后自然补完。
+  if (world.combat.hitstop > 0) return;
+
   // 累计上一帧 active 的实际位移（movement 已跑完），并记下本帧扫掠起点。
   // hits 阶段用 fromX/fromZ → 当前位置做线段扫掠，防止一帧大位移漏判。
   if (l.phase === 'active') {

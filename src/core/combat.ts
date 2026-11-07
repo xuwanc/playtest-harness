@@ -28,6 +28,7 @@ export function resetCombat(world: World): void {
   c.attackProgress = 0;
   c.attackFacing = 0;
   c.lastCharge = 0;
+  c.hitstop = 0;
   c.timings = zeroTimings();
 }
 
@@ -45,6 +46,7 @@ export function initialCombatState(weaponSlot: number) {
     attackFacing: 0,
     attackId: 0,
     lastCharge: 0,
+    hitstop: 0,
     timings: zeroTimings(),
   };
 }
@@ -143,6 +145,12 @@ function advancePhase(world: World, dt: number, intents: Intents): void {
   if (c.phase === 'idle') return;
 
   const t = c.timings;
+
+  // v9s.29 命中卡肉：冻结整条攻击时间轴（phaseTimer 不推进）。
+  // 计时在 combatUpdate 里扣（idle 时也要扣，否则派生招的卡肉永远不结束），
+  // 这里只负责「冻结」：不推进阶段、不走连击窗口、不重算 attackProgress。
+  if (c.hitstop > 0) return;
+
   c.phaseTimer += dt;
 
   // 单帧可能跨过多个阶段（低帧率 / 时间缩放），用有限循环补齐
@@ -233,6 +241,16 @@ export function combatUpdate(world: World, dt: number, intents: Intents): void {
     }
   }
 
+  // 2.5) v9s.29 卡肉期间把攻击方彻底按住：前冲冲量与水平速度一起归零。
+  // 只冻 phaseTimer 还不够 —— movement 仍会按残余速度积分，冻结结束那一刻
+  // 身体会补滑几毫米（实测 0.85mm/帧），画面读起来是「定格时脚在飘」。
+  if (c.hitstop > 0) {
+    world.impulse.x = 0;
+    world.impulse.z = 0;
+    world.character.velocity.x = 0;
+    world.character.velocity.z = 0;
+  }
+
   // 3) 阶段推进
   advancePhase(world, dt, intents);
 
@@ -308,7 +326,7 @@ export function combatUpdate(world: World, dt: number, intents: Intents): void {
   if (!linkingActive) {
     world.impulse.x = 0;
     world.impulse.z = 0;
-    if (c.phase === 'active' && c.timings.active > EPS) {
+    if (c.phase === 'active' && c.hitstop <= 0 && c.timings.active > EPS) {
       const T = c.timings.active;
       const D = Math.max(0, c.timings.lunge);
       const p = Math.max(0.2, cfg.lungeCurve);
@@ -324,4 +342,8 @@ export function combatUpdate(world: World, dt: number, intents: Intents): void {
       world.impulse.z = Math.cos(c.attackFacing) * mag;
     }
   }
+
+  // 6) v9s.29 卡肉计时最后才扣：本帧所有模块都读到「还在冻结」，扣完才算进入下一帧。
+  // 反过来（先扣再推进）会让冻结少一帧，最后那帧进度偷偷前进 3.6%。
+  if (c.hitstop > 0) c.hitstop = Math.max(0, c.hitstop - dt);
 }

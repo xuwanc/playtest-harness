@@ -217,9 +217,22 @@ describe('v9s.23 骨架落地：身体 / 肩部', () => {
     rig.update(w.character, w.combat, NONE, w.config.fixedDt, false, w.time);
     const d = rig.swingDebug();
     expect(d.shoulderR.x).toBeCloseTo(baseX, 6);
-    expect(d.shoulderR.y).toBeCloseTo(baseY, 6);
-    expect(d.shoulderR.z).toBeCloseTo(0, 6);
     expect(d.shoulderL.x).toBeCloseTo(-baseX, 6);
+
+    // v9s.29：收招改成 0.16s 交叉淡出 —— 肩点不再是「回到 idle 那一帧」立刻复位，
+    // 而是随权重平滑落回。这里验收两件事：过程中不跳帧、结束后精确复位。
+    let prevY = d.shoulderR.y;
+    let worstStep = 0;
+    for (let i = 0; i < 30; i++) {
+      rig.update(w.character, w.combat, NONE, w.config.fixedDt, false, w.time);
+      const y = rig.swingDebug().shoulderR.y;
+      worstStep = Math.max(worstStep, Math.abs(y - prevY));
+      prevY = y;
+    }
+    expect(worstStep).toBeLessThan(0.02);        // 单帧不超过 2cm：不是硬切
+    const settled = rig.swingDebug();
+    expect(settled.shoulderR.y).toBeCloseTo(baseY, 6);
+    expect(settled.shoulderR.z).toBeCloseTo(0, 6);
     rig.dispose();
   });
 

@@ -276,6 +276,17 @@ export type CombatState = {
   attackId: number;
   /** 最近一次弓箭释放的蓄力值 0..1，供表现层决定箭速 */
   lastCharge: number;
+  /**
+   * v9s.29 · 命中卡肉（hitstop）剩余时间（秒），0 = 正常。
+   *
+   * 命中瞬间把**攻击方的时间轴**按住一会儿：phaseTimer 不推进、前冲 impulse 归零，
+   * 于是挥到接触点的那一帧被「钉住」，打感从「划过去」变成「砍进去」。
+   *
+   * 放在 Core 而不是表现层：表现层冻结只能停画面，Core 的位移 / 计时还在走，
+   * 冻结结束会补一帧滑动；而进 Core 后位置、进度、连击窗口全部一起停，
+   * 且完全确定性（同输入同帧数 → 同结果），可被单测覆盖。
+   */
+  hitstop: number;
   timings: AttackTimings;
 };
 
@@ -485,6 +496,18 @@ export type HitsConfig = {
   noDamageToPlayer: boolean;
   /** 假人挥砍对玩家的击退距离（米），仅在 noDamageToPlayer=false 时生效 */
   dummyKnockback: number;
+  /**
+   * v9s.29 · 卡肉时长（秒），按受击类型分档（0 = 关闭该档）。
+   *
+   * 参考成熟做法（鬼泣 / 怪物猎人 / 只狼）：轻击 2~4 帧、重击 5~7 帧、击飞 7~9 帧
+   * （60fps 下 ≈ 33~150ms）。太短读不出「打实了」，太长会把连击节奏拖断。
+   * 同类连击里连续命中不会叠加，取最大值。
+   */
+  hitstop: {
+    light: number;
+    heavy: number;
+    knock: number;
+  };
 };
 
 /* ---------------- 技能契约（法杖：引导飞弹 / 电环，v7c #12） ---------------- */
@@ -1562,6 +1585,16 @@ export type SwingPoseViewConfig = {
   shoulderIn: number;
   /** 段间姿态过渡时长（s）：上段收势 → 下段起手不再是单帧跳变 */
   segBlend: number;
+  /**
+   * v9s.29 · 进入战斗姿态的淡入时长（s，缺省 0.1）。
+   *
+   * 待机 → 起手原本是同一帧整体换姿势（「啪」地跳帧）。这里用交叉淡入淡出：
+   * 每帧记录「若不打这一击会是什么姿态」，再把战斗姿态按权重混合上去，
+   * 起手 0.1s 淡入、收招 0.16s 淡出，两端都不会有单帧跳变。
+   */
+  poseIn?: number;
+  /** v9s.29 · 退出战斗姿态的淡出时长（s，缺省 0.16）。 */
+  poseOut?: number;
   /** 各武器幅度倍率（大剑最夸张，短剑收敛） */
   weaponScale: Record<string, number>;
   /**
@@ -1714,6 +1747,15 @@ export type WeaponMountConfig = {
   staffPitchDeg: number;
   shieldPitchDeg: number;
   bowPitchDeg: number;
+  /**
+   * v9s.29 · 握刀外撇角（度，+ = 刀尖偏向角色右侧）。
+   *
+   * 只有俯仰时刀身与小臂共线（「手臂加长了一截」）；给 10~18° 外撇后刀与小臂成夹角，
+   * 既更像握着刀，也更容易读出刀身朝向。只影响刀尖水平指向，不改刃面。
+   */
+  swordCantDeg?: number;
+  /** v9s.29 · 大剑外撇角（度）。大剑更重、握距更宽，略小于单手剑。 */
+  greatswordCantDeg?: number;
 
   /* ---- v9s.22：双手握持（副手 IK） ---- */
   /**
@@ -2139,7 +2181,9 @@ export type EventType =
   /** v9a：派生招收势结束，value = link.id */
   | 'link-end'
   /** v9a：派生招命中一个目标，value = 目标假人 id */
-  | 'link-hit';
+  | 'link-hit'
+  /** v9s.29：命中卡肉开始，value = 冻结时长（秒）。表现层据此触发镜头震动 / 音效 */
+  | 'hitstop';
 
 /** 显式事件队列（数组），对应 C# 的 List<GameEvent>，可跨语言比对。 */
 export type GameEvent = {

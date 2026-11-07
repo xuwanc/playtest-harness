@@ -66,6 +66,17 @@ export type SwingPose = {
   bladePitch: number | null;
   /** v9s.26：副手武器挂点仰角；null = 沿用默认挂点。双持展开 / 盾猛顶时显式给。 */
   bladePitchOff: number | null;
+  /**
+   * v9s.29：主手刃面滚转（rad，绕刀身长轴；0 = 宽面朝侧面，±1.2 ≈ 刃口朝挥击方向）。
+   * 横扫时用来让「刃口迎着运动方向」，而不是拿刀身侧面拍过去。
+   */
+  bladeTwist: number;
+  /** v9s.29：副手刃面滚转。 */
+  bladeTwistOff: number;
+  /** v9s.29：主手刃身相对小臂的水平外撇（rad，+ = 刀尖偏向角色右侧）。 */
+  bladeYaw: number;
+  /** v9s.29：副手刃身水平外撇。 */
+  bladeYawOff: number;
   /** 本段主挥手（决定哪只手的剑要按 bladePitch 反解） */
   lead: 'R' | 'L';
   /** 本段类型，供调试 / 验收读 */
@@ -111,6 +122,7 @@ function emptySample(): PoseSample {
     armPitch: 0, armYaw: 0, armRoll: 0, elbow: 0, bladePitch: 0,
     armLPitch: 0, armLYaw: 0, armLRoll: 0, elbowL: 0,
     rootYaw: 0, bladePitchOff: 0,
+    bladeTwist: 0, bladeTwistOff: 0, bladeYaw: 0, bladeYawOff: 0,
   };
 }
 
@@ -170,6 +182,16 @@ export function solveSwingPose(
     ?? ['right-left', 'left-right', 'overhead'][seg]
     ?? 'custom';
 
+  // v9s.29：刃面滚转 / 刃身外撇。数据没显式给副手值时按「双持同向（两把刀一起迎着
+  // 挥击方向立刃）、其余镜像外撇」推导 —— 只写主手通道也能让双刀同时立刃。
+  const dual = weapon === 'dual-swords';
+  const twistOff = clip && clipHasChannel(clip, 'bladeTwistOff')
+    ? sample.bladeTwistOff
+    : (dual ? sample.bladeTwist : 0);
+  const yawOff = clip && clipHasChannel(clip, 'bladeYawOff')
+    ? sample.bladeYawOff
+    : -sample.bladeYaw;
+
   const pose: SwingPose = {
     yaw: sample.bodyYaw * body,
     // 整体带转跟躯干扭转一样吃 body 幅度：bodyScale=0 的 A/B 对照要把「身体」
@@ -189,6 +211,11 @@ export function solveSwingPose(
     // 副手挂点仰角只有数据显式给了才接管：缺省 null = 沿用武器默认挂点，
     // 否则双持待机时左手会被莫名翻成水平。
     bladePitchOff: clip && clipHasChannel(clip, 'bladePitchOff') ? sample.bladePitchOff : null,
+    // 刃身外撇 / 刃面滚转都是相对量，不吃幅度倍率（乘了会变成「刀歪了」而不是「刀立起来了」）
+    bladeTwist: sample.bladeTwist,
+    bladeTwistOff: twistOff,
+    bladeYaw: sample.bladeYaw,
+    bladeYawOff: yawOff,
     lead,
     kind,
     strike: u,
@@ -268,6 +295,11 @@ export function blendSwingPose(a: SwingPose, b: SwingPose, t: number): SwingPose
     bladePitchOff: a.bladePitchOff === null || b.bladePitchOff === null
       ? (k < 0.5 ? a.bladePitchOff : b.bladePitchOff)
       : lerp(a.bladePitchOff, b.bladePitchOff, k),
+    // v9s.29：刃面 / 外撇都是相对量，直接线性混合（角度都在 ±π/2 内，不会绕圈）
+    bladeTwist: lerp(a.bladeTwist, b.bladeTwist, k),
+    bladeTwistOff: lerp(a.bladeTwistOff, b.bladeTwistOff, k),
+    bladeYaw: lerp(a.bladeYaw, b.bladeYaw, k),
+    bladeYawOff: lerp(a.bladeYawOff, b.bladeYawOff, k),
     lead: b.lead,
     // 段号在换段瞬间就更新了，kind 也跟目标段保持一致（否则诊断读到「段 1 / overhead」）
     kind: b.kind,

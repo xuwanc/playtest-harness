@@ -23,6 +23,14 @@ export type CameraRig = {
   setZoom(next: number): void;
   /** 表现层实际采用的平滑后构图值，供 diagnostics / 验收读数。 */
   smart(): SmartCameraState;
+  /**
+   * v9s.29：命中震动（相机冲击）。
+   *
+   * 卡肉负责「停」，震动负责「砸」。两者叠加才有重量：只停不震像掉帧，
+   * 只震不停像穿模。能量按指数衰减、幅度只有几厘米 —— 大了会晕，
+   * 但它和定格同一帧触发，玩家读到的就是「打实了」。
+   */
+  addShake(amount: number): void;
 };
 
 const NEUTRAL: CameraIntent = {
@@ -53,6 +61,9 @@ export function createCameraRig(
   };
   /** 用户缩放目标（由组装层喂入），smart.zoom 平滑跟随，不进 Core / 快照 */
   let zoomTarget = 1;
+  /** v9s.29 命中震动：能量 0..1 + 相位（纯表现，不进 Core / 快照） */
+  let shake = 0;
+  let shakePhase = 0;
 
   function computeOffset(): void {
     const pitch = ((cfg.pitchDeg + smart.pitchDelta) * Math.PI) / 180;
@@ -99,6 +110,19 @@ export function createCameraRig(
       focus.set(target.x + smart.offsetX, target.y, target.z + smart.offsetZ);
       camera.position.copy(focus).add(offset);
       camera.lookAt(focus);
+
+      // v9s.29 命中震动：位移式（不改朝向），所以背景不旋转、只有「顿一下」的错位感。
+      // 相位用两个不互质的频率叠加，避免看出明显的来回摆动。
+      if (shake > 1e-3) {
+        shakePhase += dt * 52;
+        const amp = shake * 0.055;
+        camera.position.x += Math.sin(shakePhase * 1.7) * amp;
+        camera.position.y += Math.sin(shakePhase * 2.3 + 1.1) * amp * 0.75;
+        camera.position.z += Math.sin(shakePhase * 1.3 + 2.4) * amp * 0.5;
+        shake *= Math.exp(-9 * dt);
+      } else {
+        shake = 0;
+      }
       camera.updateMatrixWorld();
     },
     snap(x, y, z): void {
@@ -126,6 +150,10 @@ export function createCameraRig(
         forwardX: fwd.x / fl,
         forwardZ: fwd.z / fl,
       };
+    },
+    addShake(amount): void {
+      if (!Number.isFinite(amount) || amount <= 0) return;
+      shake = Math.min(1, shake + amount);
     },
     setZoom(next): void {
       zoomTarget = Number.isFinite(next) && next > 0 ? next : 1;

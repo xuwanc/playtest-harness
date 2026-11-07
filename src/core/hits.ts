@@ -79,6 +79,15 @@ export function applyHit(world: World, target: HitTarget, spec: HitSpec): void {
   }
   world.hitCount += 1;
   emit(world, 'hit', s.id, s.position);
+
+  // v9s.29 卡肉：命中瞬间按住攻击方的时间轴（见 CombatState.hitstop）。
+  // 取「最大值」而不是累加：同一帧多目标命中 / 连段多段命中不会把冻结叠成慢动作。
+  const table = world.config.hits.hitstop;
+  const stop = table && spec.type !== 'none' ? (table[spec.type] ?? 0) : 0;
+  if (stop > 0 && world.combat.hitstop < stop) {
+    world.combat.hitstop = stop;
+    emit(world, 'hitstop', stop, s.position);
+  }
 }
 
 /** 兼容既有调用：作用于指定序号的假人（abilities / playerHits）。 */

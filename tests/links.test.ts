@@ -269,7 +269,9 @@ describe('v9a 派生招 · 索敌与位移收敛', () => {
     const startZ = w.character.position.z;
     tick(w, ATK);
     const travel = w.playerLink.travel;
-    for (let i = 0; i < 50; i++) tick(w);
+    // v9s.29：命中会触发卡肉（Core 冻结攻击时间轴），派生招的 active 计时也一起暂停，
+    // 因此收招帧数比原先多几帧（60fps 下 45ms ≈ 3 帧）。位移总量不变。
+    for (let i = 0; i < 70; i++) tick(w);
     expect(w.playerLink.phase).toBe('idle');
     expect(w.character.position.z - startZ).toBeCloseTo(travel, 1);
     expect(w.character.position.z).toBeLessThanOrEqual(w.config.worldBounds.maxZ + 1e-6);

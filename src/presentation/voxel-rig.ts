@@ -90,6 +90,8 @@ export type VoxelRig = {
   swingDebug(): {
     seg: number;
     kind: string;
+    /** v9s.28：本段的主挥手（双持段 2 是左手）。验收扫角必须按这只手取刃身。 */
+    lead: 'R' | 'L';
     yaw: number;
     /** v9s.26：整体带转 / 整圈旋转 / 两者之和（= root.rotation.y） */
     rootYaw: number;
@@ -98,12 +100,21 @@ export type VoxelRig = {
     pitch: number;
     roll: number;
     strike: number;
+    /** v9s.29：刃面滚转（主/副）与刃身外撇（主/副），验收「刃口是否迎着挥击方向」 */
+    bladeTwist: number;
+    bladeTwistOff: number;
+    bladeYaw: number;
+    bladeYawOff: number;
     shoulderL: { x: number; y: number; z: number };
     shoulderR: { x: number; y: number; z: number };
   };
+  /**
+   * v9s.28：clip-lab 专用 —— 把剪辑时间轴固定到 t（0..1），绕过 `swingCurve(progress)`。
+   * 传 null 恢复正常映射。正常游玩不会被调用。
+   */
+  setClipT(t: number | null): void;
   /** 下盘相对身体的连续偏航（v8b），供验收「引导/后退时跨朝向不跳变」。 */
-  hipYaw(): number;
-  /** v9n：停步收相进度（-1 = 未接管）与本帧双腿姿态，供浏览器验收过渡是否平滑。
+  hipYaw(): number;  /** v9n：停步收相进度（-1 = 未接管）与本帧双腿姿态，供浏览器验收过渡是否平滑。
    *  v9o 追加 chestYaw / speed；v9q 追加 gaitSpeed（= velocity + 击退冲量，步态实际驱动）；
    *  v9r 追加 stopDip（骨盆惯性下沉量，验收「骨盆跟着沉、脚不跟着沉」）。 */
   gaitDebug(): {
@@ -126,11 +137,18 @@ export type VoxelRig = {
   weaponBlade(): {
     base: { x: number; y: number; z: number };
     tip: { x: number; y: number; z: number };
+    /**
+     * v9s.29：刀身**宽面法线**（世界方向，= 刀身局部 X，因为模型「薄在 X」）。
+     *
+     * 用来量化「刃口在切、还是拿刀身侧面拍」：横扫时刃尖速度方向与这条法线
+     * 越接近垂直（点积≈0），说明刃口正对着运动方向。
+     */
+    normal: { x: number; y: number; z: number };
   } | null;
   /** 双持 / 剑盾：同时给出两只手的刃身（无刃或没模型的一侧为 null），供 clip 工具标注。 */
   bladesWorld(): {
-    right: { base: { x: number; y: number; z: number }; tip: { x: number; y: number; z: number } } | null;
-    left: { base: { x: number; y: number; z: number }; tip: { x: number; y: number; z: number } } | null;
+    right: BladeGeom | null;
+    left: BladeGeom | null;
   };
   dispose(): void;
 };
@@ -161,6 +179,14 @@ type Limb = {
 };
 /** 腿额外带一个末端标记，供 IK 取世界锚点（小腿末端，不含鞋的视觉偏移）。 */
 type Leg = Limb & { tip: THREE.Object3D };
+
+/** v9s.29：一条刃身的几何读数（供拖尾 / clip 工具 / 验收）。 */
+export type BladeGeom = {
+  base: { x: number; y: number; z: number };
+  tip: { x: number; y: number; z: number };
+  /** 宽面法线（世界） */
+  normal: { x: number; y: number; z: number };
+};
 
 type WeaponParts = {
   right: THREE.Object3D;
@@ -435,9 +461,16 @@ export function createVoxelRig(
   const makeArm = (sx: number): Limb => {
     const shoulder = group();
     shoulder.name = sx < 0 ? 'shoulderL' : 'shoulderR';
-    // v9s.22：与腿同构的 ZYX —— 两骨 IK 要求 roll 与 pitch 共面（R = Rz·Rx），
-    // 默认 XYZ 是 Rx·Rz，roll≠0 时余弦定理无解析解。副手握持 IK 依赖这一点。
-    shoulder.rotation.order = 'ZYX';
+    // v9s.22 起用 ZYX（R = Rx·Ry·Rz）满足两骨 IK 的「roll 与 pitch 共面」假设。
+    //
+    // v9s.28 改成 YXZ（R = Ry·Rx·Rz）：**yaw = 0 时两者数学上完全等价**（都退化成
+    // Rx·Rz），pitch / roll 的既有调校逐帧不变；区别只在 yaw ≠ 0 时——
+    //   ZYX 先绕竖直轴转一根竖直向下的手臂 = 绕自身长轴自转（视觉上等于 roll），
+    //   所以 armYaw 一直是个「假通道」，实测 −1.4 → 0 只让刃身水平朝向变 25°。
+    //   YXZ 则是「自转 → 抬臂 → 最后水平摆」，yaw 才真正是肩的水平内收 / 外展。
+    // 这是双持两把剑「向两侧展开」的必要条件。
+    // 副作用：双手 IK 的目标点必须先把 yaw 逆旋转掉，见 applySecondaryGrip 的 probeAt。
+    shoulder.rotation.order = 'YXZ';
     shoulder.position.set(sx * (bodyW / 2 + t / 2), bodyH - 0.04, 0); // 相对骨盆
     upper.add(shoulder);
 
@@ -496,8 +529,17 @@ export function createVoxelRig(
   const mountL = group();
   mountR.name = 'mountR';
   mountL.name = 'mountL';
+  // v9s.29：刃面滚转节点（夹在挂点与武器之间，绕刀身长轴）。
+  // 放在挂点**下面**是关键：挂点只负责俯仰 / 外撇，滚转不参与刀尖指向，
+  // 于是「刃口朝哪」和「刀尖指哪」彻底解耦，数据可以分别调。
+  const gripR = group();
+  const gripL = group();
+  gripR.name = 'gripR';
+  gripL.name = 'gripL';
   armR.wrist.add(mountR);
   armL.wrist.add(mountL);
+  mountR.add(gripR);
+  mountL.add(gripL);
 
   // ---- 五套体素武器，全部挂在握持挂点上 ----
   const staffModel = makeStaff(colors);
@@ -513,8 +555,8 @@ export function createVoxelRig(
   };
 
   for (const id of Object.keys(parts) as WeaponId[]) {
-    mountR.add(parts[id].right);
-    mountL.add(parts[id].left);
+    gripR.add(parts[id].right);
+    gripL.add(parts[id].left);
     parts[id].right.visible = false;
     parts[id].left.visible = false;
   }
@@ -654,12 +696,26 @@ export function createVoxelRig(
   let swingSeg = 0;
   /** 段间过渡进度 0..1 */
   let swingFade = 1;
+  /**
+   * v9s.28：clip-lab 专用的「直接指定剪辑时间轴 0..1」覆盖。
+   *
+   * 正常游戏里剪辑 t 由 `swingCurve(attackProgress)` 映射（蓄势 → 挥出 → 保持 → 收势），
+   * 工具若也把 attackProgress 当 t 用，就会在 t=0.5 时实际采样到 t=1 那一帧 —— 改关键帧
+   * 看着没反应。设置本值后 solveSwingFor 直接用它当 t，工具调动作才和真实链路同一语义。
+   * 只由 `__harness.clipLab` 写入，正常游玩恒为 null。
+   */
+  let clipLabT: number | null = null;
   /** 本帧实际采用的肩部位移（诊断用） */
   let lastShoulder = { lx: 0, ly: 0, lz: 0, rx: 0, ry: 0, rz: 0 };
   /** 本帧挥击层要求的剑身仰角（null = 用武器默认挂点） */
   let swingBladePitch: number | null = null;
   /** v9s.26：本帧副手武器挂点仰角（null = 用副手默认挂点） */
   let swingBladePitchOff: number | null = null;
+  /** v9s.29：本帧刃面滚转 / 刃身外撇（主手与副手各一份；null = 回默认，刃面朝侧面、不外撇） */
+  let swingBladeTwist: number | null = null;
+  let swingBladeTwistOff: number | null = null;
+  let swingBladeYaw: number | null = null;
+  let swingBladeYawOff: number | null = null;
   /** 本帧主挥手：决定按哪条手臂链反解挂点 */
   let swingLead: 'R' | 'L' = 'R';
   /** 本帧整体转体（rootYaw + spinYaw），供 swingDebug 读 */
@@ -668,6 +724,15 @@ export function createVoxelRig(
   // ---- v8c 程序动画分层状态（全部纯表现，不进入 Core / 快照）----
   /** 攻击姿态混合系数 0..1：指数平滑进出攻击，避免下盘姿态单帧跳变 */
   let attackBlend = 0;
+  /**
+   * v9s.29 · 战斗姿态进出权重 0..1（交叉淡入淡出）。
+   *
+   * attackBlend 只驱动「下盘 / 跨步」的淡入淡出；上半身与手臂一直是硬切 ——
+   * 待机 → 起手、收招 → 待机都是单帧换姿势（用户反馈的「直接跳帧」）。
+   * 这里另起一个权重，作用在**上半身骨架**上：每帧先把「不打这一击会是什么姿态」
+   * 记下来（= 步态算出来的待机姿态），写完战斗姿态后按权重混合回去。
+   */
+  let combatPoseW = 0;
   /** 本帧「挥击跨步写腿」的权重 = lowerBodyWeight × attackBlend；默认 0 = 完全过滤 */
   let attackLegWeight = 0;
   /** 本帧步态对下盘的权重（诊断用） */
@@ -809,12 +874,14 @@ export function createVoxelRig(
    */
   function swingCurve(t: number): number {
     if (t < 0.22) return -1;
-    if (t < 0.5) return -1 + ((t - 0.22) / 0.28) * 2;
-    // v9s.26：命中后先保持挥出满 0.08（≈ 一次攻击 8% 的时间），再回落收势。
-    // 旧版 0.5 立刻回落，大剑 233° 的横扫会在 3 帧内从「左后方」弹回「左前方」，
-    // 观感像没扫到位；保持段让「扫到对侧后方」这一下先站住再收。
-    if (t < 0.58) return 1;
-    return Math.max(0, 1 - (t - 0.58) / 0.42);
+    // v9s.28：挥出从 0.22~0.50 提前到 0.22~0.42。
+    // 原因是 `cancelWindow`（默认 0.45）早于旧的挥出完成点 0.50 —— 玩家连打时
+    // 剑才走到 64% 就被切到下一段，衔接处实测跳 85~117°。提前 8% 之后，
+    // 「最早可取消那一刻」动作已经到位，换段靠 0.08s 的 segBlend 就能平顺过去；
+    // 同时挥出占比从 28% 压到 20%，打击更短促（符合「慢-快-慢」里的快）。
+    if (t < 0.42) return -1 + ((t - 0.22) / 0.2) * 2;
+    if (t < 0.5) return 1;
+    return Math.max(0, 1 - (t - 0.5) / 0.5);
   }
 
   /**
@@ -875,11 +942,25 @@ export function createVoxelRig(
      * 收到可达为止：左手虽然握得偏上，但**始终在柄上**。
      * 这是「双手够不到」和「拉面条」之间的折中，也是真实动画里常用的做法。
      */
-    /** 取柄上 gy 处的点，换算成「相对左肩」的向量与距离（局部空间）。 */
+    /**
+     * 取柄上 gy 处的点，换算成「相对左肩」的向量与距离（局部空间）。
+     *
+     * v9s.28：shoulder 改成 YXZ 后，`armL.root.rotation.y` 是**最后**应用的水平摆，
+     * 而 solveTwoBoneIK 只解 pitch / roll、并假设方位角从「正前方」起算。目标向量
+     * 必须先绕 Y 逆旋转 −yaw 转到「未摆臂」的坐标系里，解出的角度再经 yaw 转回去，
+     * 手才真的落在柄上。yaw = 0 时逆旋转是恒等变换，旧数据零影响。
+     */
+    const yawComp = armL.root.rotation.y;
+    const cy = Math.cos(yawComp);
+    const sy2 = Math.sin(yawComp);
     const probeAt = (gy: number): { t: { x: number; y: number; z: number }; dist: number } => {
       const world = mountR.localToWorld(new THREE.Vector3(0, gy, 0));
       const local = upper.worldToLocal(world);
-      const t = { x: local.x - sx, y: local.y - sy, z: local.z - sz };
+      const dx = local.x - sx;
+      const dy = local.y - sy;
+      const dz = local.z - sz;
+      // 绕 Y 转 −yaw：(x, z) → (x·cos − z·sin, x·sin + z·cos)
+      const t = { x: dx * cy - dz * sy2, y: dy, z: dx * sy2 + dz * cy };
       return { t, dist: Math.hypot(t.x, t.y, t.z) };
     };
 
@@ -1030,8 +1111,7 @@ export function createVoxelRig(
   }
 
   /** 主手默认挂点俯仰（与 applyMountPose 的 rp 保持一致）。 */
-  function mountBasePitch(w: WeaponId): number {
-    const d = Math.PI / 180;
+  function mountBasePitch(w: WeaponId): number {    const d = Math.PI / 180;
     if (w === 'greatsword') return mountCfg.greatswordPitchDeg * d;
     if (w === 'staff') return mountCfg.staffPitchDeg * d;
     if (w === 'bow') return mountCfg.bowPitchDeg * d;
@@ -1045,6 +1125,22 @@ export function createVoxelRig(
     if (w === 'greatsword') return mountCfg.greatswordPitchDeg * d;
     if (w === 'bow') return mountCfg.bowPitchDeg * d;
     return mountCfg.swordPitchDeg * d;
+  }
+
+  /**
+   * v9s.29 · 握刀外撇角（rad，+ = 刀尖偏向角色右侧）。
+   *
+   * 「刀和小臂完全平行」是纯几何：刀身俯仰被反解到世界水平，而挥击时手臂也几乎水平，
+   * 两者共线 → 读起来像手臂加长了一截。真实握刀手腕会外撇 10~20°，刀与小臂成夹角，
+   * 既更像「握着」也更容易读出刀身朝向。这里给一个**常量外撇**（各武器可调），
+   * 与数据里的 `bladeYaw`（随动作变化的部分）相加。
+   */
+  function mountCant(w: WeaponId): number {
+    const d = Math.PI / 180;
+    if (w === 'sword-shield') return (mountCfg.swordCantDeg ?? 0) * d;
+    if (w === 'dual-swords') return (mountCfg.swordCantDeg ?? 0) * d;
+    if (w === 'greatsword') return (mountCfg.greatswordCantDeg ?? 0) * d;
+    return 0;
   }
 
   /**
@@ -1102,6 +1198,32 @@ export function createVoxelRig(
       const offChain = torsoPitch + offArm.root.rotation.x + offArm.joint.rotation.x;
       offMount.rotation.x = offBase - eo - offChain;
     }
+
+    // ---- v9s.29：刃身外撇 + 刃面滚转 ----
+    // 两个量都写在 grip（挂点的子节点 = 刀身自己的坐标系）上，而不是挂点：
+    //   grip.z = 外撇：刀尖在「手的前方平面」里向体侧张开 → 与小臂形成夹角；
+    //   grip.y = 滚转：绕刀身长轴把刃口转到挥击方向。
+    // 挂点的 Y 轴是**小臂方向**（手臂前平举时它不朝上），在挂点上写 yaw 会变成
+    // 绕小臂转，刀尖在锥面上打转（实测让横扫段仰角多塌 4°）；放在 grip 上才是
+    // 「相对手的固定夹角」，不随手臂姿态漂移。
+    const cant = mountCant(w);
+    const yawMain = swingBladeYaw ?? 0;
+    const yawOff = swingBladeYawOff ?? 0;
+    const twMain = swingBladeTwist ?? 0;
+    const twOff = swingBladeTwistOff ?? 0;
+    // 符号：grip 的 +Z 旋转把刀尖推向 −X（角色左侧），所以右手（+X 侧）外撇取负，
+    // 左手取正。写反的话两把刀会向中线内收，双持反而更「合」。
+    if (leadR) {
+      gripR.rotation.z = -cant + yawMain;
+      gripR.rotation.y = twMain;
+      gripL.rotation.z = cant + yawOff;
+      gripL.rotation.y = twOff;
+    } else {
+      gripL.rotation.z = cant + yawMain;
+      gripL.rotation.y = twMain;
+      gripR.rotation.z = -cant + yawOff;
+      gripR.rotation.y = twOff;
+    }
   }
 
   /**
@@ -1114,6 +1236,10 @@ export function createVoxelRig(
   function writeSwingPose(p: SwingPose): void {
     swingBladePitch = p.bladePitch;
     swingBladePitchOff = p.bladePitchOff;
+    swingBladeTwist = p.bladeTwist;
+    swingBladeTwistOff = p.bladeTwistOff;
+    swingBladeYaw = p.bladeYaw;
+    swingBladeYawOff = p.bladeYawOff;
     swingLead = p.lead;
     // v9s.26 整体转体：写在 rig 的 root.rotation.y 上（three-scene 设的是外层
     // playerRoot，两者叠加，不冲突）。rootYaw 是随挥击曲线摆的带转，spinYaw 是
@@ -1149,8 +1275,9 @@ export function createVoxelRig(
    * 段内的挥出速度完全不受影响（不引入逐帧平滑，否则会吃掉冲击力）。
    */
   function solveSwingFor(combat: CombatState, dt: number): SwingPose {
+    const swingT = clipLabT ?? swingCurve(combat.attackProgress);
     const target = solveSwingPose(
-      combat.weapon, combat.comboIndex, swingCurve(combat.attackProgress), swingCfg,
+      combat.weapon, combat.comboIndex, swingT, swingCfg,
       combat.attackProgress,
     );
     if (combat.comboIndex !== swingSeg) {
@@ -1233,6 +1360,69 @@ export function createVoxelRig(
   // 现在统一由 update() 的「挥击跨步层」按 attackLegWeight 叠加 attackStridePose，
   // applyCombatPose 只负责上半身与武器姿态，职责单一。
 
+  /**
+   * v9s.29 · 「不打这一击时」的骨架快照（待机 / 步态姿态）。
+   *
+   * 只记战斗姿态会覆盖的节点：躯干、骨盆、双臂、整体转体。
+   * 腿不动 —— 腿的进出由 `attackBlend` 单独负责（它要跟跨步相位对齐）。
+   */
+  type BaseSnap = {
+    upperX: number; upperY: number; upperZ: number; upperPX: number; upperPZ: number;
+    pelvisX: number; pelvisY: number; pelvisZ: number; pelvisRX: number; pelvisRZ: number;
+    lrx: number; lry: number; lrz: number; lj: number;
+    rrx: number; rry: number; rrz: number; rj: number;
+    rootY: number;
+  };
+  let baseSnap: BaseSnap | null = null;
+
+  function captureBasePose(): void {
+    baseSnap = {
+      upperX: upper.rotation.x, upperY: upper.rotation.y, upperZ: upper.rotation.z,
+      upperPX: upper.position.x, upperPZ: upper.position.z,
+      pelvisX: pelvis.position.x, pelvisY: pelvis.position.y, pelvisZ: pelvis.position.z,
+      pelvisRX: pelvis.rotation.x, pelvisRZ: pelvis.rotation.z,
+      lrx: armL.root.rotation.x, lry: armL.root.rotation.y, lrz: armL.root.rotation.z,
+      lj: armL.joint.rotation.x,
+      rrx: armR.root.rotation.x, rry: armR.root.rotation.y, rrz: armR.root.rotation.z,
+      rj: armR.joint.rotation.x,
+      rootY: root.rotation.y,
+    };
+  }
+
+  /**
+   * v9s.29 · 把「战斗姿态」按权重混合回待机姿态。
+   *
+   * w=1 → 完全是战斗姿态（攻击主体，逐帧不变）；w=0 → 完全待机。
+   * 进出各一段时长（`poseIn` / `poseOut`），两端用 smoothstep，导数连续 = 不抽。
+   */
+  function blendCombatPose(w: number): void {
+    const b = baseSnap;
+    if (!b) return;
+    const k = segEase(clamp(w, 0, 1));
+    if (k >= 1) return;
+    const mix = (from: number, to: number): number => from + (to - from) * k;
+    upper.rotation.x = mix(b.upperX, upper.rotation.x);
+    upper.rotation.y = mix(b.upperY, upper.rotation.y);
+    upper.rotation.z = mix(b.upperZ, upper.rotation.z);
+    upper.position.x = mix(b.upperPX, upper.position.x);
+    upper.position.z = mix(b.upperPZ, upper.position.z);
+    pelvis.position.x = mix(b.pelvisX, pelvis.position.x);
+    pelvis.position.y = mix(b.pelvisY, pelvis.position.y);
+    pelvis.position.z = mix(b.pelvisZ, pelvis.position.z);
+    pelvis.rotation.x = mix(b.pelvisRX, pelvis.rotation.x);
+    pelvis.rotation.z = mix(b.pelvisRZ, pelvis.rotation.z);
+    armL.root.rotation.x = mix(b.lrx, armL.root.rotation.x);
+    armL.root.rotation.y = mix(b.lry, armL.root.rotation.y);
+    armL.root.rotation.z = mix(b.lrz, armL.root.rotation.z);
+    armL.joint.rotation.x = mix(b.lj, armL.joint.rotation.x);
+    armR.root.rotation.x = mix(b.rrx, armR.root.rotation.x);
+    armR.root.rotation.y = mix(b.rry, armR.root.rotation.y);
+    armR.root.rotation.z = mix(b.rrz, armR.root.rotation.z);
+    armR.joint.rotation.x = mix(b.rj, armR.joint.rotation.x);
+    root.rotation.y = mix(b.rootY, root.rotation.y);
+    lastRootTurn = root.rotation.y;
+  }
+
   function applyCombatPose(combat: CombatState, dt: number): void {
     // 每帧复位可变的武器部件，避免姿态残留
     bowModel.drawString.position.z = -0.06;
@@ -1255,7 +1445,9 @@ export function createVoxelRig(
       return;
     }
 
-    if (combat.phase === 'idle') {
+    // v9s.29：收招淡出期间（combatPoseW > 0）继续写战斗姿态，让交叉淡出有「来源」；
+    // 权重归零后才清状态。否则最后一帧直接跳回待机，淡出就白做了。
+    if (combat.phase === 'idle' && combatPoseW <= 0.001) {
       // 收招：清空段间过渡状态，下次起手从本段起手帧开始（不继承上一轮收势）
       swingFrom = null;
       swingPose = null;
@@ -1263,6 +1455,10 @@ export function createVoxelRig(
       swingFade = 1;
       swingBladePitch = null;
       swingBladePitchOff = null;
+      swingBladeTwist = null;
+      swingBladeTwistOff = null;
+      swingBladeYaw = null;
+      swingBladeYawOff = null;
       // 收招：握点回到默认位置（否则下一轮起手会从上一轮滑到的地方开始）
       gripSlide = NaN;
       // 内收量也归位（否则最后一段停在举顶时会带着 0 内收进待机）
@@ -1377,6 +1573,29 @@ export function createVoxelRig(
     armL.joint.rotation.x -= 0.22 * q;
     armR.root.rotation.x -= 0.3 * q;
     pelvis.position.z += linkView.pelvisReach * Math.max(0, q);
+  }
+
+  /**
+   * v9s.29：读一条刃身的世界几何（刃根 / 刃尖 / 宽面法线）。
+   *
+   * 法线取武器节点的世界矩阵第一列（局部 X）——模型约定「薄在 X、宽在 Z」，
+   * 所以局部 X 就是宽面法线。刃面滚转（`bladeTwist`）转的正是这条法线，
+   * 于是「刃口是否迎着挥击方向」可以直接量化，不用靠肉眼猜。
+   */
+  function readBlade(g: THREE.Object3D | undefined): BladeGeom | null {
+    if (!g) return null;
+    const b = g.getObjectByName('bladeBase');
+    const t = g.getObjectByName('bladeTip');
+    if (!b || !t) return null;
+    g.updateWorldMatrix(true, false);
+    const bp = b.getWorldPosition(new THREE.Vector3());
+    const tp = t.getWorldPosition(new THREE.Vector3());
+    const ax = new THREE.Vector3().setFromMatrixColumn(g.matrixWorld, 0).normalize();
+    return {
+      base: { x: bp.x, y: bp.y, z: bp.z },
+      tip: { x: tp.x, y: tp.y, z: tp.z },
+      normal: { x: ax.x, y: ax.y, z: ax.z },
+    };
   }
 
   return {
@@ -1839,7 +2058,26 @@ export function createVoxelRig(
       lower.position.y += inertia.crouch * (1 - clamp(ikW, 0, 1));
 
       // 2) 战斗姿态覆盖（只在攻击 / 蓄力 / 停顿期间生效）
+      //    v9s.29：进出战斗各有一段交叉淡入淡出 —— 先记下「不打这一击时的待机姿态」，
+      //    写完战斗姿态后按权重混合，待机 ↔ 起手 / 收招不再单帧换姿势。
+      const combatActive = combat.phase !== 'idle'
+        || (combat.charging && combat.weapon === 'bow');
+      const fadeTarget = combatActive ? 1 : 0;
+      const fadeDur = Math.max(1e-3,
+        fadeTarget > combatPoseW
+          ? (swingCfg.poseIn ?? 0.1)
+          : (swingCfg.poseOut ?? 0.16));
+      if (combatPoseW !== fadeTarget) {
+        const step = dt / fadeDur;
+        combatPoseW = clamp(
+          combatPoseW + (fadeTarget > combatPoseW ? step : -step), 0, 1,
+        );
+      }
+      if (combatPoseW > 0 || combatActive) captureBasePose();
       applyCombatPose(combat, dt);
+      // 只在「过渡中」混合：w=1 是恒等，w=0 时上面已经写完待机姿态，
+      // 再拿上一帧的快照混一次会把旧姿态糊回来（快照只在非零权重时刷新）。
+      if (combatPoseW > 0 && combatPoseW < 1) blendCombatPose(combatPoseW);
       // 2.05) 法杖引导姿态：不进近战状态机，在基础步态之上单独叠加（v7c #12）
       applyChannelPose(channeling, c.gaitPhase);
       // 2.06) v9a 派生招姿态（举盾前撞）：与 combat.phase 正交，按 link.progress 独立驱动
@@ -1977,12 +2215,19 @@ export function createVoxelRig(
       // 3.5) v9s.22 副手握持：必须在朝向 / 胸偏转都写完之后解算 ——
       //  上半身一转动，柄的世界位置就变了，早一步解会「握在空气里」。
       //  只在双手武器挥击期间接管，其余时间（走路 / 收刀）保持步态摆臂。
-      if (combat.weapon === 'greatsword' && combat.phase !== 'idle' && !combat.charging) {
+      const gripPhase = combat.weapon === 'greatsword' && !combat.charging
+        && (combat.phase !== 'idle' || combatPoseW > 0);
+      if (gripPhase) {
         root.updateWorldMatrix(true, true);
-        // v9s.23：起手就给 0.65 的 IK 权重。旧版从 0 随 attackBlend 淡入，前 3 帧
-        // 左手停在离柄轴 0.27m 的空中（「剑还没握住就挥了」）；大剑起手本来就是
-        // 双手已经握好的姿势，这里直接吸到柄上，只保留最后 35% 的柔和过渡。
-        applySecondaryGrip(clamp(Math.max(0.65, attackBlend), 0, 1), dt);
+        // v9s.23：起手就给 0.65 的 IK 权重，避免「剑还没握住就挥了」。
+        // v9s.29：进入战斗姿态改成 0.1s 交叉淡入后，0.65 的权重会让左手在淡入期间
+        // 停在离柄轴 0.23m 的空中（旧版是硬切，第一帧姿态已经到位，所以看不出来）。
+        // 双手武器从起手到收招本来就该是握死的：攻击期间权重给满，只在收招淡出时
+        // 随 combatPoseW 松开 —— 松开的过程本身就是「手离开剑柄」。
+        const gripW = combat.phase === 'idle'
+          ? Math.max(combatPoseW, attackBlend)
+          : 1;
+        applySecondaryGrip(clamp(gripW, 0, 1), dt);
       }
 
       // 4) v8g 足部 IK 锚定：放在所有姿态层之后，把「骨盆被额外推走」的差值
@@ -2029,11 +2274,15 @@ export function createVoxelRig(
     weaponDebug() {
       return { wristPitch, wristTwist };
     },
+    setClipT(t: number | null) {
+      clipLabT = t === null || !Number.isFinite(t) ? null : Math.max(0, Math.min(1, t));
+    },
     swingDebug() {
       const p = swingPose;
       return {
         seg: swingSeg,
         kind: p?.kind ?? 'right-left',
+        lead: p?.lead ?? 'R',
         yaw: p?.yaw ?? 0,
         rootYaw: p?.rootYaw ?? 0,
         spinYaw: p?.spinYaw ?? 0,
@@ -2041,6 +2290,10 @@ export function createVoxelRig(
         pitch: p?.pitch ?? 0,
         roll: p?.roll ?? 0,
         strike: p?.strike ?? 0,
+        bladeTwist: p?.bladeTwist ?? 0,
+        bladeTwistOff: p?.bladeTwistOff ?? 0,
+        bladeYaw: p?.bladeYaw ?? 0,
+        bladeYawOff: p?.bladeYawOff ?? 0,
         shoulderL: { x: lastShoulder.lx, y: lastShoulder.ly, z: lastShoulder.lz },
         shoulderR: { x: lastShoulder.rx, y: lastShoulder.ry, z: lastShoulder.rz },
       };
@@ -2088,33 +2341,14 @@ export function createVoxelRig(
     },
     weaponBlade() {
       if (!currentWeapon) return null;
-      const g = parts[currentWeapon].right;
-      const b = g.getObjectByName('bladeBase');
-      const t = g.getObjectByName('bladeTip');
-      if (!b || !t) return null;
-      b.updateWorldMatrix(true, false);
-      t.updateWorldMatrix(true, false);
-      const bp = b.getWorldPosition(new THREE.Vector3());
-      const tp = t.getWorldPosition(new THREE.Vector3());
-      return {
-        base: { x: bp.x, y: bp.y, z: bp.z },
-        tip: { x: tp.x, y: tp.y, z: tp.z },
-      };
+      return readBlade(parts[currentWeapon].right);
     },
     bladesWorld() {
-      const read = (g: THREE.Object3D | undefined) => {
-        if (!g) return null;
-        const bb = g.getObjectByName('bladeBase');
-        const tt = g.getObjectByName('bladeTip');
-        if (!bb || !tt) return null;
-        bb.updateWorldMatrix(true, false);
-        tt.updateWorldMatrix(true, false);
-        const bp = bb.getWorldPosition(new THREE.Vector3());
-        const tp = tt.getWorldPosition(new THREE.Vector3());
-        return { base: { x: bp.x, y: bp.y, z: bp.z }, tip: { x: tp.x, y: tp.y, z: tp.z } };
-      };
       if (!currentWeapon) return { right: null, left: null };
-      return { right: read(parts[currentWeapon].right), left: read(parts[currentWeapon].left) };
+      return {
+        right: readBlade(parts[currentWeapon].right),
+        left: readBlade(parts[currentWeapon].left),
+      };
     },
     dispose(): void {
       root.traverse((obj) => {

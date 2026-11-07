@@ -50,7 +50,7 @@ SEG_RULES: dict[tuple[str, int], dict] = {
     ("greatsword", 3): {"min_pitch_span": 70, "label": "举顶下劈"},
     ("dual-swords", 1): {"min_sweep": 150, "max_pitch": 25, "label": "横扫 右→左"},
     ("dual-swords", 2): {"min_sweep": 150, "max_pitch": 25, "label": "横扫 左→右"},
-    ("dual-swords", 3): {"min_spin": 340, "min_sweep": 300, "max_pitch": 30, "label": "展开旋身"},
+    ("dual-swords", 3): {"min_spin": 340, "min_sweep": 250, "max_pitch": 30, "label": "展开旋身"},
     ("sword-shield", 1): {"min_sweep": 120, "max_pitch": 25, "label": "横扫 右→左"},
     ("sword-shield", 2): {"min_sweep": 120, "max_pitch": 25, "label": "横扫 左→右"},
     ("sword-shield", 3): {"max_sweep": 70, "label": "盾猛顶（前顶，不是横扫）"},
@@ -111,16 +111,19 @@ PROBE_JS = """
   const h = window.__harness;
   const r = h.clipLab.preview(o);
   const b = r.blade;
+  const s = h.swingDebug();
+  const pair = h.bladesWorld ? h.bladesWorld() : { right: b, left: null };
+  // v9s.28：双持段 2 的主手是左手，`weaponBlade()` 永远取右手 —— 扫角必须按主手取，
+  // 否则量到的是副手的摆动（曾经把「副手几乎不动」误判成 184° 横扫）。
+  const main = (s.lead === 'L' && pair.left) ? pair.left : b;
   let pitch = null, yaw = null, dh = null, len = null;
-  if (b) {
-    const dx = b.tip.x - b.base.x, dy = b.tip.y - b.base.y, dz = b.tip.z - b.base.z;
+  if (main) {
+    const dx = main.tip.x - main.base.x, dy = main.tip.y - main.base.y, dz = main.tip.z - main.base.z;
     len = Math.hypot(dx, dy, dz) || 1e-6;
     pitch = Math.asin(dy / len) * 180 / Math.PI;
     yaw = Math.atan2(dx, dz) * 180 / Math.PI;
-    dh = b.tip.y - b.base.y;
+    dh = main.tip.y - main.base.y;
   }
-  const s = h.swingDebug();
-  const pair = h.bladesWorld ? h.bladesWorld() : { right: b, left: null };
   const ang = (x) => {
     if (!x) return null;
     const dx = x.tip.x - x.base.x, dy = x.tip.y - x.base.y, dz = x.tip.z - x.base.z;
@@ -129,27 +132,43 @@ PROBE_JS = """
   };
   const aR = ang(pair.right);
   const aL = ang(pair.left);
+  // v9s.29：主副手夹角要按「主手 vs 另一只手」算。旧版固定拿左手，lead=L 时
+  // 主手就是左手 → 夹角恒为 0（seg2 被误报成「两把剑叠在一起」）。
+  const off = s.lead === 'L' ? aR : aL;
   return {
     pitch, yaw, dh, len,
     leftPitch: aL ? aL.pitch : null,
     leftYaw: aL ? aL.yaw : null,
+    rightPitch: aR ? aR.pitch : null,
+    rightYaw: aR ? aR.yaw : null,
+    offPitch: off ? off.pitch : null,
+    offYaw: off ? off.yaw : null,
     seg: s.seg, kind: s.kind, strike: s.strike,
     bodyYaw: s.yaw * 180 / Math.PI,
+    face: h.world.character.bodyYaw * 180 / Math.PI,
     rootYaw: s.rootYaw * 180 / Math.PI,
     spinYaw: s.spinYaw * 180 / Math.PI,
     rootTurn: s.rootTurn * 180 / Math.PI,
-    base: b && b.base, tip: b && b.tip,
+    lead: s.lead || 'R',
+    base: main && main.base, tip: main && main.tip,
     pos: { x: h.world.character.position.x, y: h.world.character.position.y, z: h.world.character.position.z },
   };
 }
 """
 
 
-def probe(page, weapon: str, seg: int, progress: float, warm: int = 6) -> dict:
-    return page.evaluate(
-        PROBE_JS,
-        {"weapon": weapon, "comboIndex": seg, "progress": progress, "warm": warm},
-    )
+def probe(page, weapon: str, seg: int, progress: float, warm: int = 6,
+          clip_t: float | None = None) -> dict:
+    """采一帧。
+
+    clip_t 给了就钉住剪辑时间轴（v9s.28 的 __harness.clipLab.preview t 参数），
+    progress 只用来驱动 spin 这类按攻击进度推进的量。不给则沿用旧的
+    progress → swingCurve → 剪辑 t 的真实映射。
+    """
+    opts = {"weapon": weapon, "comboIndex": seg, "progress": progress, "warm": warm}
+    if clip_t is not None:
+        opts["t"] = clip_t
+    return page.evaluate(PROBE_JS, opts)
 
 
 def unwrap(values: list[float]) -> list[float]:
@@ -165,9 +184,25 @@ def scan_seg(page, weapon: str, seg: int, steps: int) -> dict:
     rows = []
     for i in range(steps + 1):
         t = i / steps
-        d = probe(page, weapon, seg, t, warm=12 if i == 0 else 4)
+        d = probe(page, weapon, seg, t, warm=12 if i == 0 else 4, clip_t=t)
         d["t"] = round(t, 4)
         rows.append(d)
+
+    # v9s.28：双持「两把剑是否真的张开」= 两条刃身在水平面内相对**角色朝向**的夹角。
+    # 只看各自 yaw 不够 —— 两把剑可以一起指左前方，那也是「没展开」。
+    def rel(y, f):
+        return (y - f + 540.0) % 360.0 - 180.0
+
+    seps = []
+    for r in rows:
+        if r.get("yaw") is None or r.get("leftYaw") is None:
+            seps.append(None)
+            continue
+        rr = rel(r["yaw"], r["face"])
+        ll = rel(r["leftYaw"], r["face"])
+        seps.append(abs((rr - ll + 540.0) % 360.0 - 180.0))
+    for r, sp in zip(rows, seps):
+        r["sep"] = sp
 
     yaws = [r["yaw"] for r in rows if r["yaw"] is not None]
     uy = unwrap(yaws) if yaws else []
@@ -203,6 +238,9 @@ def scan_seg(page, weapon: str, seg: int, steps: int) -> dict:
         "leftPitchMin": min(lefts) if lefts else None,
         "leftPitchMax": max(lefts) if lefts else None,
         "hasLeft": bool(lefts),
+        # v9s.28：双剑水平分离角（相对角色朝向），只有双持 / 剑盾这种双手各有武器时才有意义
+        "sepMax": max([s for s in seps if s is not None], default=None),
+        "sepMin": min([s for s in seps if s is not None], default=None),
         "spinMax": max(spins) if spins else 0.0,
         "rootMin": min(roots) if roots else 0.0,
         "rootMax": max(roots) if roots else 0.0,
@@ -576,7 +614,9 @@ def attach_shots(page, out_dir: Path, scan: dict, keyframes: bool) -> list[tuple
         if key in seen:
             continue
         seen.add(key)
-        d = probe(page, w, seg, t, warm=45)
+        # v9s.28：截图必须和 scan 采样同一帧语义（钉剪辑 t），否则扫出来 250°、
+        # 截到的却是 swingCurve 映射到的另一帧。
+        d = probe(page, w, seg, t, warm=45, clip_t=t)
         extra = f"sweep {scan['sweep']:.0f}°   range {scan['yawMin']:+.0f}° → {scan['yawMax']:+.0f}°"
         draw_overlay(page, w, seg, t, extra)
         name = f"{w}_seg{seg}_t{key:.2f}.png".replace(".", "_", 0)
@@ -646,7 +686,7 @@ def cmd_shot(args) -> int:
                 scan["judge"] = judge(scan)
                 shots = attach_shots(page, out_dir, scan, True)
             else:
-                d = probe(page, args.weapon, args.seg, args.progress, warm=45)
+                d = probe(page, args.weapon, args.seg, args.progress, warm=45, clip_t=args.progress)
                 extra = f"pitch {d['pitch']:+.1f}°   yaw {d['yaw']:+.0f}°"
                 draw_overlay(page, args.weapon, args.seg, args.progress, extra)
                 p = out_dir / f"{args.weapon}_seg{args.seg}_t{str(args.progress).replace('.', 'p')}.png"
@@ -704,6 +744,181 @@ def cmd_check(args) -> int:
             if errors:
                 print(f"页面错误 {errors[:3]}")
             return 0 if not failed and not errors else 1
+        finally:
+            browser.close()
+            pw.stop()
+
+
+def cmd_combo(args) -> int:
+    """v9s.28：连击结构检查（锚点衔接 / 节奏配比 / 主副手平衡）。
+
+    这三项对应「动作好看不好看」里最容易被忽略、又最适合量化检查的部分：
+      1. **锚点衔接**：上一段收势姿态与下一段起手姿态的差。差太大，换段那一下
+         只能靠 `segBlend`（默认 0.08s）硬掩，观感是「闪一下」。
+      2. **节奏配比**：前摇 / 挥击 / 保持 / 收势各占多少。全都一样长的三连，
+         读起来就是「同一个动作点三下」。
+      3. **主副手平衡**：双持时主手挥出、副手必须往另一侧（或同侧后方）分开，
+         否则两把剑叠在一起，既不舒展也不平衡。
+    """
+    cfg_path = Path(__file__).resolve().parents[2] / "config" / "game.json"
+    game = json.loads(cfg_path.read_text(encoding="utf-8"))
+    weapons_cfg = game["core"]["combat"]["weapons"]
+
+    weapons = [args.weapon] if args.weapon else list(WEAPON_SEGS)
+    with StaticServer() as srv:
+        pw, browser, page, errors = launch(args.headed)
+        try:
+            open_game(page, srv.url)
+            out_dir = OUT_ROOT / f"combo-{time.strftime('%m%d-%H%M%S')}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            def rel(y: float, f: float) -> float:
+                return (y - f + 540.0) % 360.0 - 180.0
+
+            rows: list[dict] = []
+            for w in weapons:
+                segs = WEAPON_SEGS[w]
+                ends = []
+                mids = []
+                for seg in segs:
+                    d0 = probe(page, w, seg, 0.0, warm=45, clip_t=0.0)
+                    # 段末不能取 t=1：连击在 cancelWindow（默认 progress 0.45）之后就允许
+                    # 接下一段，那时剪辑 t 才走到 0.64 左右。这里按**真实映射**采样，
+                    # 拿到的才是「玩家连打时真正会看到的那一帧」。
+                    d1 = probe(page, w, seg, 0.45, warm=45)
+                    dm = probe(page, w, seg, 0.5, warm=45, clip_t=0.5)
+                    ends.append((d0, d1))
+                    mids.append(dm)
+
+                for i, seg in enumerate(segs):
+                    d0, d1 = ends[i]
+                    nxt = ends[i + 1][0] if i + 1 < len(segs) else None
+                    link = None
+                    if nxt:
+                        y1 = rel(d1["yaw"], d1["face"])
+                        y2 = rel(nxt["yaw"], nxt["face"])
+                        link = abs((y1 - y2 + 540.0) % 360.0 - 180.0)
+                    dm = mids[i]
+                    sep = None
+                    if dm.get("yaw") is not None and dm.get("offYaw") is not None:
+                        sep = abs((rel(dm["yaw"], dm["face"]) - rel(dm["offYaw"], dm["face"]) + 540.0) % 360.0 - 180.0)
+                    rows.append({
+                        "weapon": w, "seg": seg, "link": link, "sep": sep,
+                        "clip": combo_name(page, w, seg),
+                        "endYaw": rel(d1["yaw"], d1["face"]) if d1.get("yaw") is not None else None,
+                        "startYaw": rel(d0["yaw"], d0["face"]) if d0.get("yaw") is not None else None,
+                    })
+
+            # ---- 节奏：windup / active / recovery + swingCurve 的固定分段 ----
+            rhythm = []
+            for w in weapons:
+                wc = weapons_cfg.get(w, {})
+                wind, act, rec = wc.get("windup", 0), wc.get("active", 0), wc.get("recovery", 0)
+                total = wind + act + rec
+                if total <= 0:
+                    rhythm.append({"weapon": w, "ok": None})
+                    continue
+                rhythm.append({
+                    "weapon": w,
+                    "windup": wind / total * 100,
+                    "active": act / total * 100,
+                    "recovery": rec / total * 100,
+                    "total": total,
+                    # 推荐：前摇 18~38%、挥击 15~32%、收势 40~60%。
+                    # 收势太短会「刹不住」，太长读起来拖沓；挥击占比过大则没有爆发。
+                    "ok": (18 <= wind / total * 100 <= 38
+                           and 15 <= act / total * 100 <= 32
+                           and 40 <= rec / total * 100 <= 60),
+                })
+
+            # 阈值只是「提醒线」不是「门禁线」：段首的幅度由 attackBlend 淡入，
+            # 天然比段末的满幅姿态更接近中位，所以相邻段首末必然有几十度的差。
+            # 这里给的是「靠 0.08s 的 segBlend 能不能掩住」的经验值。
+            LINK_WARN, LINK_FAIL = 70.0, 130.0
+            SEP_MIN = 45.0
+            bad = 0
+            md = ["# 连击结构检查", ""]
+            md.append(f"- 生成：{time.strftime('%Y-%m-%d %H:%M:%S')}")
+            md.append(f"- 版本：`{version_of()}`")
+            md.append("")
+            md.append("## 1. 锚点衔接（上段收势 → 下段起手）")
+            md.append("")
+            md.append("| 武器 | 段 | 剪辑 | 上段末刃身 | 衔接跳变 | 结论 |")
+            md.append("|---|---|---|---|---|---|")
+            for r in rows:
+                if r["link"] is None:
+                    continue
+                ok = r["link"] <= LINK_WARN
+                if r["link"] > LINK_FAIL:
+                    bad += 1
+                md.append(
+                    f"| {WEAPON_LABEL.get(r['weapon'], r['weapon'])} | {r['seg']} | `{r['clip']}` | "
+                    f"{r['endYaw']:+.0f}° | **{r['link']:.0f}°** | "
+                    f"{'✅' if ok else ('❌ >90°' if r['link'] > LINK_FAIL else '⚠️ >55°')} |"
+                )
+            md.append("")
+            md.append("> 跳变 = 上段「最早可取消时刻」的刃身朝向 vs 下段起手朝向。"
+                      "≤70° 时 `segBlend`（默认 0.08s）够用；**>130° 会看成闪一下**。"
+                      "注意这里天然为正：段首幅度由 `attackBlend` 淡入、接近中位，"
+                      "而段末是满幅，两者不可能为零。想让这条线变好看，"
+                      "要么把段首姿态往「上一段收势方向」写，要么缩短 `cancelWindow` 之后的收势。")
+            md.append("")
+
+            md.append("## 2. 节奏配比（前摇 / 挥击 / 收势）")
+            md.append("")
+            md.append("| 武器 | 前摇 | 挥击 | 收势 | 总时长 | 结论 |")
+            md.append("|---|---|---|---|---|---|")
+            for r in rhythm:
+                if r.get("ok") is None:
+                    continue
+                md.append(
+                    f"| {WEAPON_LABEL.get(r['weapon'], r['weapon'])} | {r['windup']:.0f}% | "
+                    f"{r['active']:.0f}% | {r['recovery']:.0f}% | {r['total']:.2f}s | "
+                    f"{'✅' if r['ok'] else '⚠️ 偏离 18~38 / 15~32 / 40~60'} |"
+                )
+            md.append("")
+            md.append("> 三连击如果每段配比完全一样，读起来是「同一个动作点三下」。"
+                      "常见做法：第一击快、第二击更快（承接动量）、第三击重（前摇更长、收势更长）。")
+            md.append("")
+
+            md.append("## 3. 主副手平衡（中段刃身夹角）")
+            md.append("")
+            md.append("| 武器 | 段 | 主/副手夹角 | 结论 |")
+            md.append("|---|---|---|---|")
+            for r in rows:
+                if r["sep"] is None:
+                    md.append(f"| {WEAPON_LABEL.get(r['weapon'], r['weapon'])} | {r['seg']} | —（单手或双手同柄） | — |")
+                    continue
+                need = SEP_MIN if r["weapon"] == "dual-swords" else 0.0
+                md.append(
+                    f"| {WEAPON_LABEL.get(r['weapon'], r['weapon'])} | {r['seg']} | "
+                    f"**{r['sep']:.0f}°** | {'✅' if r['sep'] >= need else '⚠️ 两把剑叠在一起'} |"
+                )
+            md.append("")
+            md.append("> 双持要求 ≥45°：主手挥出时副手必须分开，否则两把剑视觉上重合。")
+            md.append("")
+
+            if errors:
+                md.append("## 页面错误")
+                md.append("")
+                for e in errors[:5]:
+                    md.append(f"- `{e}`")
+
+            path = out_dir / "report.md"
+            path.write_text("\n".join(md), encoding="utf-8")
+            (out_dir / "report.json").write_text(
+                json.dumps({"rows": rows, "rhythm": rhythm, "errors": errors},
+                           ensure_ascii=False, indent=2), encoding="utf-8")
+
+            for r in rows:
+                if r["link"] is None:
+                    continue
+                print(f"  {r['weapon']:14s} seg{r['seg']} 衔接跳变 {r['link']:5.1f}°"
+                      + (f"   主副手 {r['sep']:5.1f}°" if r["sep"] is not None else ""))
+            print()
+            print(f"报告 {path}")
+            # 连击衔接是艺术判断，工具只给数值不做拦截；只有页面报错才非零退出。
+            return 0 if not errors else 1
         finally:
             browser.close()
             pw.stop()
@@ -783,6 +998,10 @@ def main() -> int:
     p_check.add_argument("--steps", type=int, default=48)
     p_check.add_argument("--shots", action="store_true", default=True)
     p_check.set_defaults(func=cmd_check)
+
+    p_combo = sub.add_parser("combo", help="连击结构检查（锚点衔接 / 节奏 / 平衡）")
+    p_combo.add_argument("--weapon", choices=list(WEAPON_LABEL))
+    p_combo.set_defaults(func=cmd_combo)
 
     p_self = sub.add_parser("selftest", help="纯逻辑自检（不需要浏览器）")
     p_self.set_defaults(func=cmd_selftest)

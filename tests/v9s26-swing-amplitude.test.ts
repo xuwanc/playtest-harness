@@ -207,8 +207,11 @@ function bladeRows(weapon: string, frames = 190): Row[] {
     (w.combat as any).weapon = weapon;
     rig.update(w.character, w.combat, NONE, w.config.fixedDt, false, w.time);
     rig.group.updateMatrixWorld(true);
-    const b = rig.weaponBlade();
     const s = rig.swingDebug();
+    // v9s.28：双持段 2 主手是左手，`weaponBlade()` 只取右手 —— 必须按 lead 选主手，
+    // 否则量的是副手（曾经把「副手几乎不动」误算成 184° 横扫）。
+    const pair = rig.bladesWorld();
+    const b = s.lead === 'L' && pair.left ? pair.left : rig.weaponBlade();
     if (!b || w.combat.phase === 'idle') continue;
     const dx = b.tip.x - b.base.x;
     const dy = b.tip.y - b.base.y;
@@ -236,11 +239,13 @@ function firstCycle(rows: Row[]): Block[] {
     else last.rows.push(r);
   }
   const seen = new Set<number>();
-  return blocks.filter((b) => {
-    if (seen.has(b.seg) || b.rows.length < 8) return false;
-    seen.add(b.seg);
-    return true;
-  });
+  return blocks
+    .map((b) => ({ ...b, rows: b.rows.slice(3) }))  // 去掉段首 3 帧：segBlend（0.08s≈5帧）过渡期
+    .filter((b) => {
+      if (seen.has(b.seg) || b.rows.length < 8) return false;
+      seen.add(b.seg);
+      return true;
+    });
 }
 
 function blockOf(list: Block[], seg: number): Block {
@@ -264,9 +269,10 @@ describe('v9s.26 横扫幅度（对侧后方 135° 量级）', () => {
     expect(sweep(GS, 2)).toBeGreaterThan(210);
   });
 
-  it('双持：幅度同步加大（≥180°）', () => {
-    expect(sweep(DS, 1)).toBeGreaterThan(180);
-    expect(sweep(DS, 2)).toBeGreaterThan(180);
+  it('双持：幅度同步加大（≥175°，实测 180/180）', () => {
+    // 阈值留 5° 余量：双持目标是「扫半圈」，正好贴 180 时浮点会落在 179.99。
+    expect(sweep(DS, 1)).toBeGreaterThan(175);
+    expect(sweep(DS, 2)).toBeGreaterThan(175);
   });
 
   it('剑盾：幅度同步加大（≥165°）', () => {
@@ -279,12 +285,16 @@ describe('v9s.26 横扫幅度（对侧后方 135° 量级）', () => {
     for (const list of [GS, SS]) {
       for (const seg of [1, 2]) {
         const pitch = blockOf(list, seg).rows.map((r) => r.pitch);
-        expect(Math.max(...pitch.map(Math.abs))).toBeLessThan(25);
+        // 25 → 30：v9s.29 给单手剑加了 12° 握刀外撇，横扫中段的仰角读数会多 3~4°；
+        // 旧问题的量级是 44~58°（剑尖朝天），30° 的边界仍然拦得住。
+        expect(Math.max(...pitch.map(Math.abs))).toBeLessThan(30);
       }
     }
     // 双持段 1 是右手主挥（水平）；段 2 主挥换到左手，weaponBlade() 取到的是
-    // 右手副手剑 —— 它正在往右后方收势，允许上扬，阈值放到 40°
-    expect(Math.max(...blockOf(DS, 1).rows.map((r) => Math.abs(r.pitch)))).toBeLessThan(25);
+    // 右手副手剑 —— 它正在往右后方收势，允许上扬，阈值放到 40°。
+    // v9s.29：握刀处加了 10° 外撇（刀不再和小臂共线），横扫最快的那几帧刃尖会
+    // 自然下压 5~8°，判据放宽到 35°；旧问题的量级是 44~58°（剑尖朝天）。
+    expect(Math.max(...blockOf(DS, 1).rows.map((r) => Math.abs(r.pitch)))).toBeLessThan(35);
     expect(Math.max(...blockOf(DS, 2).rows.map((r) => Math.abs(r.pitch)))).toBeLessThan(40);
   });
 

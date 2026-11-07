@@ -195,7 +195,11 @@ export function startApp(): void {
      */
     clipLab: {
       clips: () => Object.keys(VIEW_CONFIG.animation.swing?.clips ?? {}),
-      preview: (opts: { weapon: WeaponId; comboIndex: number; progress: number; warm?: number }) => {
+      preview: (opts: {
+        weapon: WeaponId; comboIndex: number; progress: number; warm?: number;
+        /** v9s.28：直接指定剪辑时间轴 0..1（不给则用 progress 过 swingCurve 的真实映射） */
+        t?: number;
+      }) => {
         const cb = world.combat;
         const saved = { ...cb };
         cb.weapon = opts.weapon;
@@ -203,12 +207,16 @@ export function startApp(): void {
         cb.comboIndex = Math.max(1, Math.min(3, Math.floor(opts.comboIndex)));
         cb.attackProgress = Math.max(0, Math.min(1, opts.progress));
         cb.attackFacing = world.character.bodyYaw;
+        // v9s.28：指定 t 时绕过 swingCurve。否则 progress=0.5 实际采样的是剪辑 t=1，
+        // 工具改中段关键帧会「看着没反应」。
+        view.setClipT(typeof opts.t === 'number' ? opts.t : null);
         // 多渲染几帧让腕部滞后 / 副手握持 IK 收敛到稳态，避免读到过渡帧
         const warm = Math.max(1, Math.min(30, Math.floor(opts.warm ?? 12)));
         clipHold = true; // 先锁画面，再逐帧渲染到目标姿态
         for (let i = 0; i < warm; i++) view.render(world, 1 / 60);
+        view.setClipT(null);
         Object.assign(cb, saved);
-        return { ...view.swingDebug(), blade: view.bladeWorld() };
+        return { ...view.swingDebug(), blade: view.bladeWorld(), blades: view.bladesWorld() };
       },
       /** 固定朝向，保证不同进度截图可比（不写 Core，只写表现层读的那个值） */
       face: (yaw: number) => { world.character.bodyYaw = yaw; },
