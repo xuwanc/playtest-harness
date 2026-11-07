@@ -73,16 +73,17 @@ describe('v9s.3 威胁注视：进入 / 加权中心 / 解除滞回', () => {
     expect(dMain + dOther).toBeLessThan(span + 1e-6);
   });
 
-  it('解除滞回：进范围激活 → 移到 (threatRange, recoveryDist) 仍保持 → 超出 recoveryDist 交还', () => {
+  it('解除滞回：进入后仍在 recoveryDist(5m) 内保持 → 超出即交还', () => {
     const w = makeWorld();
-    placeOnly(w, [[0, 0, 2]]); // dist 6 < threatRange 8 → 进入
-    gazeUpdate(w, DT, AIM);
+    // 用「起手」进入而非瞄准：瞄准中会一直是 desired，测不到退出
+    placeOnly(w, [[0, 0, 2, 'attack', 'windup']]); // dist 6 < threatRange 8 → 进入
+    gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(true);
-    placeOnly(w, [[0, 0, -2]]); // dist 10：>threatRange 8，<recoveryDist 12 → 滞回保持
-    gazeUpdate(w, DT, AIM);
+    placeOnly(w, [[0, 0, 3.5]]); // dist 4.5 < recoveryDist 5 → 滞回保持
+    gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(true);
-    placeOnly(w, [[0, 0, -8]]); // dist 16：>recoveryDist 12 → 交还
-    gazeUpdate(w, DT, AIM);
+    placeOnly(w, [[0, 0, 2.5]]); // dist 5.5 > recoveryDist 5 → 交还
+    gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(false);
   });
 });

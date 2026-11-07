@@ -92,7 +92,7 @@ describe('v9s.6 威胁加权整形：离主威胁越远越低、背后降低', (
     const w = makeWorld();
     w.modules.dummies = false;
     placeOnly(w, []);
-    atPolar(w, 0, 180, 3); // 正后方 3m，mode=attack（未出手，靠 reactToApproach 进入）
+    atPolar(w, 0, 180, 2.5); // 正后方 2.5m，mode=attack（未出手，靠 reactToApproach 进入）
 
     gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(true);
@@ -109,11 +109,11 @@ describe('v9s.6 主动接敌：威胁接近即进入，远离一定距离退出'
     const w = makeWorld();
     w.modules.dummies = false;
     placeOnly(w, []);
-    atPolar(w, 0, 20, 7.5, 'follow'); // 7.5m：还没到主动接敌阈值
+    atPolar(w, 0, 20, 4, 'follow'); // 4m > approachDist 3：还不到主动接敌距离
     gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(false);
 
-    atPolar(w, 0, 20, 5, 'follow');   // 5m：进入接敌
+    atPolar(w, 0, 20, 2.5, 'follow'); // 2.5m < 3：进入接敌
     gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(true);
     expect(w.gaze.threatCount).toBe(1);
@@ -138,11 +138,11 @@ describe('v9s.6 主动接敌：威胁接近即进入，远离一定距离退出'
     gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(true);
 
-    atPolar(w, 0, 0, 10, 'attack', 'idle'); // 8 ~ 12：滞回保持
+    atPolar(w, 0, 0, 4.5, 'attack', 'idle'); // < 5：滞回保持
     gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(true);
 
-    atPolar(w, 0, 0, 13, 'attack', 'idle'); // > 12：交还身体控制
+    atPolar(w, 0, 0, 5.5, 'attack', 'idle'); // > 5：交还身体控制
     gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(false);
   });
@@ -151,7 +151,7 @@ describe('v9s.6 主动接敌：威胁接近即进入，远离一定距离退出'
     const w = makeWorld();
     w.modules.dummies = false;
     placeOnly(w, []);
-    atPolar(w, 0, -90, 5, 'follow'); // 正左方 5m
+    atPolar(w, 0, -90, 2.5, 'follow'); // 正左方 2.5m
 
     for (let i = 0; i < 180; i++) step(w, DT, intent({}));
 

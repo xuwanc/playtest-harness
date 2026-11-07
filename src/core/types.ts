@@ -576,9 +576,9 @@ export type GazeConfig = {
   headLookLimitDeg: number;
   /** 普通注视感知半径（米）：范围内有可注视目标（锁定/最近假人）才转头看 */
   headGazeRange: number;
-  /** 威胁注视进入半径（米）：瞄准中且范围内有加权威胁即触发 */
+  /** 威胁感知半径（米）：瞄准 / 被攻击 / 加权中心统计的候选范围（不等于接敌进入距离） */
   threatRange: number;
-  /** 解除半径（米，> threatRange）：威胁全部超出此距离才交还身体控制（滞回） */
+  /** 退出接敌的距离（米）：全部敌人拉出此距离才交还身体控制（滞回，默认 5） */
   recoveryDist: number;
   /** 参与加权中心的高权威胁数量（主威胁 + 最近 N-1） */
   maxThreats: number;
@@ -597,12 +597,12 @@ export type GazeConfig = {
    */
   reactToAttack: boolean;
   /**
-   * v9s.6：未瞄准、也未被攻击，但「敌对模式」单位主动接近到 threatRange 内时，
+   * v9s.6：未瞄准、也未被攻击，但「敌对模式」单位主动接近到 approachDist 内时，
    * 主动进入接敌准备（先转身戒备）。关掉则只保留 瞄准 / 被攻击 两种进入源。
    */
   reactToApproach: boolean;
-  /** v9s.6：主动接近进入的归一化威胁阈值（0..1，应 > enterThreshold，避免擦身而过就转身） */
-  approachThreshold: number;
+  /** v9s.6：主动接敌的进入距离（米，默认 3）：敌对模式单位进入此距离即转身戒备 */
+  approachDist: number;
   /** v9s.6：modeWeight >= 此值才算「敌对」（idle 0.2 / wander 0.45 不算，follow 0.8 起算） */
   hostileModeWeight: number;
   /**

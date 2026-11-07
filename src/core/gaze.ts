@@ -65,10 +65,9 @@ export function gazeUpdate(world: World, _dt: number, intents: Intents): void {
   let sumW = 0;
   let inRecovery = false;
   // v9s.5：是否有敌人「正在 / 即将攻击自己」——起手(windup)与挥砍(active)都算。
-  // v9s.6：是否有敌对模式单位主动接近（不看是否已出手）。
+  // v9s.6：是否有敌对模式单位进入 approachDist（主动接敌的进入距离，米）。
   let incoming = false;
-  let hostileInRange = false;
-  let hostileW = 0;
+  let approaching = false;
   for (const d of world.dummies) {
     const w = baseWeightOf(d, cfg.threatRange);
     const dx = d.position.x - p.x;
@@ -81,35 +80,33 @@ export function gazeUpdate(world: World, _dt: number, intents: Intents): void {
       });
       sumW += w;
       // 敌对模式（follow / keep-distance / attack）才算「接近」，idle / wander 不惊动
-      if ((cfg.modeWeight[d.mode] ?? 0.5) >= cfg.hostileModeWeight) {
-        hostileInRange = true;
-        hostileW += w;
+      if (dist <= cfg.approachDist
+        && (cfg.modeWeight[d.mode] ?? 0.5) >= cfg.hostileModeWeight) {
+        approaching = true;
       }
     }
-    if (baseWeightOf(d, cfg.recoveryDist) > 0) inRecovery = true;
+    // 退出判定用显式距离（米）：任一敌人仍在 recoveryDist 内就继续保持接敌
+    if (dist > EPS && dist <= cfg.recoveryDist) inRecovery = true;
     if (d.attackPhase === 'windup' || d.attackPhase === 'active') {
       if (dist <= cfg.threatRange) incoming = true;
     }
   }
 
   const threat = sumW <= 0 ? 0 : clamp(sumW / (sumW + Math.max(EPS, cfg.saturation)), 0, 1);
-  const hostileThreat = hostileW <= 0
-    ? 0
-    : clamp(hostileW / (hostileW + Math.max(EPS, cfg.saturation)), 0, 1);
   const inThreat = threats.length > 0;
   const prevActive = g.active;
 
   // 进入（v9s.6 三源）：
   //   a) 主动瞄准 + 范围内有威胁（过 enterThreshold）
   //   b) 有敌人正在 / 即将攻击自己（windup / active）
-  //   c) 敌对模式单位主动接近（过 approachThreshold）—— 没瞄准、没挨打，也先转身戒备
+  //   c) 敌对模式单位进入 approachDist（默认 3m）—— 没瞄准、没挨打，也先转身戒备
   const desired = inThreat && (
     (intents.aimActive && threat >= cfg.enterThreshold)
     || (cfg.reactToAttack && incoming && threat >= cfg.enterThreshold)
-    || (cfg.reactToApproach && hostileInRange && hostileThreat >= cfg.approachThreshold)
+    || (cfg.reactToApproach && approaching)
   );
-  // 保持：只要还有威胁留在 recoveryDist 内就继续接敌（滞回），
-  //       全部超出 recoveryDist → 交还身体控制（「远离威胁一定距离退出」）。
+  // 保持：只要还有敌人留在 recoveryDist（默认 5m）内就继续接敌（滞回），
+  //       全部拉出 recoveryDist → 交还身体控制（「远离威胁一定距离退出」）。
   const hold = prevActive && inRecovery;
   g.active = desired || hold;
 
