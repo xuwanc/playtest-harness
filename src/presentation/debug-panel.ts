@@ -64,6 +64,7 @@ export function createDebugPanel(
   mods.add(world.modules, 'combat').name('combat');
   mods.add(world.modules, 'links').name('links');
   mods.add(world.modules, 'orientation').name('orientation');
+  mods.add(world.modules, 'turnInPlace').name('turnInPlace');
   mods.add(world.modules, 'targeting').name('targeting');
   mods.add(world.modules, 'hits').name('hits');
   mods.add(world.modules, 'separation').name('separation');
@@ -194,6 +195,24 @@ export function createDebugPanel(
   orient.add(view.orientation, 'legYawScale', 0, 1, 0.01).name('下盘跟随移动强度');
   orient.add(view.orientation, 'hipYawMaxDeg', 0, 120, 1).name('下盘带转上限 (°)');
   orient.add(view.orientation, 'hipYawSmoothing', 1, 40, 1).name('下盘带转平滑速率');
+
+  /* ---- v9s：停步下盘偏差消化 + 原地转身 ---- */
+  const turnF = sub(gaitRoot, '原地转身 / 停步偏差 (v9s)');
+  const tip = cfg.turnInPlace;
+  turnF.add(tip, 'enabled').name('启用原地转身 (关=纯插值)');
+  turnF.add(tip, 'triggerDeg', 20, 180, 5).name('触发夹角 (°)');
+  turnF.add(tip, 'settleDeg', 0, 60, 1).name('转身保留余角 (°)');
+  turnF.add(tip, 'durationSec', 0.1, 1.5, 0.02).name('转身时长 (s)');
+  turnF.add(tip, 'idleSpeedRatio', 0, 0.3, 0.01).name('静止速度比上限');
+  turnF.add(tip, 'inputDeadZone', 0, 0.5, 0.01).name('起步输入死区');
+  turnF.add(tip, 'armSec', 0, 0.5, 0.01).name('触发防抖 (s)');
+  // inStop = 偏差随收相同步消化；afterStop = 保持到收相结束再独立消化，可 A/B
+  turnF.add(view.gait, 'stopYawBlendMode', ['inStop', 'afterStop']).name('偏差消化窗口');
+  turnF.add(view.gait, 'stopYawAfterSec', 0.05, 1, 0.02).name('收相后消化时长 (s)');
+  turnF.add(view.gait, 'turnStepEnabled').name('转身踏步 (关=滑过去)');
+  turnF.add(view.gait, 'turnStepPitch', 0, 1.2, 0.02).name('踏步前迈 (rad)');
+  turnF.add(view.gait, 'turnStepKnee', 0, 1, 0.02).name('踏步抬膝 (rad)');
+  turnF.add(view.gait, 'turnStepDip', 0, 0.1, 0.002).name('踏步重心下沉 (m)');
 
   /* ---------------------------------------------------------------- *
    * 4) 战斗 / 受击：连击、攻击动作、武器握持、命中、目标、受击、派生招

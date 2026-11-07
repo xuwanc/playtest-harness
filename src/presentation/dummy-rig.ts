@@ -6,7 +6,7 @@ import type {
 } from '../core';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw,
-  stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir,
+  stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir, stopYawFade,
 } from './gait';
 import type { GaitInput } from './gait';
 import { solveHurtPose } from './hurt-pose';
@@ -245,6 +245,14 @@ export function createDummyRig(
   let sideYaw = 0;
   /** v9o：上一帧速度，用于区分「减速停步」与「KEEP DIST 低速横移」（后者不该收相） */
   let prevSpeed = 0;
+  // ---- v9s：停步下盘偏差消化窗口（与主角同构，全部纯表现层状态）----
+  let stopYawPhase: 'none' | 'blend' | 'settled' = 'none';
+  let stopYawDrain = 0;
+  let lastInStop = false;
+  let lastStopT = -1;
+  let lastGateResume = false;
+  let lastSpeed = 0;
+  let lastPrevSpeed = 0;
 
   return {
     group: root,
@@ -306,9 +314,33 @@ export function createDummyRig(
       const latRatio = speed > 1e-6
         ? clamp((s.velocity.x * bodyRightX + s.velocity.z * bodyRightZ) / speed, -1, 1)
         : 0;
+      // v9s：与主角同构的停步下盘偏差消化。latRatio 是方向比值，减速时侧移偏转不会
+      // 自然归零，会一直保持到速度几乎为 0 才骤掉 —— 把偏差乘淡出系数消化进收相。
+      if (stopYawPhase === 'settled' && lastGateResume
+          && lastSpeed > lastPrevSpeed * 1.02 + 1e-4) {
+        stopYawPhase = 'none';
+      }
+      let yawFade = 1;
+      if (stopYawPhase === 'blend') {
+        const prog = lastInStop ? lastStopT : stopYawDrain;
+        yawFade = stopYawFade(prog, gaitCfg.stopYawBlendMode, lastInStop);
+        if (!lastInStop) {
+          stopYawDrain = Math.min(1, stopYawDrain + frameDt / Math.max(0.01, gaitCfg.stopYawAfterSec));
+          const done = stopYawDrain >= 1
+            || gaitCfg.stopYawBlendMode === 'inStop'
+            || lastGateResume;
+          if (done) {
+            stopYawPhase = 'settled';
+            yawFade = 0;
+          }
+        }
+      } else if (stopYawPhase === 'settled') {
+        // 与主角同构：静止归零，重新加速时按速度比例自然恢复侧移偏转
+        yawFade = clamp(speed / Math.max(1e-6, gaitCfg.stopEnterRatio * referenceSpeed), 0, 1);
+      }
       const targetSide = strafeHipYaw(
         latRatio, gaitCfg.strafeHipScale, gaitCfg.strafeHipMaxDeg, gaitCfg.strafeHipBoost,
-      );
+      ) * yawFade;
       sideYaw += (targetSide - sideYaw) * (1 - Math.exp(-12 * Math.max(0, frameDt)));
       lower.rotation.y = sideYaw;
 
@@ -346,9 +378,21 @@ export function createDummyRig(
         stopDirWX = s.velocity.x * inv;
         stopDirWZ = s.velocity.z * inv;
       }
+      const oldPrevSpeed = prevSpeed;
       prevSpeed = speed;
       const inStop = stopOn && stopT >= 0;
       if (inStop) stopT = Math.min(1, stopT + frameDt / stopSec);
+      // v9s：缓存收相状态供下一帧 sideYaw 淡出（与主角同构，一帧延迟无可见差）
+      if (inStop && stopYawPhase !== 'blend') {
+        stopYawPhase = 'blend';
+        stopYawDrain = 0;
+      }
+      // 与主角同构：stopT 到 1 视作收相结束，afterStop 从此开始独立消化
+      lastInStop = inStop && stopT < 1;
+      lastStopT = stopT;
+      lastGateResume = gate.resume;
+      lastSpeed = speed;
+      lastPrevSpeed = oldPrevSpeed;
 
       const gaitInput: GaitInput = inStop ? {
         phase: stopPhase0,
@@ -422,17 +466,23 @@ export function createDummyRig(
       // 基准 = 步态刚写完、还没被受击 / 惯性层推走的骨盆 / 下盘；末尾 IK 把差值
       // 吸收进髋膝角，假人被打得后仰 / 后坐时脚仍踩在原地。
       const ikBase = captureIKBase(pelvis, lower);
-      // v9q：停步惯性的骨盆位移放在 IK 基准之后，并给下盘等量反向补偿 ——
-      // 脚的世界位置净变化 0，IK 开 / 关都钉在原地，不再跟着骨盆一起往前滑。
+      // v9s：与主角同构的停步惯性 IK 重做。
+      //  - 停步期间把 IK 权重临时提到 1：默认 0.9 会让下沉留下约 10% 残差（脚穿地）；
+      //  - lower 不再反向补偿：它随 pelvis 一起被惯性带走，上下半身同步（修「分离」），
+      //    脚由 applyFootIK 用上面捕获的「未位移未下沉」锚点精确拉回；
+      //  - IK 关闭时退回等量反向补偿，脚不滑也不穿地（A/B 降级路径）。
+      const ikCfg = inStop && ikConfig.enabled ? { ...ikConfig, weight: 1 } : ikConfig;
+      const ikWStop = ikCfg.enabled && ikCfg.weight > 0 ? clamp(ikCfg.weight, 0, 1) : 0;
+      // 垂直下沉单独补偿：hip 随骨盆变低后，原脚位锚点相对 hip 超出腿的臂展，
+      // IK 解会被 clamped，脚仍会穿地。lower 等量抬回 = 不跟随下沉的 IK 辅助基准。
       pelvis.position.x += stopBodyX;
       pelvis.position.z += stopBodyZ;
-      lower.position.x -= stopBodyX;
-      lower.position.z -= stopBodyZ;
-      // v9r：与主角同构 —— 骨盆跟随下沉写在 IK 基准之后，锚点取未下沉的脚位，
-      // IK 开启时屈膝吸收、关闭时下盘等量反向补偿，脚不跟着沉。
-      const ikWStop = ikConfig.enabled ? clamp(ikConfig.weight, 0, 1) : 0;
       pelvis.position.y -= stopBodyDip;
-      lower.position.y += stopBodyDip * (1 - ikWStop);
+      lower.position.y += stopBodyDip;
+      if (ikWStop <= 0) {
+        lower.position.x -= stopBodyX;
+        lower.position.z -= stopBodyZ;
+      }
       if (leanCfg) {
         const dt = Math.max(1 / 240, Math.min(frameDt, 0.1));
         const fx = Math.sin(s.bodyYaw);
@@ -461,8 +511,7 @@ export function createDummyRig(
         pelvis.position.x += inertia.pelvisX;
         pelvis.position.z += inertia.pelvisZ;
         pelvis.position.y -= inertia.crouch;
-        const ikW = ikConfig.enabled ? clamp(ikConfig.weight, 0, 1) : 0;
-        lower.position.y += inertia.crouch * (1 - ikW);
+        lower.position.y += inertia.crouch * (1 - ikWStop);
       }
       prevVx = s.velocity.x;
       prevVz = s.velocity.z;
@@ -525,7 +574,7 @@ export function createDummyRig(
         root, pelvis, lower,
         limbs: ikLimbs,
         base: ikBase,
-        cfg: ikConfig,
+        cfg: ikCfg,
         grounded: true,
         attacking: s.attackPhase !== 'idle',
       });

@@ -8,9 +8,9 @@
  * 继承 v9c 的偏好：
  *   - 默认全部收起，只有胶囊可见；
  *   - 展开态不被每帧 HUD 刷新打断（刷新只换文本，不改折叠状态）；
- *   - 一旦真正开始操作（点画布 / 推摇杆 / 按攻击），立刻收起「状态 / 手感」；
- *     「调试」保持展开，方便边跑边热调参数，由胶囊手动收起；
- *   - 点在胶囊行或展开面板内部不触发自动收起。
+ *   - v9s：**点画布 / 推摇杆 / 按攻击都不再自动收起**。用户需要在移动过程中持续盯
+ *     「状态读数 / 手感曲线」观察数值变化，旧版一点画布就收回导致根本没法边跑边看。
+ *     展开 / 收起只由胶囊点击与 V 快捷键控制；面板栈指针穿透，不挡操作区。
  *
  * 操作说明（旧 #hint）已移除：手机有屏幕按钮、按钮带 aria-label，完整按键表与
  * 版本说明在 README；那块默认收起、8s 自动收回的 9000 字 changelog 判定为不必要。
@@ -97,17 +97,9 @@ export function createPanelRow(hudEl: HTMLElement): OverlayFold {
     if (e.key.toLowerCase() === 'v' && !e.metaKey && !e.ctrlKey) toggle('motion');
   });
 
-  // 真正开始操作就收起（点胶囊 / 展开面板内部除外）。
-  // 注意不要用 #panel-stack 整体判定 —— 它是指针穿透的，落在画布上的点击应当收起。
-  function onAction(e: Event): void {
-    const t = e.target;
-    if (t instanceof Element && t.closest('#panel-row, #panel-stack')) return;
-    // 调试面板常用来边跑边调，不自动收起；其余两个按 v9c 语义立即收回
-    if (openKey === 'debug') return;
-    closeAll();
-  }
-  window.addEventListener('pointerdown', onAction, { capture: true, passive: true });
-
+  // v9s：不再监听 window 的 pointerdown 做自动收起。状态 / 手感 / 调试三个面板
+  // 一旦展开就保持展开，直到用户自己点胶囊（或按 V）收起 —— 移动、攻击、点画布
+  // 都不会打断读数。胶囊自身仍用 pointerdown + stopPropagation 处理，互不干扰。
   sync();   // 默认全部收起
 
   return {

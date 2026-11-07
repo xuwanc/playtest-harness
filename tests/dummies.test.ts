@@ -95,6 +95,10 @@ describe('测试假人：四种 AI 行为', () => {
 
   it('4 攻击：追到范围内挥砍、发出事件并累计计数，但完全不改变玩家状态（无伤害）', () => {
     const w = makeWorld();
+    // v9s：本用例验证「假人行为不写玩家状态」。原地转身是玩家自身的朝向机制，
+    // 静止时若假人绕到背后会自动触发（合法新行为），会改变 facing/bodyYaw。
+    // 隔离该模块以守住无伤害 / 无位移的旧契约；新行为由 v9s-feel.test.ts 单独覆盖。
+    w.modules.turnInPlace = false;
     const playerBefore = JSON.stringify(w.character);
     let attacks = 0;
     for (let i = 0; i < 600; i++) {

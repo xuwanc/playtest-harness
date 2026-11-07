@@ -3,11 +3,12 @@ import { wrapAngle } from '../core';
 import type {
   CharacterState, ColorConfig, CombatState, GaitViewConfig, HurtState, HurtViewConfig,
   IKViewConfig, LeanViewConfig, LinkState, LinkViewConfig, OrientationViewConfig,
-  ProgramAnimViewConfig, VoxelConfig, WeaponId, WeaponMountConfig,
+  ProgramAnimViewConfig, TurnInPlaceState, VoxelConfig, WeaponId, WeaponMountConfig,
 } from '../core';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw,
   stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir,
+  stopYawFade, solveTurnStep,
 } from './gait';
 import type { GaitInput } from './gait';
 import {
@@ -30,6 +31,7 @@ export type VoxelRig = {
   update(
     c: CharacterState, combat: CombatState, hurt: HurtState, frameDt: number,
     channeling?: boolean, coreTime?: number, link?: LinkState,
+    turn?: TurnInPlaceState,
   ): void;
   /** 表现层诊断读数（弧度），供实验台观测，不进入 Core / 快照。 */
   lean(): { forward: number; side: number };
@@ -67,6 +69,8 @@ export type VoxelRig = {
     stopT: number; hipYaw: number; chestYaw: number; speed: number; gaitSpeed: number;
     /** v9p：停步惯性脉冲的前脚前伸量（rad）/ 身体前移量（m）/ 骨盆下沉量（m），未接管时为 0 */
     stopStep: number; stopShift: number; stopDip: number;
+    /** v9s：停步偏差淡出系数（1=未消化，0=已归零）/ 原地转身踏步脉冲强度 */
+    stopYawFade: number; turnStep: number;
     legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
@@ -460,6 +464,22 @@ export function createVoxelRig(
   /** v9q：本帧步态实际驱动速度（velocity + 击退冲量），供验收「被击退时下盘是否跟着动」 */
   let lastGaitSpeed = 0;
 
+  // ---- v9s：停步下盘偏差消化窗口（全部纯表现层状态，不进 Core / 快照）----
+  //  'none'    正常移动，偏转目标系数 = 1
+  //  'blend'   进入过收相，正在把系数平滑压到 0
+  //  'settled' 已归零；保持 0 直到重新加速，防止 latRatio（方向比值）把偏转拉回来
+  let stopYawPhase: 'none' | 'blend' | 'settled' = 'none';
+  let stopYawDrain = 0;           // afterStop 模式：收相结束后的消化进度
+  let lastStopYawFade = 1;        // 本帧实际采用的系数（诊断用）
+  // 停步门控在本段之后才算完，淡出用上一帧的缓存状态（一帧延迟，指数平滑下无可见差）
+  let lastInStop = false;
+  let lastStopT = -1;
+  let lastGateResume = false;
+  let lastSpeed = 0;
+  let lastPrevSpeed = 0;
+  /** v9s：本帧原地转身踏步脉冲强度（诊断用） */
+  let lastTurnStep = 0;
+
   // ---- v8c 程序动画分层状态（全部纯表现，不进入 Core / 快照）----
   /** 攻击姿态混合系数 0..1：指数平滑进出攻击，避免下盘姿态单帧跳变 */
   let attackBlend = 0;
@@ -738,6 +758,7 @@ export function createVoxelRig(
     update(
       c: CharacterState, combat: CombatState, hurt: HurtState, frameDt: number,
       channeling = false, coreTime?: number, link?: LinkState,
+      turn?: TurnInPlaceState,
     ): void {
       setWeapon(combat.weapon);
       upper.rotation.x = 0;
@@ -804,6 +825,8 @@ export function createVoxelRig(
       // charging（弓蓄力）时 combat.phase 必为 idle（combat.ts 只在 idle 起蓄力），
       // 法杖引导也不进近战状态机 —— 两者都保持「可移动」的真实步态，不受攻击分层影响。
       const attacking = combat.phase !== 'idle';
+      /** v9s：Core 的原地转身状态机是否正在驱动一次转身（静止盯视目标绕到背后） */
+      const turnActive = turn?.phase === 'active';
       attackBlend = attackBlendStep(attackBlend, attacking, dt, animCfg.attack.blendRate);
       const weights = poseWeights(
         attackBlend, animCfg.attack.gaitWeight, animCfg.attack.lowerBodyWeight,
@@ -860,9 +883,41 @@ export function createVoxelRig(
       const latRatio = speed > EPS ? clamp(bodyLocalRight / speed, -1, 1) : 0;
       // v9n：纯侧移（|latRatio|→1）时多带转一点下盘，把一部分侧移分量变成前后迈步，
       // 避免两腿只有左右摆、看起来「双脚平行拖着走」。前进/后退 lat≈0 时增益为 0，完全不变。
+      // ---- v9s · 停步下盘偏差消化 ----
+      // 缩的是「偏转目标」而不是 hipYaw 本身：latRatio 是方向比值，减速时目标仍保持
+      // 停步前的偏转，若直接覆盖 hipYaw，下一帧就会被常规平滑拉回去，尾巴照样抽一下。
+      // 淡出用上一帧缓存的收相状态（门控在下方才算完），一帧延迟在指数平滑下无可见差。
+      if (stopYawPhase === 'settled' && lastGateResume
+          && lastSpeed > lastPrevSpeed * 1.02 + 1e-4) {
+        // 重新加速 = 玩家起步，交还常规平滑（低速巡航不走收相，不会误伤）
+        stopYawPhase = 'none';
+      }
+      let yawFade = 1;
+      if (stopYawPhase === 'blend') {
+        const prog = lastInStop ? lastStopT : stopYawDrain;
+        yawFade = stopYawFade(prog, gaitCfg.stopYawBlendMode, lastInStop);
+        if (!lastInStop) {
+          // 收相结束：afterStop 模式按独立计时继续消化（不依赖 turnInPlace 触发），
+          // inStop 模式已消化完，或收相被 resume 中止 → 直接归零并进入 settled。
+          stopYawDrain = Math.min(1, stopYawDrain + dt / Math.max(0.01, gaitCfg.stopYawAfterSec));
+          const done = stopYawDrain >= 1
+            || gaitCfg.stopYawBlendMode === 'inStop'
+            || lastGateResume;
+          if (done) {
+            stopYawPhase = 'settled';
+            yawFade = 0;
+          }
+        }
+      } else if (stopYawPhase === 'settled') {
+        // 已消化完：静止时精确归零；但用「速度 / 进入收相阈值」给偏转留回弹通道 ——
+        // 重新加速时自然恢复侧移偏转，不必依赖隐晦的「连续两帧增速」判据。
+        // 同时避免「进入下一次收相的第一帧」仍沿用 settled 的 0、下一帧又跳回 1 的抖动。
+        yawFade = clamp(speed / Math.max(EPS, gaitCfg.stopEnterRatio * moveSpeed), 0, 1);
+      }
+      lastStopYawFade = yawFade;
       const targetHipYaw = strafeHipYaw(
         latRatio, ori.legYawScale, ori.hipYawMaxDeg, gaitCfg.strafeHipBoost,
-      );
+      ) * yawFade;
       hipYaw += (targetHipYaw - hipYaw) * (1 - Math.exp(-ori.hipYawSmoothing * dt));
 
       // ---- 程序化步态（v8 / v8b）----
@@ -935,9 +990,26 @@ export function createVoxelRig(
         stopDirWX = c.velocity.x * inv;
         stopDirWZ = c.velocity.z * inv;
       }
+      const oldPrevSpeed = prevSpeed;
       prevSpeed = speed;
       const inStop = stopOn && stopT >= 0;
       if (inStop) stopT = Math.min(1, stopT + dt / stopSec);
+
+      // v9s：记录停步偏差消化窗口的驱动状态，供下一帧 hipYaw 淡出计算使用。
+      // 进入收相即启动（从 settled 也能重新进入下一次停步）；缓存一份避免重排整段
+      // 步态数据流（realDrive → 门控 → gaitInput 都依赖 gaitYaw/hipYaw）。
+      if (inStop && stopYawPhase !== 'blend') {
+        stopYawPhase = 'blend';
+        stopYawDrain = 0;
+      }
+      // 收相「进行中」才淡入偏差；stopT 到 1 即视为收相结束（afterStop 模式从此处
+      // 开始独立消化）。注意 inStop 变量本身在收相结束后仍为 true（继续输出待机），
+      // 所以不能用它判定收相是否走完。
+      lastInStop = inStop && stopT < 1;
+      lastStopT = stopT;
+      lastGateResume = gate.resume;
+      lastSpeed = speed;
+      lastPrevSpeed = oldPrevSpeed;
 
       const gaitInput: GaitInput = inStop ? {
         phase: stopPhase0,
@@ -968,6 +1040,25 @@ export function createVoxelRig(
           })
         : solveGait(gaitInput, gaitCfg);
       const gait = scaleGaitPose(gaitPose, weights.gaitScale);
+
+      // ---- v9s · 原地转身踏步 ----
+      // turnInPlace.active 时速度≈0，solveGait 直接返回 idle；若不补一层，身体转向时
+      // 两腿完全不动，就是「平滑差值下半身完全滑过去」。按转身进度叠加一次交替的
+      // 抬膝 / 前迈 / 侧摆（轴脚小、摆动脚大），两端包络归零，进出不抽动。
+      // 同时上面把 IK 权重临时置 0，让脚真的挪起来而不是被钉在原地。
+      lastTurnStep = 0;
+      if (turnActive && turn) {
+        const ts = solveTurnStep(turn.progress, turn.dir, gaitCfg);
+        const w = weights.gaitScale;
+        gait.legL.pitchX += ts.legL.pitchX * w;
+        gait.legL.rollZ += ts.legL.rollZ * w;
+        gait.legL.kneeX += ts.legL.kneeX * w;
+        gait.legR.pitchX += ts.legR.pitchX * w;
+        gait.legR.rollZ += ts.legR.rollZ * w;
+        gait.legR.kneeX += ts.legR.kneeX * w;
+        gait.pelvisY += ts.pelvisY * w;
+        lastTurnStep = ts.env;
+      }
 
       // ---- v9p 停步惯性：最后一步踩出去 + 身体跟着惯性微前移，再收回待机 ----
       // 腿角增量落在步态层；**骨盆位移必须放到 IK 基准之后**（见下方 1.1），
@@ -1049,26 +1140,38 @@ export function createVoxelRig(
       // 受击后坐 / 落地缓冲 / 攻击跨步 / 惯性下沉都会改写这些值，末尾的 IK 层
       // 会把差值吸收进髋 / 膝角，让脚仍踩在步态决定的落点上。
       const ikBase = captureIKBase(pelvis, lower);
-      // v9r：IK 权重提前算好，1.1 的停步下沉与 1.5 的惯性下沉共用同一判据
-      const ikW = ikConfig.enabled && c.grounded
-        ? clamp(ikConfig.weight, 0, 1) * (attacking ? clamp(ikConfig.attackScale, 0, 1) : 1)
+      // v9s：本帧实际采用的 IK 配置。
+      //  - 停步惯性期间强制 weight=1：默认 0.9 会留下约 10% 的水平钉地残差，
+      //    满权重才能让 applyFootIK 把脚精确拉回「未位移」的锚点；
+      //  - 原地转身期间 weight=0：转身本来就是脚在挪，钉死反而看不到踏步；
+      //  - 其余帧沿用全局配置（enabled=false 时整层降级，见下）。
+      const ikCfg = turnActive
+        ? { ...ikConfig, weight: 0 }
+        : inStop && ikConfig.enabled
+          ? { ...ikConfig, weight: 1 }
+          : ikConfig;
+      const ikW = ikCfg.enabled && c.grounded && ikCfg.weight > 0
+        ? clamp(ikCfg.weight, 0, 1) * (attacking ? clamp(ikCfg.attackScale, 0, 1) : 1)
         : 0;
 
-      // 1.1) v9q：停步惯性的骨盆位移放在 IK 基准**之后**。旧版写在步态层（基准之前），
-      // 锚点会把「已被惯性推走的骨盆」当成落点，于是脚跟着骨盆一起往前滑。
-      // 现在给下盘等量反向补偿：脚的世界位置 = 骨盆(+d) + 下盘(−d)，净变化 0 ——
-      // IK 开启时锚点恰等于当前脚位（IK 解恒等），IK 关闭时脚同样钉在原地。
-      // 脉冲两端归零，收相结束自动消失，不影响待机。
+      // 1.1) v9s：停步惯性 —— 身体（骨盆 + 下半身）一起被惯性带走，脚由 IK 拉回原位。
+      // 旧版给 lower 等量反向补偿（脚净位移 0），结果下半身完全不动、只有骨盆 / 上身
+      // 前移，观感就是「上身和下半身分离」。现在水平方向 lower 不再补偿：它是 pelvis
+      // 的子节点，会随骨盆一起走，上下半身同步；脚的世界位置多出 (dx, dz)，由
+      // applyFootIK（base 捕获的是未位移的脚位）反解髋膝角精确拉回。
+      //
+      // 垂直下沉必须单独补偿，不能只靠 IK：骨盆下沉后 hip 也变低，原脚位锚点相对 hip
+      // 超出了腿的臂展（l1+l2），IK 解被 clamped，脚仍会陷进地面 —— 这正是用户反馈的
+      // 「下沉导致脚步穿地」。给 lower 等量抬回，相当于一根「不跟随下沉的 IK 辅助基准」，
+      // 无需真的增加辅助骨骼。IK 全局关闭时水平位移也降级为反向补偿，保证脚不滑。
       pelvis.position.x += stopBodyX;
       pelvis.position.z += stopBodyZ;
-      lower.position.x -= stopBodyX;
-      lower.position.z -= stopBodyZ;
-      // v9r：骨盆跟着上半身一起轻微下沉。写在 IK 基准之后 —— applyFootIK 会临时把
-      // pelvis/lower 恢复成 base（未下沉）取脚锚点，相当于自带一根「不跟随下沉的
-      // IK 辅助基准」，无需真的增加辅助骨骼。IK 开启时反解屈膝把脚拉回锚点，
-      // 关闭时给下盘等量反向补偿；两种情况脚都不跟着骨盆沉下去。
       pelvis.position.y -= stopBodyDip;
-      lower.position.y += stopBodyDip * (1 - clamp(ikW, 0, 1));
+      lower.position.y += stopBodyDip;
+      if (ikW <= 0) {
+        lower.position.x -= stopBodyX;
+        lower.position.z -= stopBodyZ;
+      }
 
       // 1.5) v8g 惯性分层：盆骨带一点倾斜 + 小幅重心平移 + 移动时略微下沉。
       // 旧版只把惯性倾到 upper，盆骨完全不动，像「上身自己往前折」。现在同一份惯性
@@ -1180,7 +1283,7 @@ export function createVoxelRig(
         root, pelvis, lower,
         limbs: ikLimbs,
         base: ikBase,
-        cfg: ikConfig,
+        cfg: ikCfg,
         grounded: c.grounded,
         attacking,
       });
@@ -1230,6 +1333,8 @@ export function createVoxelRig(
         speed: prevSpeed,   // update 末尾已刷新为本帧速度，供线上验收低速巡航
         gaitSpeed: lastGaitSpeed,
         stopStep: lastStopStep, stopShift: lastStopShift, stopDip: lastStopDip,
+        /** v9s：停步偏差淡出系数（1=未消化，0=已归零）/ 原地转身踏步脉冲 */
+        stopYawFade: lastStopYawFade, turnStep: lastTurnStep,
         legLPitch: lastLegs.lp, legLRoll: lastLegs.lr,
         legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,
       };

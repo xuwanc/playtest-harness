@@ -386,6 +386,78 @@ export function bodyLocalDir(
   };
 }
 
+/* -------------------------------------------------------------------------- *
+ * v9s · 停步下盘偏差消化系数
+ * -------------------------------------------------------------------------- *
+ * 根因：latRatio = 速度侧向分量 / 速度大小 是「方向比值」，松手减速时它并不趋零，
+ * 所以 targetHipYaw 一直维持停步前的偏转，直到速度 < 1e-6（按 friction=14 约在
+ * 收相结束后 0.4s）才骤然归零 —— 就是「停步完成后一次明显插值到目标方向」。
+ *
+ * 这里不覆盖 hipYaw 的绝对值（会被常规指数平滑拉回去），而是给「偏转目标」乘一个
+ * 淡出系数，让下盘在停步过程中就与身体朝向重新对齐：
+ *   - inStop    : 系数随收相进度 stopT 平滑压到 0，停步结束即精确归零；
+ *   - afterStop : 收相期间保持 1（保留急停侧身的顿感），收相结束后按独立计时进度
+ *                 消化到 0（进度由骨架层推进，不依赖 turnInPlace 是否触发）。
+ * 消化完成后骨架层把系数保持在 0，直到重新加速才交还常规平滑，避免被拉回偏转值。
+ */
+export type StopYawMode = 'inStop' | 'afterStop';
+
+/** progress：inStop 模式传收相进度 stopT，afterStop 模式传收相结束后的消化进度。 */
+export function stopYawFade(progress: number, mode: StopYawMode, inStop: boolean): number {
+  const t = clamp(progress, 0, 1);
+  const e = t * t * (3 - 2 * t);
+  if (inStop) return mode === 'inStop' ? 1 - e : 1;
+  return mode === 'afterStop' ? 1 - e : 0;
+}
+
+/* -------------------------------------------------------------------------- *
+ * v9s · 原地转身踏步姿态
+ * -------------------------------------------------------------------------- *
+ * Core 的 turnInPlace.active 期间速度≈0，solveGait 直接返回 idle —— 若不补一层，
+ * 身体转向时两腿完全不动，就是用户说的「平滑差值下半身完全滑过去」。
+ * 这里按转身进度给两腿一次交替的抬膝 / 前迈 / 侧摆（轴脚幅度小、摆动脚幅度大），
+ * 包络 sin²(πt) 两端值与导数均为 0，起止不抽动；配合骨架层临时放松足部 IK，
+ * 让脚真的「挪」起来而不是被钉在原地。全部幅度由 GaitViewConfig 外置，
+ * turnStepEnabled=false 精确回到纯插值转身，便于 A/B 对照。
+ */
+export type TurnStepPose = {
+  legL: LegPose;
+  legR: LegPose;
+  /** 骨盆微幅下沉（m，负值） */
+  pelvisY: number;
+  /** 诊断：当前脉冲强度 0..1 */
+  env: number;
+};
+
+export function solveTurnStep(
+  progress: number, dir: number, cfg: GaitViewConfig,
+): TurnStepPose {
+  const zero = (): TurnStepPose => ({
+    legL: { pitchX: 0, rollZ: 0, kneeX: 0 },
+    legR: { pitchX: 0, rollZ: 0, kneeX: 0 },
+    pelvisY: 0, env: 0,
+  });
+  if (!cfg.turnStepEnabled) return zero();
+  const t = clamp(progress, 0, 1);
+  const sin = Math.sin(Math.PI * t);
+  const env = sin * sin;
+  if (env <= 1e-9) return zero();
+  // dir=+1 右转：右腿为轴（小幅）、左腿向外踏一步（大幅）；左转反之。
+  const rightTurn = dir >= 0;
+  const lAmp = rightTurn ? 1 : 0.35;
+  const rAmp = rightTurn ? 0.35 : 1;
+  const pitch = Math.max(0, cfg.turnStepPitch) * env;
+  const knee = Math.max(0, cfg.turnStepKnee) * env;
+  const side = Math.max(0, cfg.turnStepPitch) * 0.35 * env;
+  const s = rightTurn ? 1 : -1;
+  return {
+    legL: { pitchX: -pitch * lAmp, rollZ: s * side * lAmp, kneeX: knee * lAmp },
+    legR: { pitchX: -pitch * rAmp, rollZ: -s * side * rAmp, kneeX: knee * rAmp },
+    pelvisY: -Math.max(0, cfg.turnStepDip) * env,
+    env,
+  };
+}
+
 export function solveStopInertia(
   progress: number,
   phase0: number,

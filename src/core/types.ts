@@ -695,6 +695,51 @@ export type OrientationConfig = {
   facingSnapDeg: number;
 };
 
+/**
+ * v9s · 原地转身（turn-in-place）配置：静止盯视目标、目标绕到背后时触发一次
+ * 明确的原地转身，而不是靠 bodyYaw 指数插值「下半身滑过去」。
+ *
+ * 纯数值、无外部状态，随 CoreConfig 一起快照，可跨语言对照。
+ */
+export type TurnInPlaceConfig = {
+  /** 总开关（关闭后状态机冻结、不产生新触发，且立即清理残留状态） */
+  enabled: boolean;
+  /** 触发夹角阈值（度）：|目视方向 − bodyYaw| 超过该值才触发 */
+  triggerDeg: number;
+  /** 转身结束时保留的余角（度）：不必硬转满 180°，留一点更自然 */
+  settleDeg: number;
+  /** 一次转身的时长（秒），固定节奏、与夹角大小无关 */
+  durationSec: number;
+  /** 静止判据：水平速度占 moveSpeed 的比例上限 */
+  idleSpeedRatio: number;
+  /** 移动输入死区：超过即视为起步，立即中止转身（保证起步 / 攻击不被拖住） */
+  inputDeadZone: number;
+  /** 盯视目标的最远距离（米）；0 = 沿用 targeting.range */
+  lookRange: number;
+  /** 触发前需连续满足闸门的时长（秒），防拖拽抖动误触 */
+  armSec: number;
+};
+
+/**
+ * v9s · 原地转身运行时状态（plain data，随 World 一起快照 / 回放）。
+ *
+ * 只记录「决策」：触发/中止/进度；bodyYaw 的最终写入在 orientation 与
+ * turn-in-place 两处协作完成（见 turn-in-place.ts 注释）。
+ */
+export type TurnInPlaceState = {
+  phase: 'idle' | 'active';
+  /** 触发瞬间的 bodyYaw */
+  fromYaw: number;
+  /** 快照的目标角（已扣 settleDeg 余角），转身过程中不再追随目标抖动 */
+  targetYaw: number;
+  /** 转身方向 +1 / -1 */
+  dir: number;
+  /** 0..1，固定时长推进，两端用 smoothstep 缓动 */
+  progress: number;
+  /** 连续满足闸门的累计时长（防抖） */
+  armTime: number;
+};
+
 export type CoreConfig = {
   fixedDt: number;
   maxStepsPerFrame: number;
@@ -721,6 +766,8 @@ export type CoreConfig = {
   spawn: Vec3;
   worldBounds: Bounds;
   orientation: OrientationConfig;
+  /** v9s：静止盯视触发的原地转身 */
+  turnInPlace: TurnInPlaceConfig;
   combat: CombatConfig;
   /** v9a：冲刺 / 翻滚 / 闪现 / 长跑后的数据驱动派生招表 */
   links: LinkConfig;
@@ -885,6 +932,25 @@ export type GaitViewConfig = {
    *  纳入步态驱动的比例：1 = 被推开时下盘跟着迈出后撤步（默认），0 = 旧「身体平移、腿不动」。
    *  只影响表现层的步态解算，不写 Core / 不进快照；玩家与假人共用。 */
   knockGaitScale: number;
+  /* ---- v9s · 停步下盘偏差消化 ----
+   * 根因：latRatio = 速度侧向分量 / 速度大小 是「方向比值」，松手减速时它保持不变，
+   * 于是 hipYaw 一直维持停步前的偏转，直到速度 < 1e-6（收相结束后约 0.4s）才骤然
+   * 归零 —— 观感就是「停步完成后一次明显插值到目标方向」。
+   * 这里给下盘偏转目标乘一个淡出系数，把偏差消化进停步过程（或紧接收相之后）。 */
+  /** 消化窗口：'inStop' = 随收相 stopT 同步过渡（默认）；'afterStop' = 保持到收相结束，
+   *  之后按独立计时器消化（不依赖 turnInPlace 是否触发，避免小夹角时残留歪姿）。 */
+  stopYawBlendMode: 'inStop' | 'afterStop';
+  /** afterStop 模式的消化时长（秒） */
+  stopYawAfterSec: number;
+  /* ---- v9s · 原地转身踏步（表现层）---- */
+  /** 关掉即精确回到「纯插值转身」，用于 A/B 对照 */
+  turnStepEnabled: boolean;
+  /** 转身踏步的领先腿前迈幅度（rad） */
+  turnStepPitch: number;
+  /** 转身踏步的抬膝幅度（rad） */
+  turnStepKnee: number;
+  /** 转身踏步时骨盆微幅下沉（m） */
+  turnStepDip: number;
 };
 
 /* ---------------- 程序动画分层 / 落地缓冲（v8c，纯表现层） ---------------- */
@@ -1316,6 +1382,8 @@ export type ModuleFlags = {
   /** 法杖技能（引导 / 飞弹 / 电环）独立开关，关闭后完全冻结 */
   abilities: boolean;
   orientation: boolean;
+  /** v9s：原地转身状态机独立开关，关闭后完全冻结（便于 A/B 对照纯插值转身） */
+  turnInPlace: boolean;
   targeting: boolean;
   hits: boolean;
   separation: boolean;
@@ -1339,6 +1407,8 @@ export type World = {
   impulse: { x: number; z: number };
   /** 当前智能锁定的目标（每帧重算，攻击起手时读取） */
   targeting: TargetState;
+  /** v9s：静止盯视触发的原地转身状态（plain data，随快照回放） */
+  turnInPlace: TurnInPlaceState;
   /** 玩家受击状态（放在 World 而非 character，保持「假人不改 character」契约） */
   playerHurt: HurtState;
   /** 玩家累计命中假人的次数（无伤害，仅用于验收观察） */

@@ -60,10 +60,19 @@ describe('v9q 默认参数', () => {
     }
   });
 
-  it('胸偏转上限 0 → 默认关闭胸偏转（机制仍在，只是幅度归零）', () => {
-    expect(RAW_CONFIG.view.gait.chestYawMaxDeg).toBe(0);
-    expect(chestYawFromHip(0.6, RAW_CONFIG.view.gait.chestYawScale, 0)).toBe(0);
-    // 显式给上限时机制仍然正确（回归用 MECH_GAIT）
+  it('v9s：胸偏转默认已启用（比例 0.6 / 上限 40°），上限 0 仍能彻底关闭', () => {
+    const gait = RAW_CONFIG.view.gait;
+    expect(gait.chestYawScale).toBe(0.6);
+    expect(gait.chestYawMaxDeg).toBe(40);
+    // 0.6 rad 下盘偏转 × 0.6 = 0.36 rad，被 40°(0.698 rad) 限幅后仍为 0.36
+    expect(chestYawFromHip(0.6, gait.chestYawScale, gait.chestYawMaxDeg))
+      .toBeCloseTo(0.36, 6);
+    // 大角度下盘偏转时上限生效
+    expect(chestYawFromHip(2, gait.chestYawScale, gait.chestYawMaxDeg))
+      .toBeCloseTo((40 * Math.PI) / 180, 6);
+    // maxDeg=0 是「彻底关闭」语义（v9q 的默认，保留回归）
+    expect(chestYawFromHip(0.6, gait.chestYawScale, 0)).toBe(0);
+    // 机制本身不随默认调优漂移（回归用 MECH_GAIT）
     expect(chestYawFromHip(0.6, MECH_GAIT.chestYawScale, MECH_GAIT.chestYawMaxDeg))
       .toBeCloseTo(0.27, 6);
   });

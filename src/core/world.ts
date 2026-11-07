@@ -7,6 +7,7 @@ import { initialHurt } from './hits';
 import { initialLinkState, resetLink } from './links';
 import { resetCharacter } from './movement';
 import { initialTargetState } from './targeting';
+import { initialTurnInPlaceState, resetTurnInPlace } from './turn-in-place';
 import { buildBoxes } from './scene';
 import type { CoreConfig, SceneConfig, World } from './types';
 
@@ -39,6 +40,7 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
     abilities: initialAbilityState(),
     impulse: { x: 0, z: 0 },
     targeting: initialTargetState(),
+    turnInPlace: initialTurnInPlaceState(),
     playerHurt: initialHurt(),
     hitCount: 0,
     dash: {
@@ -63,6 +65,7 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
       links: true,
       abilities: true,
       orientation: true,
+      turnInPlace: true,
       targeting: true,
       hits: true,
       separation: true,
@@ -105,5 +108,6 @@ export function resetWorld(world: World): void {
   resetAbilities(world);
   resetDash(world);
   resetCameraIntent(world);
+  resetTurnInPlace(world);
   world.events.length = 0;
 }

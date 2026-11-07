@@ -40,6 +40,16 @@
       "facingTurnRate": 1800,
       "facingSnapDeg": 30
     },
+    "turnInPlace": {
+      "enabled": true,
+      "triggerDeg": 75,
+      "settleDeg": 8,
+      "durationSec": 0.45,
+      "idleSpeedRatio": 0.05,
+      "inputDeadZone": 0.12,
+      "lookRange": 0,
+      "armSec": 0.08
+    },
     "combat": {
       "comboWindow": 0.65,
       "settle": 0.16,
@@ -577,8 +587,14 @@
       "strafeHipMaxDeg": 62,
       "stopEnterRatio": 0.17,
       "stopExitRatio": 0.39,
-      "chestYawScale": 0.35,
-      "chestYawMaxDeg": 0,
+  "chestYawScale": 0.6,
+  "chestYawMaxDeg": 40,
+  "stopYawBlendMode": "inStop",
+  "stopYawAfterSec": 0.3,
+  "turnStepEnabled": true,
+  "turnStepPitch": 0.5,
+  "turnStepKnee": 0.35,
+  "turnStepDip": 0.02,
       "stopStepPitch": 0,
       "stopTrailPitch": 0,
       "stopStepKnee": 0.2,

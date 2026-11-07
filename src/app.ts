@@ -53,7 +53,8 @@ export function startApp(): void {
   const view = createSceneView(container, world, VIEW_CONFIG);
   const clock = createClock(world);
   const hud = createHud(hudEl);
-  // v9r：状态 / 手感 / 调试收成一排胶囊，默认全部收起；操作画布自动收回状态与手感
+  // v9r：状态 / 手感 / 调试收成一排胶囊，默认全部收起；v9s：点画布不再自动收起，
+  //      展开后持续显示，方便边移动边看读数 / 速度曲线
   const fold = createPanelRow(hudEl);
   // v9e：左下角版本徽标（构建期注入，重新构建才会变）—— 一眼确认线上跑的是哪一版
   const badge = document.getElementById('version-badge');

@@ -31,13 +31,17 @@ export const MECH_GAIT: GaitViewConfig = {
   knockGaitScale: 1,
 };
 
-/** v9q 用户敲定的 11 项默认参数 + v9r 新增的骨盆下沉量，防止后续误改。 */
+/**
+ * v9q 用户敲定的 11 项默认参数 + v9r 骨盆下沉 + v9s 停步偏差 / 原地转身，防止误改。
+ * v9s 把胸随下盘偏转比例与上限从 0.35 / 0（关闭）调整到 0.6 / 40（启用）。
+ * stopYawBlendMode 是字符串枚举，单独在测试里断言，不放进这张数值表。
+ */
 export const DEFAULT_GAIT_EXPECT = {
   stopBlendSec: 0.56,
   stopEnterRatio: 0.17,
   stopExitRatio: 0.39,
-  chestYawScale: 0.35,
-  chestYawMaxDeg: 0,
+  chestYawScale: 0.6,
+  chestYawMaxDeg: 40,
   stopStepPitch: 0,
   stopTrailPitch: 0,
   stopStepKnee: 0.2,
@@ -45,4 +49,8 @@ export const DEFAULT_GAIT_EXPECT = {
   stopBodyDip: 0.03,
   stopChestPitch: 0.01,
   stopPeakRatio: 0.48,
+  stopYawAfterSec: 0.3,
+  turnStepPitch: 0.5,
+  turnStepKnee: 0.35,
+  turnStepDip: 0.02,
 } as const;

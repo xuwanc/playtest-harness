@@ -351,7 +351,7 @@ export function createSceneView(container: HTMLElement, world: World, view: View
       rollPivot.rotation.x = rolling ? rollT * Math.PI * 2 : 0;
       rollPivot.position.y = ROLL_PIVOT_Y - (rolling ? 0.2 * Math.sin(Math.PI * rollT) : 0);
       // coreTime 传 Core 的 world.time：落地缓冲脉冲因此与暂停 / 时间缩放 / 单步同步
-      voxel.update(c, cb, w.playerHurt, frameDt, w.abilities.channeling, w.time, w.playerLink);
+      voxel.update(c, cb, w.playerHurt, frameDt, w.abilities.channeling, w.time, w.playerLink, w.turnInPlace);
 
       for (let i = 0; i < dummyRigs.length; i++) {
         if (w.dummies[i]) dummyRigs[i].update(w.dummies[i], frameDt);

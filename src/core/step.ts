@@ -9,6 +9,7 @@ import { movementUpdate } from './movement';
 import { orientationUpdate } from './orientation';
 import { crowdResistanceUpdate, separationUpdate } from './separation';
 import { targetingUpdate } from './targeting';
+import { turnInPlaceUpdate } from './turn-in-place';
 import { EMPTY_INTENTS } from './types';
 import type { Intents, World } from './types';
 import { resetWorld } from './world';
@@ -25,7 +26,10 @@ import { resetWorld } from './world';
  *   4 dash         翻滚 / 闪现：翻滚把剩余位移换算成附加速度写入 impulse（覆盖攻击值），
  *                  闪现直接改位置；结束时写 linkWindow 供 links 下一帧读取
  *   5 movement     消费 impulse，更新玩家位置 / 速度 / 落地（引导时按 moveScale 轻微减速）
- *   6 orientation  读新速度写四角朝向（弓蓄力 / 法杖引导时面向目标或拖拽辅助朝向）
+ *   6 orientation  读新速度写四角朝向（弓蓄力 / 法杖引导时面向目标或拖拽辅助朝向）；
+ *                  v9s：原地转身 active 期间跳过 bodyYaw 的常规 approach
+ *   6.5 turnInPlace 静止盯视的目标绕到背后时触发原地转身，覆盖 bodyYaw / facing；
+ *                  必须在 orientation 之后（读它的 facing、覆盖它的 bodyYaw）
  *   7 dummies      读玩家新位置，假人 AI + 点击轮转，发 dummy-hit
  *   8 decayHurt / decayLinks  受击计时与派生招窗口 / 冷却衰减（独立于模块开关）
  *   9 abilities    法杖技能：引导飞弹 / 电环推进 + 命中结算（读本帧假人新位置）
@@ -63,6 +67,9 @@ export function step(world: World, dt: number, intents: Intents): World {
   if (world.modules.dash) dashUpdate(world, dt, intents);
   if (world.modules.movement) movementUpdate(world, dt, intents);
   if (world.modules.orientation) orientationUpdate(world, dt, intents);
+  // v9s：总是调用（内部处理 enabled / modules 开关并清理残留状态），保证关闭时
+  // 不会把「转身进行中」卡住；与 links 同一套模块开关语义。
+  turnInPlaceUpdate(world, dt, intents);
   if (world.modules.dummies) dummiesUpdate(world, dt, intents);
 
   decayHurt(world, dt);

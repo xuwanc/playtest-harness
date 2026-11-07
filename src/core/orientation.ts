@@ -94,7 +94,12 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   if (Math.hypot(v.x, v.z) > 0.15) c.moveYaw = Math.atan2(v.x, v.z);
 
   // 3) 身体平滑追随（慢）
-  c.bodyYaw = approach(c.bodyYaw, c.facing, o.bodyTurnRate, dt);
+  //    v9s：原地转身 active 期间跳过 —— bodyYaw 由 turn-in-place 模块按固定进度驱动，
+  //    这里若照常 approach 会把「固定节奏的转身」拖成两套插值叠加，转身起止发飘。
+  //    headYaw 仍按本帧的 bodyYaw（上一帧转身写入值）限幅，头先于身体到位的关系不变。
+  if (world.turnInPlace.phase !== 'active') {
+    c.bodyYaw = approach(c.bodyYaw, c.facing, o.bodyTurnRate, dt);
+  }
 
   // 4) 头部快速追随（快）→ 头先于身体到位；再相对身体限幅
   let head = approach(c.headYaw, c.facing, o.headTurnRate, dt);
