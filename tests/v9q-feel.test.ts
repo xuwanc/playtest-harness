@@ -7,7 +7,7 @@ import {
   bodyLocalDir, chestYawFromHip, solveStopInertia,
 } from '../src/presentation/gait';
 import { sampleSpeed } from '../src/presentation/motion-debug';
-import { makeWorld, intent, run } from './helpers';
+import { makeQuietWorld, makeWorld, intent, run } from './helpers';
 import { rigNodes } from './rig-nodes';
 import { MECH_GAIT, RAW_CONFIG, DEFAULT_GAIT_EXPECT } from './mech-gait';
 import type { GaitViewConfig, IKViewConfig } from '../src/core';
@@ -211,7 +211,8 @@ describe('v9q 停步惯性不再带着脚一起滑', () => {
   });
 
   it('纯侧移停步：惯性前移方向与停步瞬间速度方向同向（不再歪一个 hipYaw）', () => {
-    const w = makeWorld();
+    // v9s.13：纯侧移的前提是身体朝向不被注视拉走（侧后方已改走后退步、hipYaw 归零）
+    const w = makeQuietWorld();
     w.modules.targeting = false;
     const on = makeRig();
     const off = makeRig({ ...MECH_GAIT, stopBodyShift: 0 });

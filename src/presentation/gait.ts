@@ -121,6 +121,31 @@ function liftWeight(p: number): number {
   return (1 - Math.sin(p)) / 2;
 }
 
+/**
+ * v9s.13 · 侧向权重保留系数（0 = 完全按后退处理，1 = 保留侧移交错步）。
+ *
+ * `forwardRatio` = 速度在身体前向的投影 / 速度大小 ∈ [-1, 1]：
+ *   +1 = 正前方，0 = 正侧方，-1 = 正后方。
+ * 角度从 `startDeg` 到 `fullDeg` 之间用 smoothstep 把侧向权重压到 0 ——
+ * 两端导数为 0，玩家摇杆在侧后方缓慢划动时不会出现步态突跳。
+ */
+export function backStrafeKeep(
+  forwardRatio: number,
+  startDeg: number,
+  fullDeg: number,
+): number {
+  const DEG = Math.PI / 180;
+  // 配置缺失 / 写坏时退回默认 100° / 132°，绝不让 NaN 漏进步态（腿会整帧归零）
+  const a = clamp(Number.isFinite(startDeg) ? startDeg : 100, 0, 180);
+  const b = clamp(Number.isFinite(fullDeg) ? fullDeg : 132, 0, 180);
+  if (b <= a) return forwardRatio >= Math.cos(a * DEG) ? 1 : 0;
+  const start = Math.cos(a * DEG);   // 100° → -0.17
+  const full = Math.cos(b * DEG);    // 132° → -0.67
+  if (forwardRatio >= start) return 1;
+  const t = clamp((start - forwardRatio) / (start - full), 0, 1);
+  return 1 - t * t * (3 - 2 * t);
+}
+
 export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
   if (!input.grounded || input.speed < EPS) return idle();
 
@@ -145,8 +170,21 @@ export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
   const af = Math.abs(input.localForward);
   const ar = Math.abs(input.localRight);
   const sum = af + ar + EPS;
-  const wF = af / sum;
-  const wS = ar / sum;
+  /**
+   * v9s.13：侧后方不再两轴混合。
+   *
+   * 侧后方（前向分量 < 0 且侧向分量不小）时，旧实现把速度同时摊给前后轴与左右轴：
+   * 脚走对角线、膝盖却只能绕 X 弯，两腿像被斜着拽开（真机上「假人绕后、玩家倒走」最明显）。
+   * 现在按「后退占比」把侧向权重整体并入前后轴，配合 dirF = -1 就是纯后退摆腿：
+   * 膝盖平面始终正对身体前向，读作正常倒着走。
+   */
+  const backKeep = backStrafeKeep(
+    input.localForward / Math.max(input.speed, EPS),
+    cfg.backStrafeStartDeg,
+    cfg.backStrafeFullDeg,
+  );
+  const wS = (ar / sum) * backKeep;
+  const wF = (af / sum) + (ar / sum) * (1 - backKeep);
   const dirF = input.localForward >= 0 ? 1 : -1; // 前进 +1 / 后退 -1
   const dirR = input.localRight >= 0 ? 1 : -1;   // 右移 +1 / 左移 -1
 

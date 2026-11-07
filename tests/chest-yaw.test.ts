@@ -193,7 +193,9 @@ describe('v9o 主角：低速巡航不再「身体走、腿不动」', () => {
  * -------------------------------------------------------------------------- */
 describe('v9o 主角：胸随下盘适当偏转，头仍朝目标', () => {
   it('纯侧移时胸与下盘同向偏转，但幅度更小、符合配置比例', () => {
-    const w = makeWorld();
+    // v9s.13：要的是「朝向分离 + 纯侧移」，威胁注视会把身体转向假人（移动变成侧后方 →
+    // 按新规则改走后退步、hipYaw 归零），所以隔离注视。
+    const w = makeQuietWorld();
     w.modules.targeting = false;
     const rig = makeRig(w.config.moveSpeed);
     const aim = intent({ moveX: 1, moveZ: 0, aimActive: true, aimX: 0, aimZ: 1 });

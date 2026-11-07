@@ -149,6 +149,9 @@ export function createDebugPanel(
   gaitF.add(view.gait, 'strafeHipBoost', 0, 2, 0.05).name('侧移下盘偏转增益');
   gaitF.add(view.gait, 'strafeHipScale', 0, 1, 0.05).name('假人下盘偏转基准');
   gaitF.add(view.gait, 'strafeHipMaxDeg', 0, 120, 1).name('假人下盘偏转上限 (°)');
+  // 侧后方改走后退步：角度越大越晚并入（越大 = 保留更多侧移、滑步更少但腿更斜）
+  gaitF.add(view.gait, 'backStrafeStartDeg', 20, 170, 1).name('侧后方起步角 (°)');
+  gaitF.add(view.gait, 'backStrafeFullDeg', 40, 180, 1).name('完全后退角 (°)');
 
   const stopF = sub(gaitRoot, '停步收相 / 胸朝向');
   stopF.add(view.gait, 'stopBlendSec', 0, 0.8, 0.02).name('停步收相时长 (s)');

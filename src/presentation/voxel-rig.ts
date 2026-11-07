@@ -6,7 +6,7 @@ import type {
   ProgramAnimViewConfig, TurnInPlaceState, VoxelConfig, WeaponId, WeaponMountConfig,
 } from '../core';
 import {
-  solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw,
+  solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
   stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir,
   stopYawFade, solveTurnStep,
 } from './gait';
@@ -881,6 +881,14 @@ export function createVoxelRig(
       const bRightZ = -Math.sin(c.bodyYaw);
       const bodyLocalRight = c.velocity.x * bRightX + c.velocity.z * bRightZ;
       const latRatio = speed > EPS ? clamp(bodyLocalRight / speed, -1, 1) : 0;
+      // v9s.13：侧后方改走后退步，下盘同步回正 —— 已经按后退摆腿再带转下盘，脚会沿
+      // 一条偏斜的前后轴走，把「斜拉」换成「斜退」，方向反而更读不准。
+      const bodyFwdRatio = speed > EPS
+        ? clamp((c.velocity.x * fx + c.velocity.z * fz) / speed, -1, 1)
+        : 1;
+      const backKeep = backStrafeKeep(
+        bodyFwdRatio, gaitCfg.backStrafeStartDeg, gaitCfg.backStrafeFullDeg,
+      );
       // v9n：纯侧移（|latRatio|→1）时多带转一点下盘，把一部分侧移分量变成前后迈步，
       // 避免两腿只有左右摆、看起来「双脚平行拖着走」。前进/后退 lat≈0 时增益为 0，完全不变。
       // ---- v9s · 停步下盘偏差消化 ----
@@ -916,7 +924,7 @@ export function createVoxelRig(
       }
       lastStopYawFade = yawFade;
       const targetHipYaw = strafeHipYaw(
-        latRatio, ori.legYawScale, ori.hipYawMaxDeg, gaitCfg.strafeHipBoost,
+        latRatio * backKeep, ori.legYawScale, ori.hipYawMaxDeg, gaitCfg.strafeHipBoost,
       ) * yawFade;
       hipYaw += (targetHipYaw - hipYaw) * (1 - Math.exp(-ori.hipYawSmoothing * dt));
 

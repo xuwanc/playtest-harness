@@ -631,7 +631,9 @@
       "stopBodyDip": 0.03,
       "stopChestPitch": 0.01,
       "stopPeakRatio": 0.48,
-      "knockGaitScale": 1
+      "knockGaitScale": 1,
+      "backStrafeStartDeg": 100,
+      "backStrafeFullDeg": 132
     },
     "animation": {
       "attack": {

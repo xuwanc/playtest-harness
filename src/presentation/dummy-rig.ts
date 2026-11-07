@@ -5,7 +5,7 @@ import type {
   IKViewConfig, LeanViewConfig, VoxelConfig,
 } from '../core';
 import {
-  solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw,
+  solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
   stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir, stopYawFade,
 } from './gait';
 import type { GaitInput } from './gait';
@@ -274,6 +274,14 @@ export function createDummyRig(
       const latRatio = speed > 1e-6
         ? clamp((s.velocity.x * bodyRightX + s.velocity.z * bodyRightZ) / speed, -1, 1)
         : 0;
+      // v9s.13：侧后方改走后退步，下盘同步回正 —— 否则「已按后退摆腿」再带转下盘，
+      // 脚会沿一个偏斜的前后轴走，等于把斜拉换成斜退，方向读不准。
+      const bodyFwdRatio = speed > 1e-6
+        ? clamp((s.velocity.x * Math.sin(s.bodyYaw) + s.velocity.z * Math.cos(s.bodyYaw)) / speed, -1, 1)
+        : 1;
+      const backKeep = backStrafeKeep(
+        bodyFwdRatio, gaitCfg.backStrafeStartDeg, gaitCfg.backStrafeFullDeg,
+      );
       // v9s：与主角同构的停步下盘偏差消化。latRatio 是方向比值，减速时侧移偏转不会
       // 自然归零，会一直保持到速度几乎为 0 才骤掉 —— 把偏差乘淡出系数消化进收相。
       if (stopYawPhase === 'settled' && lastGateResume
@@ -299,7 +307,7 @@ export function createDummyRig(
         yawFade = clamp(speed / Math.max(1e-6, gaitCfg.stopEnterRatio * referenceSpeed), 0, 1);
       }
       const targetSide = strafeHipYaw(
-        latRatio, gaitCfg.strafeHipScale, gaitCfg.strafeHipMaxDeg, gaitCfg.strafeHipBoost,
+        latRatio * backKeep, gaitCfg.strafeHipScale, gaitCfg.strafeHipMaxDeg, gaitCfg.strafeHipBoost,
       ) * yawFade;
       sideYaw += (targetSide - sideYaw) * (1 - Math.exp(-12 * Math.max(0, frameDt)));
       lower.rotation.y = sideYaw;

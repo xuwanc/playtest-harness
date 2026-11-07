@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createVoxelRig } from '../src/presentation/voxel-rig';
-import { makeWorld, intent, run } from './helpers';
+import { makeQuietWorld, makeWorld, intent, run } from './helpers';
 import { rigNodes } from './rig-nodes';
 import type { AppConfig } from '../src/core';
 
@@ -85,7 +85,9 @@ describe('voxel-rig 攻击时上半身不会飞出去', () => {
   });
 
   it('边瞄准边侧移：脚步沿侧移方向摆（rollZ 连续变化）、不前后乱摆、不累积', () => {
-    const w = makeWorld();
+    // v9s.13：本用例要的是「朝向分离 + 纯侧移」的步态，威胁注视会把身体转向附近假人
+    // （移动相对身体变成侧后方 → 按新规则改走后退步），所以用 makeQuietWorld 隔离注视。
+    const w = makeQuietWorld();
     w.modules.targeting = false; // 关掉自动锁定，保证面向由拖拽决定
     const rig = createVoxelRig(
       raw.view.voxel, raw.view.colors, w.config.moveSpeed,
