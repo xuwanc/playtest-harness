@@ -29,3 +29,7 @@ coverage/
 
 # clip-lab 产物（报告 / 截图是本地证据，不入库；工具本体在 tools/clip-lab/）
 /clip-lab/
+
+# Python 缓存
+__pycache__/
+*.pyc
