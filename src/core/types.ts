@@ -596,6 +596,25 @@ export type GazeConfig = {
    * 即使没有主动瞄准也进入威胁注视（接敌准备）。关掉则回到「必须瞄准」的旧口径。
    */
   reactToAttack: boolean;
+  /**
+   * v9s.6：未瞄准、也未被攻击，但「敌对模式」单位主动接近到 threatRange 内时，
+   * 主动进入接敌准备（先转身戒备）。关掉则只保留 瞄准 / 被攻击 两种进入源。
+   */
+  reactToApproach: boolean;
+  /** v9s.6：主动接近进入的归一化威胁阈值（0..1，应 > enterThreshold，避免擦身而过就转身） */
+  approachThreshold: number;
+  /** v9s.6：modeWeight >= 此值才算「敌对」（idle 0.2 / wander 0.45 不算，follow 0.8 起算） */
+  hostileModeWeight: number;
+  /**
+   * v9s.6：离主威胁方向越远的加权衰减强度（0 = 不衰减）。
+   * factor = 1 / (1 + spreadFalloff × (夹角差/π)²)，让加权中心贴近主威胁，
+   * 不被侧翼 / 后方零散敌人把身体拉平。
+   */
+  spreadFalloff: number;
+  /** v9s.6：角色背后的威胁额外权重倍率（0..1，越小越不管背后；1 = 不惩罚） */
+  behindFalloff: number;
+  /** v9s.6：判定「背后」的角度（度，相对身体朝向超过此角算背后），默认 100 */
+  behindAngleDeg: number;
   /** 各假人行为模式基础威胁倍率（复用相机口径） */
   modeWeight: Record<DummyMode, number>;
   /** 假人挥砍 active 帧额外加权 */

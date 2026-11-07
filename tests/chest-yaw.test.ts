@@ -4,7 +4,7 @@ import { createVoxelRig } from '../src/presentation/voxel-rig';
 import { createDummyRig } from '../src/presentation/dummy-rig';
 import { stopBlendGate, chestYawFromHip } from '../src/presentation/gait';
 import type { VoxelRig } from '../src/presentation/voxel-rig';
-import { makeWorld, intent, run } from './helpers';
+import { makeQuietWorld, makeWorld, intent, run } from './helpers';
 import { rigNodes } from './rig-nodes';
 import { MECH_GAIT } from './mech-gait';
 import type { AppConfig } from '../src/core';
@@ -236,7 +236,7 @@ describe('v9o 主角：胸随下盘适当偏转，头仍朝目标', () => {
   });
 
   it('正前跑（下盘不偏）时胸也不偏', () => {
-    const w = makeWorld();
+    const w = makeQuietWorld();
     w.modules.targeting = false;
     const rig = makeRig(w.config.moveSpeed);
     const fwd = intent({ moveX: 0, moveZ: 1 });

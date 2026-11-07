@@ -6,7 +6,7 @@ import { attackGaitDrive } from '../src/presentation/program-anim';
 import { createVoxelRig } from '../src/presentation/voxel-rig';
 import { createDummyRig } from '../src/presentation/dummy-rig';
 import type { VoxelRig } from '../src/presentation/voxel-rig';
-import { makeWorld, intent, run } from './helpers';
+import { makeQuietWorld, makeWorld, intent, run } from './helpers';
 import { rigNodes } from './rig-nodes';
 import { MECH_GAIT } from './mech-gait';
 import type { AppConfig, GaitViewConfig } from '../src/core';
@@ -298,8 +298,8 @@ describe('v9p 主角集成：停步时前脚踩出、身体微前移、再收回
   });
 
   it('惯性确实让前脚多踩出去：峰值帧双腿俯仰大于关闭惯性时', () => {
-    const wOn = makeWorld(); wOn.modules.targeting = false;
-    const wOff = makeWorld(); wOff.modules.targeting = false;
+    const wOn = makeQuietWorld(); wOn.modules.targeting = false;
+    const wOff = makeQuietWorld(); wOff.modules.targeting = false;
     const offCfg: GaitViewConfig = {
       ...MECH_GAIT, stopStepPitch: 0, stopTrailPitch: 0, stopStepKnee: 0,
       stopBodyShift: 0, stopChestPitch: 0,

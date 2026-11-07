@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runSteps, snapshot, wrapAngle } from '../src/core';
-import { intent, makeWorld, run } from './helpers';
+import { intent, makeQuietWorld as makeWorld, run } from './helpers';
 
 const HALF_PI = Math.PI / 2;
 

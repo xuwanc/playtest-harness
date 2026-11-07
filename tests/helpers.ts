@@ -16,6 +16,16 @@ export function makeWorld(): World {
   );
 }
 
+/**
+ * 关闭注视模块的世界：等价于 v9s.2 的朝向基线（默认场景 4 个假人就在 8m 内且多为敌对模式，
+ * 会主动进入接敌并改写 bodyYaw）。纯朝向 / 步态 / 索敌测试用这个，注视本身另有专项测试。
+ */
+export function makeQuietWorld(): World {
+  const w = makeWorld();
+  w.modules.gaze = false;
+  return w;
+}
+
 /** 构造完整 Intents：新增字段时只需改 EMPTY_INTENTS，测试不用逐个补。 */
 export function intent(p: Partial<Intents> = {}): Intents {
   return { ...EMPTY_INTENTS, ...p };

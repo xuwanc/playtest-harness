@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { runSteps, snapshot, step, wrapAngle } from '../src/core';
 import type { World } from '../src/core';
-import { intent, makeWorld, run } from './helpers';
+import { intent, makeQuietWorld, makeWorld, run } from './helpers';
 
 /**
  * 造一个「只有一个静止假人」的场景：其余假人挪到范围外并置为 idle，
@@ -46,7 +46,7 @@ describe('智能目标选择', () => {
   });
 
   it('背对敌人时攻击保持原朝向（不会强行扭头）', () => {
-    const w = makeWorld();
+    const w = makeQuietWorld(); // 隔离注视：本测试验证索敌扇区，不涉及接敌转身
     run(w, 1, intent());
     expect(w.targeting.hasTarget).toBe(false);
     run(w, 1, intent({ attackPressed: true }));
