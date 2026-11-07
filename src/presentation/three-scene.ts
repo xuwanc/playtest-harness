@@ -95,6 +95,13 @@ export type SceneView = {
   /** v9s.26：刃身两端的世界坐标 —— 斜俯视截图会把「水平指向远方」看成「竖直」，
    *  验收横扫幅度 / 仰角必须读世界坐标，不能只看截图。纯观测。 */
   bladeWorld(): { base: { x: number; y: number; z: number }; tip: { x: number; y: number; z: number } } | null;
+  /** clip 工具：左右手刃身同时给出（双持看两只手，避免「另一把去哪了」）。 */
+  bladesWorld(): {
+    right: { base: { x: number; y: number; z: number }; tip: { x: number; y: number; z: number } } | null;
+    left: { base: { x: number; y: number; z: number }; tip: { x: number; y: number; z: number } } | null;
+  };
+  /** clip 工具：世界坐标 → 页面像素。截图标注刃身 / 扫角用，纯只读。 */
+  projectPoint(x: number, y: number, z: number): { x: number; y: number };
   /** v9s.15：传送后把相机跟随目标瞬移过去，避免跨场地滑行 */
   snapCamera(x: number, y: number, z: number): void;
   dispose(): void;
@@ -633,6 +640,12 @@ export function createSceneView(
     },
     bladeWorld() {
       return voxel.weaponBlade();
+    },
+    bladesWorld() {
+      return voxel.bladesWorld();
+    },
+    projectPoint(x, y, z) {
+      return projectToScreen(x, y, z);
     },
     weaponDebug() {
       return voxel.weaponDebug();

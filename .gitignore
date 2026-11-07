@@ -26,3 +26,6 @@ npm-debug.log*
 .vite/
 coverage/
 *.tsbuildinfo
+
+# clip-lab 产物（报告 / 截图是本地证据，不入库）
+clip-lab/

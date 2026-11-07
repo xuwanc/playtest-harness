@@ -127,6 +127,11 @@ export type VoxelRig = {
     base: { x: number; y: number; z: number };
     tip: { x: number; y: number; z: number };
   } | null;
+  /** 双持 / 剑盾：同时给出两只手的刃身（无刃或没模型的一侧为 null），供 clip 工具标注。 */
+  bladesWorld(): {
+    right: { base: { x: number; y: number; z: number }; tip: { x: number; y: number; z: number } } | null;
+    left: { base: { x: number; y: number; z: number }; tip: { x: number; y: number; z: number } } | null;
+  };
   dispose(): void;
 };
 
@@ -2095,6 +2100,21 @@ export function createVoxelRig(
         base: { x: bp.x, y: bp.y, z: bp.z },
         tip: { x: tp.x, y: tp.y, z: tp.z },
       };
+    },
+    bladesWorld() {
+      const read = (g: THREE.Object3D | undefined) => {
+        if (!g) return null;
+        const bb = g.getObjectByName('bladeBase');
+        const tt = g.getObjectByName('bladeTip');
+        if (!bb || !tt) return null;
+        bb.updateWorldMatrix(true, false);
+        tt.updateWorldMatrix(true, false);
+        const bp = bb.getWorldPosition(new THREE.Vector3());
+        const tp = tt.getWorldPosition(new THREE.Vector3());
+        return { base: { x: bp.x, y: bp.y, z: bp.z }, tip: { x: tp.x, y: tp.y, z: tp.z } };
+      };
+      if (!currentWeapon) return { right: null, left: null };
+      return { right: read(parts[currentWeapon].right), left: read(parts[currentWeapon].left) };
     },
     dispose(): void {
       root.traverse((obj) => {

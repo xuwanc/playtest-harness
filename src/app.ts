@@ -102,6 +102,8 @@ export function startApp(): void {
 
   // v8e：用户缩放倍率（纯表现层状态，不进 Core / 快照）；游戏复位时归 1
   let userZoom = 1;
+  /** v9s.27 clip 工具台：锁住画面，主循环不再刷姿态（否则截图抓到的是下一帧待机）。 */
+  let clipHold = false;
 
   const input = createInput({
     maxRadiusPx: () => VIEW_CONFIG.joystick.maxRadiusPx,
@@ -184,6 +186,40 @@ export function startApp(): void {
     swingDebug: () => view.swingDebug(),
     // v9s.26：刃身两端世界坐标（验收横扫仰角，避免被斜俯视截图误导）
     bladeWorld: () => view.bladeWorld(),
+    projectPoint: (x: number, y: number, z: number) => view.projectPoint(x, y, z),
+    bladesWorld: () => view.bladesWorld(),
+    /**
+     * v9s.27 clip 工具台：把表现层定格到「某武器 · 某连击段 · 某进度」。
+     * 只改 combat 的表现入参并跑真实 render()，不推进 Core、不触发判定 ——
+     * 因此读到的手臂链 / 挂点反解 / 刀光全都是真机链路，不是另算一套。
+     */
+    clipLab: {
+      clips: () => Object.keys(VIEW_CONFIG.animation.swing?.clips ?? {}),
+      preview: (opts: { weapon: WeaponId; comboIndex: number; progress: number; warm?: number }) => {
+        const cb = world.combat;
+        const saved = { ...cb };
+        cb.weapon = opts.weapon;
+        cb.phase = 'active';
+        cb.comboIndex = Math.max(1, Math.min(3, Math.floor(opts.comboIndex)));
+        cb.attackProgress = Math.max(0, Math.min(1, opts.progress));
+        cb.attackFacing = world.character.bodyYaw;
+        // 多渲染几帧让腕部滞后 / 副手握持 IK 收敛到稳态，避免读到过渡帧
+        const warm = Math.max(1, Math.min(30, Math.floor(opts.warm ?? 12)));
+        clipHold = true; // 先锁画面，再逐帧渲染到目标姿态
+        for (let i = 0; i < warm; i++) view.render(world, 1 / 60);
+        Object.assign(cb, saved);
+        return { ...view.swingDebug(), blade: view.bladeWorld() };
+      },
+      /** 固定朝向，保证不同进度截图可比（不写 Core，只写表现层读的那个值） */
+      face: (yaw: number) => { world.character.bodyYaw = yaw; },
+      /** 推近 / 拉远（纯表现层，等价于滚轮缩放） */
+      zoom: (z: number) => {
+        userZoom = clampZoom(z, 1, VIEW_CONFIG.zoom.min, VIEW_CONFIG.zoom.max);
+        view.setZoom(userZoom);
+      },
+      /** 解锁画面，交还主循环 */
+      release: () => { clipHold = false; },
+    },
     // v9s.24：腕部滞后读数（武器相对手的自由度）
     weaponDebug: () => view.weaponDebug(),
     gripDebug: () => view.gripDebug(),
@@ -237,7 +273,7 @@ export function startApp(): void {
     }
 
     syncWeaponButtons(world.combat.weapon);
-    view.render(world, dt);
+    if (!clipHold) view.render(world, dt);
     lab.tick();
     motionDebug.update(world, lastFrame, view.getGroundBasis());
     const diag = view.diagnostics();
