@@ -170,7 +170,7 @@ describe('v9q 停步惯性不再带着脚一起滑', () => {
     w.modules.targeting = false;
     const on = makeRig(MECH_GAIT, ikCfg);
     const off = makeRig({ ...MECH_GAIT, stopBodyShift: 0 }, ikCfg);
-    run(w, 90, intent({ moveX: 0, moveZ: 1 }));
+    run(w, 45, intent({ moveX: 0, moveZ: 1 }));
 
     let maxPelvisGap = 0;
     let maxFootGap = 0;

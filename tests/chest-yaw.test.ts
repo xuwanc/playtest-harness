@@ -155,7 +155,7 @@ describe('v9o 主角：低速巡航不再「身体走、腿不动」', () => {
     const w = makeWorld();
     w.modules.targeting = false;
     const rig = makeRig(w.config.moveSpeed);
-    run(w, 90, intent({ moveX: 0, moveZ: 1 }));    // 先全速跑
+    run(w, 45, intent({ moveX: 0, moveZ: 1 }));    // 先全速跑
     const hold = intent({ moveX: 0.06, moveZ: 0 }); // 切到超低速巡航
 
     let maxLeg = 0;
@@ -175,7 +175,7 @@ describe('v9o 主角：低速巡航不再「身体走、腿不动」', () => {
     const w = makeWorld();
     w.modules.targeting = false;
     const rig = makeRig(w.config.moveSpeed);
-    run(w, 90, intent({ moveX: 0, moveZ: 1 }));   // 先全速跑起来
+    run(w, 45, intent({ moveX: 0, moveZ: 1 }));   // 先全速跑起来
 
     const release = intent({});
     for (let i = 0; i < 90; i++) {

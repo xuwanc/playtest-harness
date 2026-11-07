@@ -120,13 +120,23 @@ export function movementUpdate(world: World, dt: number, intents: Intents): void
   // 复位由 step 层统一处理（世界级操作，包含假人），本模块不再单独截获。
 
   // 1) 输入归一化（世界空间，长度截断到 1）
-  let ix = intents.moveX;
-  let iz = intents.moveZ;
+  //    v9s.20：非法输入直接按 0 处理。输入层由相机基向量换算，一旦表现层给出 NaN
+  //    （坏的 snap / 退化矩阵），NaN 会顺着 velocity → position 污染整个 World，
+  //    再经 separation 传染给所有假人，整帧姿态直接崩掉。这一层是最后一道闸。
+  let ix = Number.isFinite(intents.moveX) ? intents.moveX : 0;
+  let iz = Number.isFinite(intents.moveZ) ? intents.moveZ : 0;
   const ilen = lengthXZ(ix, iz);
   if (ilen > 1) {
     ix /= ilen;
     iz /= ilen;
   }
+
+  // 1.5) 世界边界：贴边时把朝外的输入分量投影掉。
+  //      旧版只靠第 6 步 clamp 位置，速度仍会涨到满速 → 表现层「摆幅满、相位不推进」，
+  //      角色在边界上原地跨步定格（真机读作「手脚在抖」）。
+  const b = cfg.worldBounds;
+  if ((ix > 0 && p.x >= b.maxX - EPS) || (ix < 0 && p.x <= b.minX + EPS)) ix = 0;
+  if ((iz > 0 && p.z >= b.maxZ - EPS) || (iz < 0 && p.z <= b.minZ + EPS)) iz = 0;
 
   // 2) 水平加速 / 摩擦：指数趋近，与帧率无关
   //    攻击与停顿期间自主移动被锁定（attackMoveScale，默认 0），
@@ -217,10 +227,26 @@ export function movementUpdate(world: World, dt: number, intents: Intents): void
     emit(world, 'blocked', 1);
   }
 
-  // 6) 世界边界
-  const b = cfg.worldBounds;
-  p.x = clamp(p.x, b.minX, b.maxX);
-  p.z = clamp(p.z, b.minZ, b.maxZ);
+  // 6) 世界边界：夹紧的同时清掉朝界外的速度 / 击退，
+  //    避免「位置被冻住、速度仍是满格」——那会让步态摆幅拉满而相位不动。
+  if (p.x < b.minX) {
+    p.x = b.minX;
+    if (v.x < 0) v.x = 0;
+    if (world.playerHurt.knockX < 0) world.playerHurt.knockX = 0;
+  } else if (p.x > b.maxX) {
+    p.x = b.maxX;
+    if (v.x > 0) v.x = 0;
+    if (world.playerHurt.knockX > 0) world.playerHurt.knockX = 0;
+  }
+  if (p.z < b.minZ) {
+    p.z = b.minZ;
+    if (v.z < 0) v.z = 0;
+    if (world.playerHurt.knockZ < 0) world.playerHurt.knockZ = 0;
+  } else if (p.z > b.maxZ) {
+    p.z = b.maxZ;
+    if (v.z > 0) v.z = 0;
+    if (world.playerHurt.knockZ > 0) world.playerHurt.knockZ = 0;
+  }
 
   // 7) 自动爬台阶：落地状态下，前方支撑面高度差 <= stepHeight 时直接抬升
   const nearSupport = supportHeight(
@@ -269,6 +295,3 @@ export function movementUpdate(world: World, dt: number, intents: Intents): void
   c.gaitPhase = (c.gaitPhase + (frameDist / stride) * TAU) % TAU;
 }
 
-function clamp(v: number, lo: number, hi: number): number {
-  return v < lo ? lo : v > hi ? hi : v;
-}

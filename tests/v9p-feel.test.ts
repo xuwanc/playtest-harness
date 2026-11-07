@@ -275,7 +275,7 @@ describe('v9p 主角集成：停步时前脚踩出、身体微前移、再收回
     const w = makeWorld();
     w.modules.targeting = false;
     const rig = makeRig();
-    run(w, 90, intent({ moveX: 0, moveZ: 1 }));
+    run(w, 45, intent({ moveX: 0, moveZ: 1 }));
     let maxStep = 0;
     let maxShift = 0;
     for (let i = 0; i < 90; i++) {
@@ -306,8 +306,8 @@ describe('v9p 主角集成：停步时前脚踩出、身体微前移、再收回
     };
     const on = makeRig();
     const off = makeRig({ gait: offCfg });
-    run(wOn, 90, intent({ moveX: 0, moveZ: 1 }));
-    run(wOff, 90, intent({ moveX: 0, moveZ: 1 }));
+    run(wOn, 45, intent({ moveX: 0, moveZ: 1 }));
+    run(wOff, 45, intent({ moveX: 0, moveZ: 1 }));
     let onMax = 0;
     let offMax = 0;
     for (let i = 0; i < 60; i++) {
@@ -331,7 +331,7 @@ describe('v9p 主角集成：停步时前脚踩出、身体微前移、再收回
       stopBodyShift: 0, stopChestPitch: 0,
     };
     const rig = makeRig({ gait: offCfg });
-    run(w, 90, intent({ moveX: 0, moveZ: 1 }));
+    run(w, 45, intent({ moveX: 0, moveZ: 1 }));
     for (let i = 0; i < 60; i++) {
       run(w, 1, intent({}));
       rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt, false);

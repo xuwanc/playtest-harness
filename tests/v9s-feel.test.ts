@@ -292,7 +292,7 @@ describe('v9s 骨架：停步偏差消化与惯性 IK', () => {
     w.modules.turnInPlace = false;
     const on = makeRig(MECH_GAIT, RAW_CONFIG.view.ik);
     const off = makeRig({ ...MECH_GAIT, stopBodyShift: 0 }, RAW_CONFIG.view.ik);
-    run(w, 90, intent({ moveX: 0, moveZ: 1 }));
+    run(w, 45, intent({ moveX: 0, moveZ: 1 }));
 
     let sawShift = false;
     let maxLowerXZ = 0;

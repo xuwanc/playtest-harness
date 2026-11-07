@@ -160,7 +160,7 @@ describe('v9r 停步骨盆下沉但脚钉地', () => {
     w.modules.targeting = false;
     const on = makeRig(MECH_GAIT, ikCfg);
     const off = makeRig({ ...MECH_GAIT, stopBodyDip: 0 }, ikCfg);
-    run(w, 90, intent({ moveX: 0, moveZ: 1 }));
+    run(w, 45, intent({ moveX: 0, moveZ: 1 }));
 
     let maxPelvisDrop = 0;
     let maxFootGap = 0;
@@ -201,7 +201,7 @@ describe('v9r 停步骨盆下沉但脚钉地', () => {
     const w = makeWorld();
     w.modules.targeting = false;
     const rig = makeRig();
-    run(w, 90, intent({ moveX: 0, moveZ: 1 }));
+    run(w, 45, intent({ moveX: 0, moveZ: 1 }));
     let peak = 0;
     for (let i = 0; i < 90; i++) {
       run(w, 1, intent({}));

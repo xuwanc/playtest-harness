@@ -19,10 +19,6 @@ const TAU = Math.PI * 2;
 const DUMMY_BODY_TURN = 7;
 const DUMMY_HEAD_TURN = 18;
 
-function clamp(v: number, lo: number, hi: number): number {
-  return v < lo ? lo : v > hi ? hi : v;
-}
-
 /** 角度归一化到 (-π, π]，走最短弧。 */
 function wrapAngle(a: number): number {
   return Math.atan2(Math.sin(a), Math.cos(a));
@@ -283,6 +279,14 @@ function updateOne(world: World, dt: number, s: DummyState, cfg: DummyConfig): v
   advanceAttack(world, s, dt, cfg);
 
   const d = desiredDirection(world, s, cfg);
+  // v9s.20 · 贴边时不再朝界外加速。
+  // 假人（尤其是 keep-distance 后退）被逼到边界后会一直「想往外走」：位置被 clamp 冻结，
+  // 但 velocity 仍涨到满速 → 表现层拿 speed 当摆幅、gaitPhase 却因位移为 0 不再推进，
+  // 结果就是「站在边界上满幅跨步定格 / 沿边一被推动就抽搐」。
+  // 和撞墙同一套语义：把期望方向投影到边界切向，速度只会保留沿墙分量。
+  const bounds = world.config.worldBounds;
+  if ((d.x > 0 && s.position.x >= bounds.maxX - EPS) || (d.x < 0 && s.position.x <= bounds.minX + EPS)) d.x = 0;
+  if ((d.z > 0 && s.position.z >= bounds.maxZ - EPS) || (d.z < 0 && s.position.z <= bounds.minZ + EPS)) d.z = 0;
   const k = 1 - Math.exp(-Math.max(cfg.acceleration, EPS) * dt);
   s.velocity.x += (d.x * cfg.moveSpeed - s.velocity.x) * k;
   s.velocity.z += (d.z * cfg.moveSpeed - s.velocity.z) * k;
@@ -303,16 +307,42 @@ function updateOne(world: World, dt: number, s: DummyState, cfg: DummyConfig): v
   // 与玩家共用同一套 AABB 碰撞解算：假人不会穿墙、穿窄门洞
   const stepH = world.config.stepHeight;
   const blocked = resolveHorizontal(world.boxes, s.position, cfg.radius, cfg.height, stepH);
-  if (blocked && overlapsAny(world.boxes, s.position, cfg.radius, cfg.height, stepH)) {
-    s.position.x = prevX;
-    s.position.z = prevZ;
-    s.velocity.x = 0;
-    s.velocity.z = 0;
+  if (blocked) {
+    if (overlapsAny(world.boxes, s.position, cfg.radius, cfg.height, stepH)) {
+      // 两侧夹住：推出互相抵消，直接回退本帧水平位移
+      s.position.x = prevX;
+      s.position.z = prevZ;
+      s.velocity.x = 0;
+      s.velocity.z = 0;
+    } else {
+      // 只清「被挡住的轴」：贴着墙斜向走时保留切向速度，不会每帧清零再重新加速而抽搐
+      const ax = s.position.x - prevX;
+      const az = s.position.z - prevZ;
+      if (Math.abs(ax) < Math.abs(s.velocity.x * dt) * 0.5) s.velocity.x = 0;
+      if (Math.abs(az) < Math.abs(s.velocity.z * dt) * 0.5) s.velocity.z = 0;
+    }
   }
 
+  // 世界边界：夹紧的同时清掉朝界外的速度 / 击退，避免「位置冻结但速度满格」的空踩
   const b = world.config.worldBounds;
-  s.position.x = clamp(s.position.x, b.minX, b.maxX);
-  s.position.z = clamp(s.position.z, b.minZ, b.maxZ);
+  if (s.position.x < b.minX) {
+    s.position.x = b.minX;
+    if (s.velocity.x < 0) s.velocity.x = 0;
+    if (s.hurt.knockX < 0) s.hurt.knockX = 0;
+  } else if (s.position.x > b.maxX) {
+    s.position.x = b.maxX;
+    if (s.velocity.x > 0) s.velocity.x = 0;
+    if (s.hurt.knockX > 0) s.hurt.knockX = 0;
+  }
+  if (s.position.z < b.minZ) {
+    s.position.z = b.minZ;
+    if (s.velocity.z < 0) s.velocity.z = 0;
+    if (s.hurt.knockZ < 0) s.hurt.knockZ = 0;
+  } else if (s.position.z > b.maxZ) {
+    s.position.z = b.maxZ;
+    if (s.velocity.z > 0) s.velocity.z = 0;
+    if (s.hurt.knockZ > 0) s.hurt.knockZ = 0;
+  }
 
   // 假人不跳，直接贴合支撑面；矮台阶同样自动爬升
   const sup = supportHeight(
