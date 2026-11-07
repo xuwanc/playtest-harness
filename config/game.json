@@ -746,19 +746,24 @@
       }
     },
     "groundRing": {
-      "playerRadius": 0.72,
-      "dummyRadius": 0.58,
-      "thickness": 0.075,
+      "playerRadiusFactor": 2.3,
+      "dummyRadiusFactor": 2.05,
+      "thicknessFactor": 0.16,
       "arcDeg": 180,
       "selectedArcDeg": 270,
-      "opacity": 0.4,
-      "selectedOpacity": 0.3,
-      "selectedScale": 1.12,
+      "opacity": 0.3,
+      "playerOpacity": 0.44,
+      "selectedOpacity": 0.62,
+      "selectedScale": 1.06,
+      "selectedThicknessScale": 1.6,
       "edgeFade": 0.2,
       "playerColor": "#8fe7ff",
       "neutralColor": "#7fb8d8",
       "lowThreatColor": "#ffc85a",
-      "highThreatColor": "#ff3b30"
+      "highThreatColor": "#ff3b30",
+      "haloRadiusFactor": 1.16,
+      "haloThicknessFactor": 2.6,
+      "haloOpacity": 0.14
     },
     "colors": {
       "ground": "#2b3440",

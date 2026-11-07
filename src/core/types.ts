@@ -1287,26 +1287,33 @@ export type HurtViewConfig = {
  * v9s.9 · 脚下指示半环（玩家 / 假人同构，纯观感）。
  *
  * 环贴地、半透明、两端渐隐；弧心朝屏幕下方（相机侧）。假人默认半环，
- * 被锁定（选中）时弧长涨到 3/4 环、整体略微放大、透明度降低；
+ * 被锁定（选中）时弧长涨到 3/4 环、环带加厚、提亮并叠一层外发光；
  * 颜色由 Core 的威胁读数决定：中立单位冷色，敌对单位低威胁黄 → 高威胁红。
+ *
+ * v9s.10：尺寸不再写死米数，而是按角色体型（`view.voxel.bodyWidth`）比例推导，
+ * 换体型 / 换角色时环自动跟着缩放，不会出现「环比人还宽」。
  */
 export type GroundRingViewConfig = {
-  /** 玩家环半径（米） */
-  playerRadius: number;
-  /** 假人环半径（米） */
-  dummyRadius: number;
-  /** 环带宽度（米） */
-  thickness: number;
+  /** 玩家环半径 = `bodyWidth × 0.5 × 该系数`（2.3 → 约 2.3 个半身宽） */
+  playerRadiusFactor: number;
+  /** 假人环半径 = `bodyWidth × 0.5 × 该系数` */
+  dummyRadiusFactor: number;
+  /** 环带宽度 = `bodyWidth × 该系数`（0.16 → 约 3.5cm） */
+  thicknessFactor: number;
   /** 默认弧长（度），180 = 半环 */
   arcDeg: number;
   /** 选中弧长（度），270 = 3/4 环 */
   selectedArcDeg: number;
-  /** 默认透明度 */
+  /** 未选中透明度（低，降低常驻噪音） */
   opacity: number;
-  /** 选中透明度（降低 = 更淡，避免长期锁定太抢眼） */
+  /** 玩家环基础透明度（应高于未选中假人环：自己是稳定参照） */
+  playerOpacity: number;
+  /** 选中透明度（提高，靠亮度拉开差距） */
   selectedOpacity: number;
-  /** 选中放大倍率 */
+  /** 选中放大倍率（略微，主要靠加厚 / 外发光区分） */
   selectedScale: number;
+  /** 选中时环带加厚倍率 */
+  selectedThicknessScale: number;
   /** 两端渐变占整段弧的比例（0..0.5） */
   edgeFade: number;
   /** 玩家环颜色（中性，不随威胁变化） */
@@ -1317,6 +1324,12 @@ export type GroundRingViewConfig = {
   lowThreatColor: string;
   /** 敌对单位高威胁色 */
   highThreatColor: string;
+  /** 选中外发光半径倍率（相对假人环） */
+  haloRadiusFactor: number;
+  /** 选中外发光环带宽度倍率（相对基础厚度） */
+  haloThicknessFactor: number;
+  /** 选中外发光透明度 */
+  haloOpacity: number;
 };
 
 export type ColorConfig = {

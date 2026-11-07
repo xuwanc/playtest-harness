@@ -3,7 +3,9 @@ import type { GroundBasis } from '../adapters/input';
 import type { Box, ViewConfig, World } from '../core';
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
-import { createGroundRing } from './ground-ring';
+import {
+  createGroundRing, groundRingRadius, playerRingVisual, threatRingColor,
+} from './ground-ring';
 import { dummyThreatLevel, isHostileDummy } from '../core';
 import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
 import { createVoxelRig } from './voxel-rig';
@@ -176,17 +178,24 @@ export function createSceneView(container: HTMLElement, world: World, view: View
   const dummyGroups = dummyRigs.map((r) => r.group);
   const raycaster = new THREE.Raycaster();
 
-  // ---- v9s.9 脚下指示半环（玩家 / 假人同构，世界坐标，不随角色旋转） ----
-  // 默认半环、两端渐变；假人被锁定时涨到 3/4 环、略微放大、透明度降低，
-  // 颜色读 Core 的威胁等级：中立冷色，敌对低威胁黄 → 高威胁红。
+  // ---- v9s.9 / v9s.10 脚下指示半环（世界坐标，不随角色旋转） ----
+  // 尺寸随身体体型推导（bodyWidth × 半身宽 × 系数），不再写死米数；
+  // 玩家环：平时中性半环，接敌时弧长扩展 + 提亮 + 朝向主威胁叠一块「危险扇区」；
+  // 假人环：半环 → 选中 3/4 环 + 加厚 + 提亮 + 外发光，颜色读 Core 威胁等级。
   const ringCfg = view.groundRing;
+  const bodyW = view.voxel.bodyWidth;
+  const playerRadius = groundRingRadius(bodyW, ringCfg.playerRadiusFactor);
+  const dummyRadius = groundRingRadius(bodyW, ringCfg.dummyRadiusFactor);
+  const ringThickness = bodyW * ringCfg.thicknessFactor;
+  const baseArc = (ringCfg.arcDeg * Math.PI) / 180;
+
   const playerRing = createGroundRing({
-    radius: ringCfg.playerRadius,
-    thickness: ringCfg.thickness,
-    arcRad: (ringCfg.arcDeg * Math.PI) / 180,
+    radius: playerRadius,
+    thickness: ringThickness,
+    arcRad: baseArc,
     edgeFade: ringCfg.edgeFade,
     color: ringCfg.playerColor,
-    opacity: ringCfg.opacity,
+    opacity: ringCfg.playerOpacity,
     y: 0.028,
     renderOrder: 6,
   });
@@ -195,9 +204,9 @@ export function createSceneView(container: HTMLElement, world: World, view: View
 
   const dummyRings = world.dummies.map((s) => {
     const ring = createGroundRing({
-      radius: ringCfg.dummyRadius,
-      thickness: ringCfg.thickness,
-      arcRad: (ringCfg.arcDeg * Math.PI) / 180,
+      radius: dummyRadius,
+      thickness: ringThickness,
+      arcRad: baseArc,
       edgeFade: ringCfg.edgeFade,
       color: ringCfg.neutralColor,
       opacity: ringCfg.opacity,
@@ -208,11 +217,28 @@ export function createSceneView(container: HTMLElement, world: World, view: View
     scene.add(ring.mesh);
     return ring;
   });
+  // 选中外发光：更宽更淡的一圈，和主环同色，只负责把「选中」从背景里拔出来
+  const dummyHalos = world.dummies.map((s) => {
+    const halo = createGroundRing({
+      radius: dummyRadius * ringCfg.haloRadiusFactor,
+      thickness: ringThickness * ringCfg.haloThicknessFactor,
+      arcRad: baseArc,
+      edgeFade: ringCfg.edgeFade,
+      color: ringCfg.neutralColor,
+      opacity: 0,
+      y: 0.019,
+      renderOrder: 4,
+    });
+    halo.mesh.name = `dummy-ground-halo-${s.id}`;
+    scene.add(halo.mesh);
+    return halo;
+  });
   const ringColor = new THREE.Color();
   const playerRingColor = new THREE.Color(ringCfg.playerColor);
   const neutralRingColor = new THREE.Color(ringCfg.neutralColor);
   const lowThreatRingColor = new THREE.Color(ringCfg.lowThreatColor);
   const highThreatRingColor = new THREE.Color(ringCfg.highThreatColor);
+
 
   // ---- 战斗特效（全部挂在角色朝向锚点上，局部 +Z = 前方） ----
   const fxAnchor = new THREE.Group();
@@ -385,18 +411,27 @@ export function createSceneView(container: HTMLElement, world: World, view: View
         if (w.dummies[i]) dummyRigs[i].update(w.dummies[i], frameDt);
       }
 
-      // v9s.9：脚下半环 —— 弧心朝相机侧（屏幕下方），假人颜色读 Core 威胁等级
+      // v9s.9 / v9s.10：脚下半环 —— 弧心朝相机侧（屏幕下方），假人颜色读 Core 威胁等级
       const camPos = cam.camera.position;
       const ringYaw = Math.atan2(camPos.x - c.position.x, camPos.z - c.position.z);
+      // 受击守卫剩余比例：刚被打过的 2s 内玩家环额外闪烁（对应 Core 的 hurtHoldSec）
+      const holdSec = w.config.gaze.hurtHoldSec;
+      const sinceHurt = w.time - w.playerHurt.lastAt;
+      const guardRatio = holdSec > 0 && sinceHurt >= 0 && sinceHurt < holdSec
+        ? 1 - sinceHurt / holdSec
+        : 0;
+      const pv = playerRingVisual(w.gaze.active, w.gaze.threat, guardRatio, w.time, ringCfg);
+      threatRingColor(ringColor, playerRingColor, lowThreatRingColor, highThreatRingColor, pv.level);
       playerRing.mesh.position.set(c.position.x, c.position.y + 0.028, c.position.z);
-      playerRing.update(
-        (ringCfg.arcDeg * Math.PI) / 180, ringCfg.opacity, 1, playerRingColor, ringYaw,
-      );
+      playerRing.update(pv.arcRad, pv.opacity, pv.scale, ringColor, ringYaw);
+
       for (let i = 0; i < dummyRings.length; i++) {
         const d = w.dummies[i];
         const ring = dummyRings[i];
+        const halo = dummyHalos[i];
         if (!d) {
           ring.mesh.visible = false;
+          halo.mesh.visible = false;
           continue;
         }
         const selected = w.targeting.hasTarget && w.targeting.targetId === d.id;
@@ -407,12 +442,21 @@ export function createSceneView(container: HTMLElement, world: World, view: View
           ringColor.copy(neutralRingColor);
         }
         const arcDeg = selected ? ringCfg.selectedArcDeg : ringCfg.arcDeg;
-        // 选中：透明度降低 + 略微变大（带一点呼吸，避免像静态贴图）
-        const breath = selected ? 1 + 0.015 * Math.sin(w.time * 2.2 + d.id) : 1;
+        // 选中：3/4 环 + 加厚 + 提亮 + 外发光（呼吸只在选中时出现）
+        const breath = selected ? 1 + 0.02 * Math.sin(w.time * 2.2 + d.id) : 1;
         ring.mesh.position.set(d.position.x, d.position.y + 0.022, d.position.z);
         ring.update(
           (arcDeg * Math.PI) / 180,
           selected ? ringCfg.selectedOpacity : ringCfg.opacity,
+          selected ? ringCfg.selectedScale * breath : 1,
+          ringColor,
+          ringYaw,
+          selected ? ringCfg.selectedThicknessScale : 1,
+        );
+        halo.mesh.position.set(d.position.x, d.position.y + 0.019, d.position.z);
+        halo.update(
+          (arcDeg * Math.PI) / 180,
+          selected ? ringCfg.haloOpacity * (0.75 + 0.25 * breath) : 0,
           selected ? ringCfg.selectedScale * breath : 1,
           ringColor,
           ringYaw,
@@ -614,6 +658,7 @@ export function createSceneView(container: HTMLElement, world: World, view: View
       for (const rig of dummyRigs) rig.dispose();
       playerRing.dispose();
       for (const ring of dummyRings) ring.dispose();
+      for (const halo of dummyHalos) halo.dispose();
       slash.geometry.dispose();
       slashMat.dispose();
       boltGeo.dispose();
