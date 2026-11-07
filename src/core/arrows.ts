@@ -69,6 +69,7 @@ export function fireArrow(world: World, charge: number, yaw: number): ArrowState
     offY: 0,
     offZ: 0,
     yaw,
+    localYaw: 0,
     pitch: 0,
     rest: 0,
     hit: false,
@@ -101,9 +102,15 @@ export function updateArrows(world: World, dt: number): void {
       if (ar.stuckDummy >= 0) {
         const s = world.dummies[ar.stuckDummy];
         if (s) {
-          ar.x = s.position.x + ar.offX;
+          // v9s.18：偏移存的是**假人身体局部坐标**（相对 bodyYaw），
+          // 于是假人原地转身时箭会跟着一起转 —— 箭确实钉在那根「骨骼」上，
+          // 而不是钉在世界坐标里被身体转走。
+          const cos = Math.cos(s.bodyYaw);
+          const sin = Math.sin(s.bodyYaw);
+          ar.x = s.position.x + ar.offX * cos + ar.offZ * sin;
           ar.y = s.position.y + ar.offY;
-          ar.z = s.position.z + ar.offZ;
+          ar.z = s.position.z - ar.offX * sin + ar.offZ * cos;
+          ar.yaw = s.bodyYaw + ar.localYaw;
         }
       }
       next.push(ar);
@@ -145,11 +152,19 @@ export function updateArrows(world: World, dt: number): void {
       ar.z = pz + (nz - pz) * hitT;
       ar.stuck = true;
       ar.stuckDummy = hitIndex;
-      ar.offX = ar.x - s.position.x;
+      const cos = Math.cos(s.bodyYaw);
+      const sin = Math.sin(s.bodyYaw);
+      const wx = ar.x - s.position.x;
+      const wz = ar.z - s.position.z;
+      ar.offX = wx * cos - wz * sin;
+      ar.offZ = wx * sin + wz * cos;
       ar.offY = ar.y - s.position.y;
-      ar.offZ = ar.z - s.position.z;
-      ar.yaw = Math.atan2(ar.vx, ar.vz);
+      const impactYaw = Math.atan2(ar.vx, ar.vz);
+      ar.localYaw = impactYaw - s.bodyYaw;
+      ar.yaw = impactYaw;
       ar.pitch = Math.atan2(-ar.vy, Math.hypot(ar.vx, ar.vz));
+      // v9s.18：命中的是「哪一根」由表现层按插点高度选骨骼（dummy-rig.boneAtWorld），
+      // Core 只保证插点（offX/offY/offZ）在身体局部空间里是稳定的。
       ar.rest = Math.max(0.2, tr.stickSec);
       ar.hit = true;
       const len = Math.hypot(ar.vx, ar.vz);

@@ -108,7 +108,13 @@ describe('测试假人：四种 AI 行为', () => {
     }
     expect(attacks).toBeGreaterThan(0);
     expect(w.dummyAttackCount).toBe(attacks);
-    expect(JSON.stringify(w.character)).toBe(playerBefore);
+    // v9s.18：接敌注视会带来俯仰姿态（headPitch / bodyPitch，纯观感），
+    // 「无伤害」的语义是**物理与朝向**逐字节不变。
+    const phys = (c: typeof w.character) => {
+      const { headPitch, bodyPitch, ...rest } = c;
+      return JSON.stringify(rest);
+    };
+    expect(phys(w.character)).toBe(phys(JSON.parse(playerBefore)));
     expect(w.dummies[3].attackId).toBeGreaterThan(0);
   });
 

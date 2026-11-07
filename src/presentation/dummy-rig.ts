@@ -23,6 +23,14 @@ export type DummyRig = {
   group: THREE.Group;
   /** 姿态完全由 Core 状态驱动，无本地时间累积（flash 除外，纯视觉衰减）。 */
   update(s: DummyState, frameDt: number): void;
+  /**
+   * v9s.18 · 命中点落在哪一根肢体上。
+   *
+   * 把命中点投到骨架的若干段（躯干 / 头 / 两臂 / 两腿）上，取最近的一段，
+   * 返回**该段所属节点**与段上的最近点。箭插住时直接挂到这个节点下，
+   * 于是一条插在胳膊上的箭会跟着胳膊一起动，而不是浮在身体旁边。
+   */
+  boneAtWorld(x: number, y: number, z: number): { node: THREE.Object3D; point: THREE.Vector3 } | null;
   /** v8g：本帧足部 IK 锚定读数（与主角同构，不进 Core / 快照）。 */
   ik(): IKDiagnostics;
   dispose(): void;
@@ -90,6 +98,7 @@ export function createDummyRig(
   // 头部独立枢轴：绕脖子旋转，实现「头先于身体转向目标」（与主角一致，v7b#9）
   const headPivot = new THREE.Group();
   headPivot.name = 'headPivot';                  // v9o：供测试按名查找
+  headPivot.rotation.order = 'YXZ';   // v9s.18：与主角同构，先 yaw 再 pitch
   headPivot.position.y = bodyH;                  // 相对骨盆（脖子在躯干顶）
   upper.add(headPivot);
 
@@ -218,6 +227,56 @@ export function createDummyRig(
 
   return {
     group: root,
+    boneAtWorld(x: number, y: number, z: number): { node: THREE.Object3D; point: THREE.Vector3 } | null {
+      // 段用「节点局部坐标」描述，节点动（转身 / 摆臂 / 抬腿）段就跟着动。
+      const segs: Array<{
+        node: THREE.Object3D; ax: number; ay: number; az: number; bx: number; by: number; bz: number;
+      }> = [
+        // 躯干：骨盆 → 脖子（挂在 upper 下，跟着弯腰 / 侧倾 / 旋身）
+        { node: upper, ax: 0, ay: 0.05, az: 0, bx: 0, by: bodyH, bz: 0 },
+        // 头：脖子 → 头顶
+        { node: headPivot, ax: 0, ay: 0, az: 0, bx: 0, by: H, bz: 0 },
+        // 两臂：肩 → 肘，肘 → 腕
+        { node: armL.root, ax: 0, ay: 0, az: 0, bx: 0, by: -armLen / 2, bz: 0 },
+        { node: armL.joint, ax: 0, ay: 0, az: 0, bx: 0, by: -armLen / 2, bz: 0 },
+        { node: armR.root, ax: 0, ay: 0, az: 0, bx: 0, by: -armLen / 2, bz: 0 },
+        { node: armR.joint, ax: 0, ay: 0, az: 0, bx: 0, by: -armLen / 2, bz: 0 },
+        // 两腿：髋 → 膝，膝 → 踝
+        { node: legL.root, ax: 0, ay: 0, az: 0, bx: 0, by: -legLen / 2, bz: 0 },
+        { node: legL.joint, ax: 0, ay: 0, az: 0, bx: 0, by: -legLen / 2, bz: 0 },
+        { node: legR.root, ax: 0, ay: 0, az: 0, bx: 0, by: -legLen / 2, bz: 0 },
+        { node: legR.joint, ax: 0, ay: 0, az: 0, bx: 0, by: -legLen / 2, bz: 0 },
+      ];
+      const a = new THREE.Vector3();
+      const b = new THREE.Vector3();
+      const p = new THREE.Vector3(x, y, z);
+      const closest = new THREE.Vector3();
+      let best: THREE.Object3D | null = null;
+      let bestDist = Number.POSITIVE_INFINITY;
+      for (const s of segs) {
+        s.node.updateWorldMatrix(true, false);
+        a.set(s.ax, s.ay, s.az);
+        b.set(s.bx, s.by, s.bz);
+        s.node.localToWorld(a);
+        s.node.localToWorld(b);
+        const abx = b.x - a.x;
+        const aby = b.y - a.y;
+        const abz = b.z - a.z;
+        const len2 = abx * abx + aby * aby + abz * abz;
+        let t = len2 > 1e-8 ? ((p.x - a.x) * abx + (p.y - a.y) * aby + (p.z - a.z) * abz) / len2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        const cx = a.x + abx * t;
+        const cy = a.y + aby * t;
+        const cz = a.z + abz * t;
+        const d = (p.x - cx) ** 2 + (p.y - cy) ** 2 + (p.z - cz) ** 2;
+        if (d < bestDist) {
+          bestDist = d;
+          best = s.node;
+          closest.set(cx, cy, cz);
+        }
+      }
+      return best ? { node: best, point: closest.clone() } : null;
+    },
     update(s, frameDt): void {
       root.position.set(s.position.x, s.position.y, s.position.z);
       // 身体用平滑朝向（bodyYaw），头相对身体再补一个差值，实现头身分离（v7b#9）

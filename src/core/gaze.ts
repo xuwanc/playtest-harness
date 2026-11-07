@@ -39,6 +39,7 @@ export function gazeUpdate(world: World, _dt: number, intents: Intents): void {
     g.active = false;
     g.mainId = 0;
     g.mainYaw = 0;
+    g.mainPitch = 0;
     g.centroidYaw = 0;
     g.threatCount = 0;
     g.threat = 0;
@@ -116,6 +117,7 @@ export function gazeUpdate(world: World, _dt: number, intents: Intents): void {
   if (!g.active) {
     g.mainId = 0;
     g.mainYaw = 0;
+    g.mainPitch = 0;
     g.centroidYaw = 0;
     g.threatCount = 0;
     g.threat = 0;
@@ -154,6 +156,13 @@ export function gazeUpdate(world: World, _dt: number, intents: Intents): void {
   }
   g.mainId = main.id;
   g.mainYaw = mainYaw;
+  // v9s.18：注视点取主威胁胸口高度（dummy.height × aimHeightRatio），
+  // 与玩家眼睛高度作差得到仰角 —— 站在台阶下打高处的敌人时头会真的抬起来。
+  const dummy = world.dummies.find((d) => d.id === main.id);
+  const aimY = (dummy ? dummy.position.y : 0)
+    + world.config.dummies.height * clamp(cfg.aimHeightRatio, 0, 1);
+  const eyeY = p.y + world.config.characterHeight * clamp(cfg.eyeHeightRatio, 0, 1);
+  g.mainPitch = Math.atan2(aimY - eyeY, Math.max(EPS, Math.hypot(main.dx, main.dz)));
   g.centroidYaw = sw > EPS ? Math.atan2(sx / sw - p.x, sz / sw - p.z) : mainYaw;
   g.threatCount = threats.length;
   g.threat = threat;

@@ -157,7 +157,13 @@ describe('假人攻击玩家（无伤害）', () => {
     expect(hurtSeen).toBe(true);
     expect(w.playerHurt.type).toBe('light');
     expect(w.playerHurt.timer).toBeGreaterThan(0);
-    expect(JSON.stringify(w.character)).toBe(playerBefore);
+    // v9s.18：俯仰注视（headPitch / bodyPitch）是姿态而非伤害，单独排除；
+    // 位置 / 速度 / 面朝向 / 身体朝向仍必须逐字节不变。
+    const phys = (c: typeof w.character) => {
+      const { headPitch, bodyPitch, ...rest } = c;
+      return JSON.stringify(rest);
+    };
+    expect(phys(w.character)).toBe(phys(JSON.parse(playerBefore)));
   });
 });
 

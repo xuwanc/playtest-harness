@@ -208,11 +208,23 @@ export function createDebugPanel(
   orient.add(view.orientation, 'hipYawMaxDeg', 0, 120, 1).name('下盘带转上限 (°)');
   orient.add(view.orientation, 'hipYawSmoothing', 1, 40, 1).name('下盘带转平滑速率');
 
-  /* ---- v9s：停步下盘偏差消化 + 原地转身 ---- */
+  /* ---- v9s.18：接敌注视（转头 / 抬头的速度与限幅）---- */
+  const gz = cfg.gaze;
+  const gazeF = sub(gaitRoot, '接敌注视 / 俯仰 (v9s.18)');
+  gazeF.add(gz, 'bodyTurnRate', 0.2, 12, 0.1).name('接敌身体转向速率');
+  gazeF.add(gz, 'headTurnRate', 0.5, 30, 0.5).name('接敌头部转向速率');
+  gazeF.add(gz, 'maxHeadSpeedDeg', 30, 900, 10).name('头部最大角速度 (°/s)');
+  gazeF.add(gz, 'maxBodySpeedDeg', 20, 600, 10).name('身体最大角速度 (°/s)');
+  gazeF.add(gz, 'aimHeightRatio', 0.2, 1, 0.05).name('注视点高度（身高比例）');
+  gazeF.add(gz, 'headPitchRate', 0.5, 20, 0.5).name('头部俯仰速率');
+  gazeF.add(gz, 'maxHeadPitchDeg', 0, 60, 1).name('头部俯仰限幅 (°)');
+  gazeF.add(gz, 'bodyPitchScale', 0, 1, 0.05).name('身体俯仰比例');
+  gazeF.add(gz, 'bodyPitchRate', 0.5, 20, 0.5).name('身体俯仰速率');
   const turnF = sub(gaitRoot, '原地转身 / 停步偏差 (v9s)');
   const tip = cfg.turnInPlace;
   turnF.add(tip, 'enabled').name('启用原地转身 (关=纯插值)');
   turnF.add(tip, 'triggerDeg', 20, 180, 5).name('触发夹角 (°)');
+  turnF.add(tip, 'gazeTriggerDeg', 20, 180, 5).name('接敌时触发夹角 (°)');
   turnF.add(tip, 'settleDeg', 0, 60, 1).name('转身保留余角 (°)');
   turnF.add(tip, 'durationSec', 0.1, 1.5, 0.02).name('转身时长 (s)');
   turnF.add(tip, 'idleSpeedRatio', 0, 0.3, 0.01).name('静止速度比上限');
@@ -253,7 +265,11 @@ export function createDebugPanel(
   fight.add(ab.arcane, 'waves', 1, 12, 1).name('每次引导波数');
   fight.add(ab.arcane, 'waveInterval', 0.05, 0.8, 0.01).name('波间隔 (s)');
   fight.add(ab.arcane, 'spreadDeg', 0, 20, 0.5).name('波内散布 (度)');
+  fight.add(ab.arcane, 'spreadTime', 0, 0.6, 0.01).name('出膛散开时长 (s)');
+  fight.add(ab.arcane, 'spawnDelay', 0, 0.2, 0.005).name('波内出膛错落 (s)');
+  fight.add(ab.arcane, 'speedJitter', 0, 0.5, 0.02).name('速度浮动比例');
   fight.add(ab.arcane, 'turnRateDeg', 0, 420, 10).name('制导转向 (度/秒)');
+  fight.add(ab.arcane, 'retargetInterval', 0.05, 1, 0.05).name('重新索敌间隔 (s)');
   fight.add(ab.arcane, 'cooldown', 0, 3, 0.05).name('引导结束冷却 (s)');
   fight.add(ab.arcane, 'speed', 3, 24, 0.5).name('飞弹速度');
   fight.add(ab.arcane, 'moveScale', 0.2, 1, 0.02).name('引导时移速倍率');

@@ -16,6 +16,7 @@ export function initialGazeState(): GazeState {
     active: false,
     mainId: 0,
     mainYaw: 0,
+    mainPitch: 0,
     centroidYaw: 0,
     threatCount: 0,
     threat: 0,
@@ -41,6 +42,8 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
       moveYaw: 0,
       bodyYaw: 0,
       headYaw: 0,
+      headPitch: 0,
+      bodyPitch: 0,
       grounded: true,
       sprinting: false,
       gaitPhase: 0,
@@ -133,6 +136,7 @@ export function resetWorld(world: World): void {
   g.active = false;
   g.mainId = 0;
   g.mainYaw = 0;
+  g.mainPitch = 0;
   g.centroidYaw = 0;
   g.threatCount = 0;
   g.threat = 0;

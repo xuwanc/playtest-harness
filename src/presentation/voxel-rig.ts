@@ -285,6 +285,9 @@ export function createVoxelRig(
   // 头部独立枢轴：绕脖子旋转，实现「头先于身体转向目标方向」
   const headPivot = group();
   headPivot.name = 'headPivot';                    // 供测试按名查找（不依赖 children 下标）
+  // v9s.18：先转头（yaw）再点头（pitch）—— 顺序反了的话，头转到侧面时
+  // 俯仰会绕世界 X 轴，看起来像在歪头。
+  headPivot.rotation.order = 'YXZ';
   headPivot.position.y = ori.headPivotHeight;     // 相对骨盆（配置值 = bodyHeight）
   upper.add(headPivot);
 
@@ -1289,6 +1292,11 @@ export function createVoxelRig(
       // 让头仍朝 Core 给的 headYaw（目标方向）而不是跟着胸一起偏走。
       const spin = combatSpin;
       headPivot.rotation.y = wrapAngle(c.headYaw - c.bodyYaw - spin - chestYaw);
+      // v9s.18：俯仰注视。Core 给的 headPitch 以「+ = 抬头」为正，three 的 rotation.x
+      // 正值是低头（+Z 转向 -Y），所以取反。身体只吃其中一小部分（bodyPitch），
+      // 叠加在上面的惯性前倾之上 —— 「整个人抬眼看」，而不是头单独在脖子上折。
+      headPivot.rotation.x = -clamp(c.headPitch ?? 0, -0.7, 0.7);
+      upper.rotation.x += -clamp(c.bodyPitch ?? 0, -0.4, 0.4);
 
       // 4) v8g 足部 IK 锚定：放在所有姿态层之后，把「骨盆被额外推走」的差值
       //    反解进髋 / 膝角。空中不钉脚（让腿随身体收起）；enabled=false 时整层跳过，

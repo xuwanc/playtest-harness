@@ -53,6 +53,8 @@ describe('奥术：波次齐射', () => {
 
     run(w, 1, intent({ attackHeld: true }));
     expect(w.abilities.channeling).toBe(true);
+    // v9s.18：同一波内按 spawnDelay 错落出膛 → 再推几帧让三发都出来
+    run(w, 6, intent({ attackHeld: true }));
     expect(w.abilities.volleyId).toBe(ARC.waves * ARC.perWave + ARC.perWave);
   });
 
@@ -61,6 +63,8 @@ describe('奥术：波次齐射', () => {
     w.modules.dummies = false;
     run(w, 1, intent({ weaponSlot: 4 }));
     run(w, 1, intent({ attackHeld: true, aimActive: true, aimX: 0, aimZ: 1 }));
+    // v9s.18：出膛错落（每发 delay = i × spawnDelay）→ 等到三发都在场
+    run(w, 6, intent({ attackHeld: true, aimActive: true, aimX: 0, aimZ: 1 }));
 
     const shots = w.abilities.projectiles.slice(0, ARC.perWave);
     expect(shots.length).toBe(ARC.perWave);
@@ -78,6 +82,8 @@ describe('奥术：波次齐射', () => {
       w.modules.dummies = false; // 冻结假人位置，专测转向逻辑
       w.modules.targeting = false;
       w.config.abilities.arcane.turnRateDeg = turnRateDeg;
+      // v9s.18：出膛后先散开 spreadTime 秒才制导。本用例只验转向逻辑，把散开阶段去掉
+      w.config.abilities.arcane.spreadTime = 0;
       w.dummies[0].position.x = 0;
       w.dummies[0].position.z = 3; // 玩家在 (0,8)，正前方 5m
       for (let i = 1; i < w.dummies.length; i++) w.dummies[i].position.z = -12;

@@ -20,6 +20,7 @@ export function initialAbilityState(): AbilityState {
     needsRelease: false,
     channelId: 0,
     volleyId: 0,
+    pending: [],
     projectiles: [],
     rings: [],
     nextId: 0,
@@ -36,38 +37,53 @@ export function resetAbilities(world: World): void {
   a.needsRelease = false;
   // channelId / volleyId / nextId 持久递增不倒退：表现层用「id 变化」触发一次性特效，
   // 复位若清零会与残留特效冲突；飞弹 / 电环实体本身清空即可。
+  a.pending.length = 0;
   a.projectiles.length = 0;
   a.rings.length = 0;
 }
 
 /**
- * 选制导目标：引导朝向锥形内、homingRange 内**最近**的假人。
- * 只做一次快照（发射时），飞行中不再重新选目标 —— 否则一波三发会各自
- * 追不同的人，看起来像「散射追踪」，而不是「齐射压向一个点」。
+ * v9s.18 · 候选目标：引导锥形内、homingRange 内，按距离升序（同距离按索引）。
+ *
+ * 「各自索敌」的第一步：同一波的三枚飞弹轮流取第 0/1/2 近的目标，
+ * 场上多个敌人时能立刻看出它们各追各的（只有一个敌人时自然全部指向它）。
  */
-function pickHomingTarget(world: World, yaw: number): number {
+function candidates(world: World, yaw: number): number[] {
   const cfg = world.config.abilities.arcane;
   const p = world.character.position;
   const cone = Math.max(0, cfg.homingConeDeg) * DEG;
-  let best = -1;
-  let bestDist = Math.max(0, cfg.homingRange);
+  const range = Math.max(0, cfg.homingRange);
+  const list: Array<{ i: number; d: number }> = [];
   for (let i = 0; i < world.dummies.length; i++) {
     const s = world.dummies[i];
     const dx = s.position.x - p.x;
     const dz = s.position.z - p.z;
     const d = Math.hypot(dx, dz);
-    if (d < 1e-3 || d > bestDist) continue;
+    if (d < 1e-3 || d > range) continue;
     if (Math.abs(wrapAngle(Math.atan2(dx, dz) - yaw)) > cone) continue;
-    best = i;
-    bestDist = d;
+    list.push({ i, d });
   }
-  return best;
+  list.sort((a, b) => a.d - b.d || a.i - b.i);
+  return list.map((o) => o.i);
+}
+
+/**
+ * 纯函数伪随机（0..1）：只由波次 / 序号决定，不读写 world.rngState。
+ * 用它做速度浮动 —— 齐射「错落」必须是可复现的，且不能偷走假人游走的随机序列。
+ */
+function jitterAt(wave: number, index: number): number {
+  const x = Math.sin((wave + 1) * 12.9898 + (index + 1) * 78.233) * 43758.5453;
+  return x - Math.floor(x);
 }
 
 /**
  * 发射一波：perWave 枚菱形飞弹，围绕 channelYaw 均匀散布。
- * 侧向出生偏移让三发在起点就分开（而不是重叠成一个亮点再散开），
- * 视觉上能立刻读出「齐射」而不是「一发变粗」。
+ *
+ * v9s.18 起不再「同一帧齐发」：
+ *  - 每枚按 spawnDelay 错开出膛（第 i 枚延迟 i × spawnDelay）；
+ *  - 出生点带侧向偏移 + 各自朝向，出膛后先按发射角直飞 spreadTime 秒（散开），
+ *    之后才各自索敌转向 —— 观感是「炸开后收拢」，而不是「一出膛就并成一条线」；
+ *  - 每枚速度按 speedJitter 浮动，齐射不会像一堵墙一样同速推进。
  */
 function fireWave(world: World): void {
   const a = world.abilities;
@@ -75,34 +91,63 @@ function fireWave(world: World): void {
   const p = world.character.position;
   const n = Math.max(1, Math.floor(cfg.perWave));
   const spread = cfg.spreadDeg * DEG;
-  const target = pickHomingTarget(world, a.channelYaw);
-  const sideStep = 0.16;
+  const step = Math.max(0, cfg.spawnSideStep);
+  const jitter = Math.max(0, Math.min(1, cfg.speedJitter));
+  const targets = candidates(world, a.channelYaw);
   for (let i = 0; i < n; i++) {
     const offset = (i - (n - 1) * 0.5) * spread;
     const yaw = a.channelYaw + offset;
-    const side = (i - (n - 1) * 0.5) * sideStep;
+    const side = (i - (n - 1) * 0.5) * step;
     const dx = Math.sin(yaw);
     const dz = Math.cos(yaw);
-    const pr: ProjectileState = {
-      id: ++a.nextId,
+    a.pending.push({
+      delay: i * Math.max(0, cfg.spawnDelay),
       x: p.x + dx * 0.5 + Math.cos(yaw) * side,
       y: p.y + 1.0,
       z: p.z + dz * 0.5 - Math.sin(yaw) * side,
-      dirX: dx,
-      dirZ: dz,
-      speed: cfg.speed,
+      yaw,
+      speed: cfg.speed * (1 + (jitterAt(a.waveIndex, i) * 2 - 1) * jitter),
+      targetIndex: targets.length > 0 ? targets[i % targets.length] : -1,
+      wave: a.waveIndex,
+    });
+  }
+  emit(world, 'arcane-wave', a.waveIndex, { x: p.x, y: p.y + 1.0, z: p.z });
+}
+
+/** 待出膛倒计时：到点的转成真正的飞弹实体（确定性时间轴，不受帧率影响）。 */
+function spawnPending(world: World, dt: number): void {
+  const a = world.abilities;
+  if (a.pending.length === 0) return;
+  const cfg = world.config.abilities.arcane;
+  const next: typeof a.pending = [];
+  for (const s of a.pending) {
+    s.delay -= dt;
+    if (s.delay > 0) {
+      next.push(s);
+      continue;
+    }
+    const pr: ProjectileState = {
+      id: ++a.nextId,
+      x: s.x,
+      y: s.y,
+      z: s.z,
+      dirX: Math.sin(s.yaw),
+      dirZ: Math.cos(s.yaw),
+      speed: s.speed,
       life: cfg.life,
       radius: cfg.radius,
-      targetIndex: target,
+      targetIndex: s.targetIndex,
       turnRate: Math.max(0, cfg.turnRateDeg) * DEG,
       homing: Math.max(0, cfg.homingTime),
-      wave: a.waveIndex,
+      spread: Math.max(0, cfg.spreadTime),
+      retarget: 0,
+      wave: s.wave,
     };
     a.projectiles.push(pr);
     a.volleyId += 1;
     emit(world, 'projectile-fire', a.volleyId, pr);
   }
-  emit(world, 'arcane-wave', a.waveIndex, { x: p.x, y: p.y + 1.0, z: p.z });
+  a.pending = next;
 }
 
 /** 结束引导：立即进入冷却，并要求先松开按键才能重新开始。 */
@@ -190,11 +235,38 @@ function placeRing(world: World, intents: Intents): void {
 }
 
 /**
- * 飞弹推进 + 制导 + 命中。
+ * v9s.18 · 飞行中重新索敌：以**飞弹自己**为原点，在 homingRange 内、当前航向
+ * homingConeDeg 锥形内取最近假人。返回 -1 表示没有可追的目标（保持直飞）。
+ */
+function acquireTarget(world: World, pr: ProjectileState): number {
+  const cfg = world.config.abilities.arcane;
+  const cone = Math.max(0, cfg.homingConeDeg) * DEG;
+  const range = Math.max(0, cfg.homingRange);
+  const heading = Math.atan2(pr.dirX, pr.dirZ);
+  let best = -1;
+  let bestD = range + EPS;
+  for (let i = 0; i < world.dummies.length; i++) {
+    const s = world.dummies[i];
+    const dx = s.position.x - pr.x;
+    const dz = s.position.z - pr.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 1e-3 || d > bestD) continue;
+    if (Math.abs(wrapAngle(Math.atan2(dx, dz) - heading)) > cone) continue;
+    best = i;
+    bestD = d;
+  }
+  return best;
+}
+
+/**
+ * 飞弹推进 + 各自索敌 + 限速制导 + 命中。
  *
- * 制导是「限速转向」而不是「直接朝目标飞」：每帧最多转 turnRate×dt，
- * 于是近距几乎必中、远距横移目标会擦过 —— 这就是「一点转向修正」的手感来源。
- * 转向只改方向不改速度，弹道长度不受影响。
+ * v9s.18 的时序：
+ *  1. spread > 0：出膛后先按自己的发射角直飞（把齐射「散开」出来），不制导；
+ *  2. 散开结束 → 每 retargetInterval 重新选一次最近的敌人（各自索敌，
+ *     目标倒下 / 走开也能改追别人）；
+ *  3. 转向仍是「限速」而不是「直接朝目标飞」：每帧最多转 turnRate×dt，
+ *     近距几乎必中、远距横移目标会擦过 —— 这就是「一点转向修正」的手感来源。
  */
 function updateProjectiles(world: World, dt: number): void {
   const a = world.abilities;
@@ -204,20 +276,31 @@ function updateProjectiles(world: World, dt: number): void {
   const canHit = world.modules.hits && world.modules.dummies;
   const next: ProjectileState[] = [];
   for (const pr of a.projectiles) {
-    if (pr.homing > 0) pr.homing = Math.max(0, pr.homing - dt);
-    if (pr.targetIndex >= 0 && pr.turnRate > 0 && pr.homing > 0) {
-      const s = world.dummies[pr.targetIndex];
-      if (!s) {
-        pr.targetIndex = -1;
-      } else {
-        const want = Math.atan2(s.position.x - pr.x, s.position.z - pr.z);
-        const cur = Math.atan2(pr.dirX, pr.dirZ);
-        const delta = wrapAngle(want - cur);
-        const max = pr.turnRate * dt;
-        const turn = Math.max(-max, Math.min(max, delta));
-        const yaw = cur + turn;
-        pr.dirX = Math.sin(yaw);
-        pr.dirZ = Math.cos(yaw);
+    if (pr.spread > 0) {
+      // 散开阶段：保持发射角直飞，把队形拉开
+      pr.spread = Math.max(0, pr.spread - dt);
+    } else {
+      if (pr.homing > 0) pr.homing = Math.max(0, pr.homing - dt);
+      // 各自索敌：到点就重新挑一个最近的（锥形内，避免掉头）
+      pr.retarget -= dt;
+      if (pr.retarget <= 0) {
+        pr.retarget = Math.max(0.05, cfg.retargetInterval);
+        pr.targetIndex = acquireTarget(world, pr);
+      }
+      if (pr.targetIndex >= 0 && pr.turnRate > 0 && pr.homing > 0) {
+        const s = world.dummies[pr.targetIndex];
+        if (!s) {
+          pr.targetIndex = -1;
+        } else {
+          const want = Math.atan2(s.position.x - pr.x, s.position.z - pr.z);
+          const cur = Math.atan2(pr.dirX, pr.dirZ);
+          const delta = wrapAngle(want - cur);
+          const max = pr.turnRate * dt;
+          const turn = Math.max(-max, Math.min(max, delta));
+          const yaw = cur + turn;
+          pr.dirX = Math.sin(yaw);
+          pr.dirZ = Math.cos(yaw);
+        }
       }
     }
     pr.x += pr.dirX * pr.speed * dt;
@@ -300,6 +383,8 @@ function updateRings(world: World, dt: number): void {
 export function abilitiesUpdate(world: World, dt: number, intents: Intents): void {
   updateChannel(world, dt, intents);
   placeRing(world, intents);
+  // v9s.18：先让到点的待发飞弹出膛，再统一推进（同一帧出膛的飞弹不会少走一帧）
+  spawnPending(world, dt);
   updateProjectiles(world, dt);
   updateRings(world, dt);
 }

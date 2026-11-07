@@ -104,7 +104,22 @@ export function turnShouldDrive(world: World, intents: Intents): boolean {
   const look = resolveLookYaw(world, intents, cfg.lookRange);
   if (look === null) return false;
   const delta = wrapAngle(look - world.character.bodyYaw);
-  return Math.abs(delta) > Math.max(0, cfg.triggerDeg) * DEG;
+  return Math.abs(delta) > triggerRad(world, cfg);
+}
+
+/**
+ * v9s.18 · 触发角：威胁注视时用更大的 gazeTriggerDeg。
+ *
+ * 接敌时「左前方的敌人 → 右前方的敌人」只是环视，交给 orientation 的限速插值
+ * 平滑扫过去更像活人；原地转身那个固定 0.45s 的匀速块反而显得急、且会打断平滑曲线。
+ * 只有真的绕到身后（> gazeTriggerDeg）才值得播一次完整的转身踏步。
+ */
+function triggerRad(world: World, cfg: TurnInPlaceConfig): number {
+  const gaze = world.modules.gaze && world.gaze.active;
+  const deg = gaze
+    ? Math.max(cfg.triggerDeg, cfg.gazeTriggerDeg)
+    : cfg.triggerDeg;
+  return Math.max(0, deg) * DEG;
 }
 
 /**
@@ -132,7 +147,7 @@ export function turnInPlaceUpdate(world: World, dt: number, intents: Intents): v
   const c = world.character;
   const delta = wrapAngle(look - c.bodyYaw);
   const abs = Math.abs(delta);
-  const trigger = Math.max(0, cfg.triggerDeg) * DEG;
+  const trigger = triggerRad(world, cfg);
   const dragging = intents.aimActive && Math.hypot(intents.aimX, intents.aimZ) > EPS;
 
   if (t.phase === 'idle') {

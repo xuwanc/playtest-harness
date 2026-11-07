@@ -37,6 +37,7 @@ describe('v9s.4 威胁注视：头部不受「超角改看移动方向」限制'
     w.modules.dummies = false;                 // 冻结 AI，位置由测试控制（gaze 仍读位置）
     w.modules.turnInPlace = false;             // 隔离原地转身，让 body 保持在 0，只看头部限幅
     w.config.orientation.bodyTurnRate = 1e-4;  // body 基本不动，隔离「身体转过去带偏头」
+    w.config.gaze.bodyTurnRate = 1e-4;         // v9s.18：接敌身体走 gaze 自己的速率，一并冻结
     w.config.orientation.maxHeadTurnDeg = 55;
     w.config.gaze.headLookLimitDeg = 55;
     w.config.gaze.headTurnRate = 30;
@@ -71,9 +72,13 @@ describe('v9s.4 接敌准备：移动保持朝向，技能可打断', () => {
     const w = makeWorld();
     placeOnly(w, [[0, 0, 2], [1, 2, 2]]); // 威胁在玩家前方（-Z 侧），centroid≈π
     w.modules.dummies = false;
+    // v9s.18：接敌转身限速后需要更长的帧数才能转到位；把移动速度压到很低，
+    // 保证 1.8s 内不会走出威胁范围（本用例验的是「输入不改朝向」，不是走位距离）
+    w.config.moveSpeed = 0.2;
     const moveAim = intent({ aimActive: true, aimX: 0, aimZ: 1, moveX: 1, moveZ: 0 });
 
-    for (let i = 0; i < 24; i++) step(w, DT, moveAim);
+    // v9s.18：接敌转身改为限速扫视（130°/s 上限），180° 需要约 1.4s —— 给足帧数
+    for (let i = 0; i < 110; i++) step(w, DT, moveAim);
 
     expect(w.gaze.active).toBe(true);
     const body = w.character.bodyYaw;

@@ -485,7 +485,34 @@ export type ProjectileState = {
    * 之后锁定直飞 —— 否则「限速转向」会变成绕目标画圈（转弯半径 = 速度 / 角速度）。
    */
   homing: number;
+  /**
+   * v9s.18：剩余「散开」时间（秒）。> 0 时不制导，沿自己的发射角直飞；
+   * 归零后才开始各自索敌 / 转向。
+   */
+  spread: number;
+  /** v9s.18：距下次重新索敌的剩余时间（秒） */
+  retarget: number;
   /** v9s.17：所属引导波次（0 起），表现层可用它做齐射的错帧效果 */
+  wave: number;
+};
+
+/**
+ * v9s.18 · 待出膛飞弹：同一波不再同帧齐发，而是按 spawnDelay 错落出膛。
+ *
+ * 存的是「出生参数」而不是实体：出膛时才创建 ProjectileState。
+ * 让「散开 / 错落」变成 Core 里的确定性时间轴，暂停 / 时间缩放 / 快照回放全都一致。
+ */
+export type PendingShot = {
+  /** 剩余延迟（秒），<= 0 时出膛 */
+  delay: number;
+  x: number;
+  y: number;
+  z: number;
+  /** 出膛朝向（已含散布角） */
+  yaw: number;
+  speed: number;
+  /** 出膛时快照的目标（-1 = 无目标，直飞） */
+  targetIndex: number;
   wave: number;
 };
 
@@ -518,6 +545,12 @@ export type ArrowState = {
   offZ: number;
   /** 插住后的朝向：yaw 为水平朝向，pitch 为插角（负 = 箭尾朝上） */
   yaw: number;
+  /**
+   * v9s.18：插在假人身上时的**局部朝向**（相对假人身体朝向）。
+   * 假人转身时箭跟着一起转，所以世界 yaw = bodyYaw + localYaw；
+   * 插在地上时无意义（0）。
+   */
+  localYaw: number;
   pitch: number;
   /** 插住后剩余驻留时间（秒），归零移除 */
   rest: number;
@@ -564,6 +597,8 @@ export type AbilityState = {
   channelId: number;
   /** 累计发射数，表现层 / 事件据此触发一次性效果，持久递增不倒退 */
   volleyId: number;
+  /** v9s.18：已定好出生参数、等待错落出膛的飞弹（按 spawnDelay 倒计时） */
+  pending: PendingShot[];
   projectiles: ProjectileState[];
   rings: ShockRingState[];
   /** 全局技能实例 id 自增（飞弹 / 电环共用，保证唯一） */
@@ -585,6 +620,20 @@ export type AbilityConfig = {
     waveInterval: number;
     /** 同一波内相邻飞弹的角度差（度），总散布 = (perWave-1) × 该值 */
     spreadDeg: number;
+    /**
+     * v9s.18：出膛后的「散开」时长（秒）。
+     * 这段时间内飞弹保持自己的发射角直飞（不制导），先在场面上散开一小段，
+     * 之后再各自拐向目标 —— 观感是「炸开后收拢」，而不是「一出膛就并成一条线」。
+     */
+    spreadTime: number;
+    /** v9s.18：同一波内相邻飞弹的出膛间隔（秒），让齐射错落而不是同一帧齐发 */
+    spawnDelay: number;
+    /** v9s.18：每发速度的随机浮动比例（0..1，确定性随机源），错落感主要来自它 */
+    speedJitter: number;
+    /** v9s.18：同一波内飞弹的横向出生偏移（米），让三发在出膛那一刻就不重叠 */
+    spawnSideStep: number;
+    /** v9s.18：飞行中重新索敌的间隔（秒），0 = 只在发射时选一次 */
+    retargetInterval: number;
     /** 制导：发射时在引导朝向 homingConeDeg 锥形内、homingRange 米内选最近目标 */
     homingRange: number;
     homingConeDeg: number;
@@ -751,6 +800,28 @@ export type GazeConfig = {
    * 接敌准备：身体沉稳步步压向威胁中心，头更快锁住主威胁 → 头先于身体到位。
    */
   headTurnRate: number;
+  /**
+   * v9s.18：头部 / 身体的**角速度上限**（度/秒）。
+   * 指数趋近在大角差时首帧就能吃掉 10%+ 的差距（左右切换目标 = 单帧 20°+），
+   * 观感就是「甩头」。限速后原地左右环视变成匀速扫视，不再一帧到位。
+   */
+  maxHeadSpeedDeg: number;
+  maxBodySpeedDeg: number;
+  /**
+   * v9s.18：注视目标高度的取点（占假人身高的比例，0..1）。
+   * 0.75 落在胸口偏上 —— 眼睛看胸口而不是脚下，才有「在看他」的感觉。
+   */
+  aimHeightRatio: number;
+  /** 玩家眼睛高度（占 characterHeight 的比例），用于算俯仰角 */
+  eyeHeightRatio: number;
+  /** 头部俯仰追随速率（1/s） */
+  headPitchRate: number;
+  /** 头部俯仰限幅（度）：目标很近 / 站在台阶下时不至于仰到脖子断 */
+  maxHeadPitchDeg: number;
+  /** 身体俯仰比例（0..1）：头部俯仰的一小部分，几乎察觉不到，但「整个人在看他」 */
+  bodyPitchScale: number;
+  /** 身体俯仰追随速率（1/s）：比头慢一点 → 身体略滞后于视线 */
+  bodyPitchRate: number;
   /** 进入威胁注视的最小归一化威胁阈值（0..1），低于不进入 */
   enterThreshold: number;
   /**
@@ -817,6 +888,11 @@ export type GazeState = {
   mainId: number;
   /** 主威胁朝向（弧度，玩家指向主威胁）；头看向此处 */
   mainYaw: number;
+  /**
+   * v9s.18：主威胁的**仰角**（弧度，+ = 目标更高、需要抬头）。
+   * 取假人身高 aimHeightRatio 处为注视点，与玩家眼睛高度作差后 atan2。
+   */
+  mainPitch: number;
   /** 加权中心朝向（弧度，主威胁 + 最近 N-1 高权威胁）；身体趋向此处 */
   centroidYaw: number;
   /** 参与评估的威胁数（威胁范围内、加权 > 0） */
@@ -969,6 +1045,12 @@ export type TurnInPlaceConfig = {
   lookRange: number;
   /** 触发前需连续满足闸门的时长（秒），防拖拽抖动误触 */
   armSec: number;
+  /**
+   * v9s.18：威胁注视激活时的触发角（度）。默认远大于普通 triggerDeg
+   * （例如 120°）—— 接敌时「左前方 → 右前方」这种前方环视交给 orientation 的
+   * 限速插值平滑扫过去，只有真的绕到身后才播一次完整的原地转身。
+   */
+  gazeTriggerDeg: number;
 };
 
 /**
@@ -1757,6 +1839,18 @@ export type CharacterState = {
   bodyYaw: number;
   /** 头部朝向：更快追随 facing 且相对身体限幅，表现「头先于身体转向目标」 */
   headYaw: number;
+  /**
+   * v9s.18：头部俯仰（弧度，+ = 抬头看高处目标）。
+   * 接敌时看向目标的胸口高度，站在台阶下 / 打高台上的敌人时头会抬起来；
+   * 表现层只负责把它转成 headPivot.rotation.x（取反）。
+   */
+  headPitch: number;
+  /**
+   * v9s.18：上半身俯仰（弧度，+ = 后仰 / 抬头）。
+   * 恒为 headPitch 的一小部分（gaze.bodyPitchScale），且比头略滞后 ——
+   * 让人是「整个人抬眼看」，而不是头单独在脖子上折。
+   */
+  bodyPitch: number;
   grounded: boolean;
   sprinting: boolean;
   gaitPhase: number;

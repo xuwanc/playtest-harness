@@ -19,6 +19,37 @@ function approach(current: number, target: number, rate: number, dt: number): nu
 }
 
 /**
+ * v9s.18 · 带角速度上限的趋近（走最短弧）。
+ *
+ * 纯指数趋近在大角差时首帧就走掉 10%+：左右两个敌人切换时单帧能甩 20°，
+ * 看起来就是「头／身体被瞬移」。这里在指数曲线之外再套一层「每帧最多转 X°」，
+ * 大角差退化成匀速扫视，小角差仍是原来的手感。
+ */
+function approachCapped(
+  current: number, target: number, rate: number, maxSpeed: number, dt: number,
+): number {
+  const delta = wrapAngle(target - current);
+  const eased = delta * (1 - Math.exp(-Math.max(rate, EPS) * dt));
+  const cap = Math.max(maxSpeed, 0) * dt;
+  if (cap <= EPS) return current;
+  return current + clamp(eased, -cap, cap);
+}
+
+/** 同上，但用于俯仰这种无接缝的线性角度。 */
+function approachLinear(
+  current: number, target: number, rate: number, maxSpeed: number, dt: number,
+): number {
+  const eased = (target - current) * (1 - Math.exp(-Math.max(rate, EPS) * dt));
+  const cap = Math.max(maxSpeed, 0) * dt;
+  if (cap <= EPS) return current + eased;
+  return current + clamp(eased, -cap, cap);
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+/**
  * 单帧转角上限（v9h）：与目标夹角 <= snapRad 直接对齐，超过则最多转 maxStep。
  * 纯数学、无状态，保证确定性。
  */
@@ -68,7 +99,14 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   } else if (gazeHold) {
     // 接敌准备：与身体同速压向威胁中心（沉稳），头部用更高速率先锁主威胁；
     // 此处刻意不读移动输入 —— 移动时朝向保持，不跟着摇杆跑。
-    c.facing = approach(c.facing, world.gaze.centroidYaw, o.bodyTurnRate, dt);
+    // v9s.18：改用 gaze 自己的速率 + 角速度上限（原先借 orientation.bodyTurnRate=7，
+    // 左右切换目标时单帧 20°+，观感是「甩头」）。
+    c.facing = approachCapped(
+      c.facing, world.gaze.centroidYaw,
+      world.config.gaze.bodyTurnRate,
+      (world.config.gaze.maxBodySpeedDeg * Math.PI) / 180,
+      dt,
+    );
   } else if (dragging) {
     // 拖拽辅助朝向：统一解析（拖拽 > 锁定目标 > 移动 > 面朝向），
     // 与 abilities.channelYaw 同一套优先级，保证身体朝向与飞弹发射方向一致；
@@ -121,7 +159,18 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   //    静止匀速起步；激活帧 bodyYaw≈旧值，无突变。
   const turning = world.turnInPlace.phase === 'active' || turnShouldDrive(world, intents);
   if (!turning) {
-    c.bodyYaw = approach(c.bodyYaw, bodyTargetYaw, o.bodyTurnRate, dt);
+    if (gazeHold) {
+      // v9s.18：接敌时的身体跟随也走「限速」——左右两个敌人来回切换时，
+      // 身体是匀速扫过去，而不是每换一次目标就抽一下。
+      c.bodyYaw = approachCapped(
+        c.bodyYaw, bodyTargetYaw,
+        world.config.gaze.bodyTurnRate,
+        (world.config.gaze.maxBodySpeedDeg * Math.PI) / 180,
+        dt,
+      );
+    } else {
+      c.bodyYaw = approach(c.bodyYaw, bodyTargetYaw, o.bodyTurnRate, dt);
+    }
   }
 
   // 4) 头部：v9s.3 注视逻辑（快追随 → 头先于身体到位 → 相对身体限幅）
@@ -152,10 +201,46 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   }
   // 威胁注视用更高速率（gaze.headTurnRate > bodyTurnRate）→ 头先于身体锁住主威胁
   const headRate = gazeHold ? world.config.gaze.headTurnRate : o.headTurnRate;
-  let head = approach(c.headYaw, headTarget, headRate, dt);
+  let head = gazeHold
+    ? approachCapped(
+      c.headYaw, headTarget, headRate,
+      (world.config.gaze.maxHeadSpeedDeg * Math.PI) / 180, dt,
+    )
+    : approach(c.headYaw, headTarget, headRate, dt);
   const maxTurn = (o.maxHeadTurnDeg * Math.PI) / 180;
   const rel = wrapAngle(head - c.bodyYaw);
   if (rel > maxTurn) head = c.bodyYaw + maxTurn;
   else if (rel < -maxTurn) head = c.bodyYaw - maxTurn;
   c.headYaw = head;
+
+  // 5) v9s.18 俯仰注视：头先抬 / 低，身体跟着略微俯仰（一小部分 + 略滞后）。
+  //    威胁注视取主威胁胸口高度；否则跟随锁定目标的胸口；无目标回正。
+  //    只在「有明确注视对象」时给仰角 —— 拖拽瞄准没有纵向分量，不参与。
+  const gz = world.config.gaze;
+  let pitchTarget = 0;
+  if (gazeHold) {
+    pitchTarget = world.gaze.mainPitch;
+  } else if (
+    world.config.targeting.targetAssist
+    && world.modules.targeting
+    && world.targeting.hasTarget
+  ) {
+    const d = world.dummies[world.targeting.targetId - 1];
+    if (d) {
+      const eyeY = c.position.y + world.config.characterHeight * clamp(gz.eyeHeightRatio, 0, 1);
+      const aimY = d.position.y + world.config.dummies.height * clamp(gz.aimHeightRatio, 0, 1);
+      const horiz = Math.hypot(d.position.x - c.position.x, d.position.z - c.position.z);
+      pitchTarget = Math.atan2(aimY - eyeY, Math.max(EPS, horiz));
+    }
+  }
+  const maxPitch = (Math.max(0, gz.maxHeadPitchDeg) * Math.PI) / 180;
+  pitchTarget = clamp(pitchTarget, -maxPitch, maxPitch);
+  c.headPitch = approachLinear(
+    c.headPitch, pitchTarget, gz.headPitchRate,
+    (Math.max(0, gz.maxHeadPitchDeg) * 4 * Math.PI) / 180, dt,
+  );
+  c.bodyPitch = approachLinear(
+    c.bodyPitch, c.headPitch * clamp(gz.bodyPitchScale, 0, 1),
+    gz.bodyPitchRate, (Math.max(0, gz.maxHeadPitchDeg) * Math.PI) / 180, dt,
+  );
 }

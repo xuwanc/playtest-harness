@@ -126,6 +126,10 @@ function playerHits(world: World): void {
   const cb = world.combat;
   const cfg = world.config.hits;
   const p = world.character.position;
+  // v9s.18：弓箭的「攻击」只是放箭动作，伤害完全由 Core 的箭矢实体（arrows.ts）结算。
+  // 旧版这里会对 reach.bow = 9m、arc 65° 做一次近战扇形扫描 —— 箭还没飞到、甚至射空，
+  // 前方一片假人就全部受击 / 计数（用户反馈的「没打到人却多人受击」）。
+  if (cb.weapon === 'bow') return;
   const reach = cfg.reach[cb.weapon] ?? 0;
   const cosArc = Math.cos(Math.min(90, Math.max(0, cfg.arcDeg)) * DEG);
   const fx = Math.sin(cb.attackFacing);
@@ -145,7 +149,7 @@ function playerHits(world: World): void {
     // 受击类型：大剑 = 击退重击，弓 / 三段收招 = 重击，其余 = 轻击
     let type: HurtType = 'light';
     if (cb.weapon === 'greatsword') type = 'knock';
-    else if (cb.weapon === 'bow' || cb.comboIndex >= 3) type = 'heavy';
+    else if (cb.comboIndex >= 3) type = 'heavy';
 
     const kb = cfg.knockback[cb.weapon] ?? 0;
     let targetDist = dist;

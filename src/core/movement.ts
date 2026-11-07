@@ -33,6 +33,8 @@ export function resetCharacter(world: World): void {
   c.moveYaw = 0;
   c.bodyYaw = 0;
   c.headYaw = 0;
+  c.headPitch = 0;
+  c.bodyPitch = 0;
   c.grounded = true;
   c.sprinting = false;
   c.gaitPhase = 0;
@@ -69,6 +71,8 @@ export function warpTo(world: World, x: number, z: number): void {
   c.moveYaw = 0;
   c.bodyYaw = 0;
   c.headYaw = 0;
+  c.headPitch = 0;
+  c.bodyPitch = 0;
   c.grounded = true;
   c.sprinting = false;
   c.gaitPhase = 0;

@@ -383,6 +383,8 @@ describe('v9s.1 转身驱动权移交：修 dirJump 与卡顿', () => {
   it('拖拽：激活前 orientation 跳过 approach，bodyYaw 不被预旋（修「转身卡一下」）', () => {
     const w = makeWorld();
     w.modules.dummies = false;
+    // 关掉注视：本用例只验「拖拽分支」的驱动权移交（注视优先级更高，会盖住拖拽）
+    w.modules.gaze = false;
     const start = w.character.bodyYaw;
     // 拖拽瞄准指向背后 (-Z)：facing 会被瞬间拉向 ~π，但 bodyYaw 不该提前甩过去
     run(w, 1, intent({ aimActive: true, aimX: 0, aimZ: -1 }));

@@ -412,6 +412,10 @@ export function createSceneView(
     trailMat: THREE.MeshBasicMaterial;
     glow: THREE.Sprite;
     trail: THREE.Mesh;
+    /** v9s.18：当前渲染的是哪一支箭（0 = 空）；插住时挂到骨骼下，靠它判断要不要重挂 */
+    arrowId: number;
+    /** v9s.18：插在假人身上时被挂到的骨骼节点（null = 世界坐标直挂 scene） */
+    bone: THREE.Object3D | null;
   };
   const arrowVisuals: ArrowVisual[] = Array.from({ length: 10 }, () => {
     const group = new THREE.Group();
@@ -443,7 +447,7 @@ export function createSceneView(
     group.add(shaft, tip, finA, finB, glow, trail);
     group.visible = false;
     scene.add(group);
-    return { group, shaftMat, tipMat, glowMat, trailMat, glow, trail };
+    return { group, shaftMat, tipMat, glowMat, trailMat, glow, trail, arrowId: 0, bone: null };
   });
 
   // ---- 法杖技能实体（v7c #12）：奥术飞弹沿世界方向自由飞行、电环贴地脉冲 ----
@@ -791,7 +795,9 @@ export function createSceneView(
         slashGroup.scale.setScalar(0.9 + cb.comboIndex * 0.13);
       }
 
-      // 奥术飞弹：按实体同步位置 / 半径 / 朝向（组朝飞行方向，只有核心自转），多余的隐藏
+      // 奥术飞弹：按实体同步位置 / 半径 / 朝向（组朝飞行方向，本体不再自转）
+      // v9s.18：去掉核心绕 Y 的自转 —— 菱形梭的尖头必须稳定指向速度方向，
+      // 自转会让「指向哪」读不出来（看起来只是一团在翻滚的碎片）。
       for (let i = 0; i < bolts.length; i++) {
         const pr = w.abilities.projectiles[i];
         const e = bolts[i];
@@ -799,8 +805,7 @@ export function createSceneView(
         if (pr) {
           e.group.position.set(pr.x, pr.y, pr.z);
           e.group.scale.setScalar(pr.radius);
-          e.group.rotation.y = Math.atan2(pr.dirX, pr.dirZ);
-          e.core.rotation.y += frameDt * 6;
+          e.group.rotation.set(0, Math.atan2(pr.dirX, pr.dirZ), 0);
         }
       }
       // 电环：范围圈（内部柔光 + 边界呼吸），边界越接近消失越暗 —— 剩余时间可直接读
@@ -825,14 +830,47 @@ export function createSceneView(
       // ---- 箭矢：直接读 Core 实体（位置 / 俯仰 / 插住状态全部由 Core 算） ----
       // 飞行中保留光晕与拖尾（任意角度都看得见、读得出速度方向）；
       // 插住后关掉拖尾、压暗光晕，只在末尾 0.6s 淡出 —— 读起来就是「钉在那儿」。
+      // v9s.18：命中假人的箭会**挂到被打中的那根骨骼节点下**（dummy-rig.boneAtWorld），
+      // 于是假人转身、抬手、迈步时箭跟着一起动，而不是浮在世界坐标里。
       for (let i = 0; i < arrowVisuals.length; i++) {
         const ar = w.arrows[i];
         const e = arrowVisuals[i];
-        e.group.visible = !!ar;
-        if (!ar) continue;
-        e.group.position.set(ar.x, ar.y, ar.z);
-        // 先水平朝向、再俯仰：YXZ 的矩阵是 Ry·Rx，正好对应「箭尖朝飞行方向」
-        e.group.rotation.set(ar.pitch, ar.yaw, 0, 'YXZ');
+        if (!ar) {
+          e.group.visible = false;
+          if (e.bone) {
+            // 挂回 scene 再隐藏：否则池子复用时它还是某根骨骼的子节点
+            scene.attach(e.group);
+            e.bone = null;
+          }
+          e.arrowId = 0;
+          continue;
+        }
+        const onDummy = ar.stuck && ar.stuckDummy >= 0;
+        // 换了一支箭（或第一次出现）：先归位到世界坐标，再决定要不要挂骨骼
+        if (e.arrowId !== ar.id) {
+          if (e.bone) {
+            scene.attach(e.group);
+            e.bone = null;
+          }
+          e.arrowId = ar.id;
+          e.group.position.set(ar.x, ar.y, ar.z);
+          e.group.rotation.set(ar.pitch, ar.yaw, 0, 'YXZ');
+          if (onDummy) {
+            const rig = dummyRigs[ar.stuckDummy];
+            const hit = rig ? rig.boneAtWorld(ar.x, ar.y, ar.z) : null;
+            if (hit) {
+              // attach 保留世界变换：箭在视觉上不跳，之后由骨骼带着走
+              hit.node.attach(e.group);
+              e.bone = hit.node;
+            }
+          }
+        } else if (!e.bone) {
+          // 飞行中 / 插在地上：每帧按 Core 状态摆放
+          e.group.position.set(ar.x, ar.y, ar.z);
+          // 先水平朝向、再俯仰：YXZ 的矩阵是 Ry·Rx，正好对应「箭尖朝飞行方向」
+          e.group.rotation.set(ar.pitch, ar.yaw, 0, 'YXZ');
+        }
+        e.group.visible = true;
         const fade = ar.stuck
           ? Math.min(1, ar.rest / 0.6)
           : 1;
