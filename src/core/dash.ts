@@ -1,5 +1,6 @@
 import { resolveDashDir } from './aim';
 import { overlapsAny } from './collision';
+import { resetCombat } from './combat';
 import { openLinkWindow } from './links';
 import type { EventType, Intents, World } from './types';
 
@@ -117,14 +118,23 @@ export function dashUpdate(world: World, dt: number, intents: Intents): void {
 
   // 3) 触发
   const c = world.combat;
+  // v9s.19：弓箭的蓄力 / 放箭动作允许被翻滚打断。
+  // 「按住自动连射」之后几乎全程处于蓄力或放箭动作里，若沿用旧的 `!charging && phase idle`
+  // 会长时间锁死冲刺 —— 现在按冲刺就放弃这一箭（不再发射），翻滚优先。
+  const bowBusy = c.weapon === 'bow' && (c.charging || c.phase !== 'idle');
   const canStart = intents.sprintPressed
     && d.cooldown <= 0
     && d.phase === 'idle'
-    && c.phase === 'idle'
-    && !c.charging
+    && (c.phase === 'idle' || bowBusy)
     && world.playerLink.phase === 'idle'; // v9a：派生招进行中不能翻滚 / 闪现
 
   if (canStart) {
+    if (bowBusy) {
+      // 放弃当前这一箭：清掉蓄力与放箭动作（箭已经射出的那部分不受影响）
+      c.charging = false;
+      c.charge = 0;
+      if (c.phase !== 'idle') resetCombat(world);
+    }
     // 方向统一由 aim 解析（拖拽辅助朝向 > 移动输入 > 面朝向），翻滚 / 闪现共用同一套（v7c #11）
     const dir = resolveDashDir(world, intents);
     const dx = dir.x;

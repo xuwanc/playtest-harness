@@ -117,6 +117,8 @@ describe('v9s.18 弓箭：一次放箭只结算一个目标', () => {
   /** 三个假人并排站在正前方 2m（中缝 1.2m），玩家朝 +Z 满蓄一箭。 */
   function fireIntoRow(w: ReturnType<typeof makeWorld>): void {
     w.modules.targeting = false;
+    // 本组只验「一次放箭」的命中归属：关掉自动连射，避免按住 1s 打出第二支
+    w.config.combat.bow.autoFire = false;
     for (const d of w.dummies) {
       d.mode = 'idle';
       d.position.x = 0;

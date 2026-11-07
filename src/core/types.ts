@@ -160,6 +160,11 @@ export type CombatConfig = {
     maxChargeTime: number;
     minChargeToFire: number;
     chargeMoveMultiplier: number;
+    /**
+     * v9s.19：按住不放时蓄满自动放箭，放完立刻重新蓄力（取消「每箭之间的冷却」）。
+     * 手放松手仍可随时提前放出（蓄力 ≥ minChargeToFire 时）。
+     */
+    autoFire: boolean;
     release: CastProfile;
     /**
      * v9s.17：弹道参数。箭由 Core 自己积分（不依赖表现层计时），
@@ -197,6 +202,26 @@ export type BowTrajectoryConfig = {
    * 让箭头刚好入土、箭杆完整露出来。
    */
   groundStickLift: number;
+  /**
+   * v9s.19 · 轻度自动追踪（箭的「一点点」自动瞄准）。
+   *
+   * 只做两件小事，不改变「要瞄」的核心手感：
+   *  1. 出弓时按目标距离解一次抛物线竖直初速（把「抬弓补偿」自动化）；
+   *  2. 飞行前 homingTime 秒内按 turnRateDeg 限速转向目标，歪一点也能擦到。
+   * 目标是「蓄力快、节奏顺」的前提 —— 否则按住连发只是更快地打空。
+   */
+  /** 索敌距离（米）：0 = 关闭自动瞄准，退回纯固定仰角弹道 */
+  homingRange: number;
+  /** 出弓时允许偏航多少度内仍然吸附（度） */
+  homingConeDeg: number;
+  /** 飞行中的最大水平转向角速度（度/秒）：小一点才像「修正」而不是「导弹」 */
+  turnRateDeg: number;
+  /** 允许修正的时长（秒）；之后锁定弹道 */
+  homingTime: number;
+  /** 瞄准点高度（占假人身高的比例）：0.7 落在胸口，箭才会扎在身上而不是脚下 */
+  aimHeightRatio: number;
+  /** 竖直方向的修正加速度上限（米/秒²）：只拉回下坠，不做垂直追踪 */
+  verticalTurnRate: number;
 };
 
 /** idle → windup → active → recovery → settle → idle；settle 是「每段前移后的停顿」。 */
@@ -220,12 +245,6 @@ export type CombatState = {
   phaseTimer: number;
   comboWindow: number;
   queued: boolean;
-  /**
-   * v9s.16：弓箭「后摇 / 冷却期间按下」的缓冲。
-   * 旧版只在 `phase === 'idle'` 时接受 `attackPressed`，于是冷却期按下的那一下被直接丢掉，
-   * 冷却结束后即使仍按住也不会开始蓄力。现在把按下沿记在这里，回到 idle 且仍按住时兑现。
-   */
-  bowQueued: boolean;
   charging: boolean;
   /** 0..1 */
   charge: number;
@@ -556,6 +575,15 @@ export type ArrowState = {
   rest: number;
   /** 是否命中过假人（插在地上为 false） */
   hit: boolean;
+  /**
+   * v9s.19：自动瞄准锁定的目标（假人 id，0 = 无）。出弓时快照，飞行中不换目标；
+   * 目标中途倒下则放弃修正、按当前弹道继续飞。
+   */
+  targetId: number;
+  /** v9s.19：剩余自动修正时间（秒），0 = 锁定弹道 */
+  homing: number;
+  /** v9s.19：最大水平转向角速度（弧度/秒），0 = 不修正 */
+  turnRate: number;
 };
 
 /** 电环：原地放置，存活期内按脉冲对范围内假人结算「僵直 + 轻微击退」。世界坐标，不随玩家移动。 */
@@ -595,6 +623,11 @@ export type AbilityState = {
   needsRelease: boolean;
   /** v9s.17：每次引导递增，表现层据此触发一次起手效果 */
   channelId: number;
+  /**
+   * v9s.19：引导期间的移动速度比例，由技能在开始引导时写入、结束 / 打断时归 1。
+   * 移动模块只读这个值，不再硬编码「法杖 = 0.6」—— 换一个引导型技能也能自洽。
+   */
+  channelMoveScale: number;
   /** 累计发射数，表现层 / 事件据此触发一次性效果，持久递增不倒退 */
   volleyId: number;
   /** v9s.18：已定好出生参数、等待错落出膛的飞弹（按 spawnDelay 倒计时） */
@@ -671,6 +704,43 @@ export type AbilityConfig = {
     /** 命中轻微击退（米） */
     knockback: number;
   };
+};
+
+/* ---------------- v9s.19 技能模块化 / 数据驱动 ---------------- */
+
+/** 技能绑定到哪个输入槽。 */
+export type SkillSlot = 'attack' | 'skill2';
+
+/**
+ * 技能行为模块 id。配置里的 `kind` 直接映射到一个实现：
+ *  - `channelVolley`：按住引导，按波次齐射投射物（奥术飞弹）
+ *  - `groundRing`：原地放置一个周期性脉冲的区域（电环）
+ * 新增技能 = 新写一个模块 + 在配置里加一条，不需要改 abilities / combat。
+ */
+export type SkillKind = 'channelVolley' | 'groundRing';
+
+/**
+ * 一条技能声明（纯数据，可来自 game.json，也可运行时追加）。
+ *
+ * `paramsRef` 与 `params` 二选一：
+ *  - `paramsRef`：指向 `core.abilities.<name>`，用于保留旧配置布局与调试面板热改；
+ *  - `params`：内联参数对象，完全数据驱动的新技能走这条。
+ */
+export type SkillConfig = {
+  id: string;
+  kind: SkillKind;
+  slot: SkillSlot;
+  /** 限定武器；省略 / null = 任意武器都能放 */
+  weapon?: WeaponId | null;
+  enabled?: boolean;
+  paramsRef?: string;
+  params?: Record<string, unknown>;
+};
+
+/** 运行时实例：声明 + 已解析的参数对象（引用同一份配置，热改立即生效）。 */
+export type SkillRuntime = {
+  cfg: SkillConfig;
+  params: AbilityConfig['arcane'] | AbilityConfig['ring'];
 };
 
 /* ---------------- 角色间分离契约 ---------------- */
@@ -807,6 +877,17 @@ export type GazeConfig = {
    */
   maxHeadSpeedDeg: number;
   maxBodySpeedDeg: number;
+  /**
+   * v9s.19：**没有注视目标时**头部回正的速率（1/s）。
+   *
+   * 回正在身体局部空间进行：头相对身体的偏角自己衰减，身体怎么转头就跟着转。
+   * 旧版用世界坐标把 headYaw 拉向 facing，身体转身时头是按「世界角度」追的，
+   * 偏角大时反而比身体转得慢 —— 看起来头被落在后面。回正刻意比跟随慢
+   * （默认 3.5 vs 8），收势时才不会「啪」一下弹回正中。
+   */
+  headReturnRate: number;
+  /** v9s.19：无目标回正的角速度上限（度/秒），避免大偏角时还是一帧甩回去 */
+  headReturnSpeedDeg: number;
   /**
    * v9s.18：注视目标高度的取点（占假人身高的比例，0..1）。
    * 0.75 落在胸口偏上 —— 眼睛看胸口而不是脚下，才有「在看他」的感觉。
@@ -1106,6 +1187,8 @@ export type CoreConfig = {
   links: LinkConfig;
   /** 法杖技能（引导飞弹 / 电环），独立于近战状态机（v7c #12） */
   abilities: AbilityConfig;
+  /** v9s.19：技能声明表（数据驱动入口）。空数组 = 没有任何技能 */
+  skills: SkillConfig[];
   targeting: TargetingConfig;
   hits: HitsConfig;
   separation: SeparationConfig;
@@ -1897,6 +1980,11 @@ export type World = {
   combat: CombatState;
   /** 法杖技能运行时（引导飞弹 / 电环），与近战状态机解耦（v7c #12） */
   abilities: AbilityState;
+  /**
+   * v9s.19：技能实例表（由 config.skills 归一化而来）。
+   * 每个实例带 kind + 自己那份参数；dispatch 只看这张表，不再硬编码「法杖 = 奥术」。
+   */
+  skills: SkillRuntime[];
   /** 本帧外部附加速度（m/s），由战斗模块写入、移动模块消费 */
   impulse: { x: number; z: number };
   /** 当前智能锁定的目标（每帧重算，攻击起手时读取） */

@@ -134,6 +134,8 @@ describe('弓箭：重力弹道', () => {
   it('出弓有仰角、飞行中 y 速度被重力持续减小', () => {
     const w = makeWorld();
     w.modules.dummies = false;
+    // 单发用例：关掉「蓄满自动放箭」，保证 arrows[0] 就是松手那一刻射出的箭
+    w.config.combat.bow.autoFire = false;
     run(w, 1, intent({ weaponSlot: 5 }));
     run(w, 60, intent({ attackPressed: true, attackHeld: true })); // 满蓄
     run(w, 1, intent({ attackHeld: false, attackReleased: true }));

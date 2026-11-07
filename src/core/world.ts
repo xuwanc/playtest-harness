@@ -24,6 +24,7 @@ export function initialGazeState(): GazeState {
 }
 import { clearArrows } from './arrows';
 import { buildBoxes } from './scene';
+import { normalizeSkills } from './skills';
 import type { CoreConfig, SceneConfig, World } from './types';
 
 /** 创建初始世界。配置由外部注入，Core 自身不 import 任何配置文件。 */
@@ -57,6 +58,7 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
     arrows: [],
     arrowSeq: 0,
     abilities: initialAbilityState(),
+    skills: normalizeSkills(core),
     impulse: { x: 0, z: 0 },
     targeting: initialTargetState(),
     turnInPlace: initialTurnInPlaceState(),

@@ -130,15 +130,17 @@ describe('冲刺 / 闪避：物理武器翻滚、法杖闪现', () => {
     expect(w.dash.id).toBe(0);
   });
 
-  it('弓蓄力中禁止翻滚起手', () => {
+  it('弓蓄力中翻滚会打断蓄力（v9s.19：自动连射不再锁死冲刺）', () => {
     const w = makeWorld();
     equip(w, 5); // bow
     run(w, 1, intent({ attackPressed: true, attackHeld: true }));
     expect(w.combat.charging).toBe(true);
-    // 仍按住攻击键（蓄力中）时按冲刺：attackHeld 保持 true，弓不解除蓄力，
-    // combat 仍处于 charging → dash 被 canStart 的 !c.charging 拦截。
+    // 按住攻击的同时按冲刺：翻滚优先，这一箭作废（不发射）
     run(w, 1, intent({ sprintPressed: true, attackHeld: true }));
-    expect(w.dash.id).toBe(0);
+    expect(w.dash.id).toBe(1);
+    expect(w.combat.charging).toBe(false);
+    expect(w.combat.charge).toBe(0);
+    expect(w.arrows.length).toBe(0);
   });
 
   it('无方向输入时朝面朝向翻滚', () => {

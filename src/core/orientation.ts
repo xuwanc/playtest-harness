@@ -180,17 +180,16 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   //    相对身体超过 headLookLimitDeg 时平滑转回看移动方向。
   //    注意：头部**不**做「最近假人」兜底 —— 那是 turn-in-place（身体）的机制，头部只跟
   //    明确的拖拽 / 锁定意图，未锁定时自然看向移动方向。
+  const locked = world.config.targeting.targetAssist
+    && world.modules.targeting
+    && world.targeting.hasTarget;
   let headTarget = c.facing;
   if (gazeActive) {
     // 技能 / 攻击打断期间随战斗朝向，其余时间盯住主威胁
     headTarget = gazeHold ? world.gaze.mainYaw : c.facing;
   } else if (dragging) {
     headTarget = Math.atan2(intents.aimX, intents.aimZ);
-  } else if (
-    world.config.targeting.targetAssist
-    && world.modules.targeting
-    && world.targeting.hasTarget
-  ) {
+  } else if (locked) {
     headTarget = world.targeting.targetYaw;
   }
   if (!gazeActive) {
@@ -199,15 +198,39 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
       headTarget = c.moveYaw; // 普通注视：超过头限制角 → 头看向移动方向
     }
   }
-  // 威胁注视用更高速率（gaze.headTurnRate > bodyTurnRate）→ 头先于身体锁住主威胁
-  const headRate = gazeHold ? world.config.gaze.headTurnRate : o.headTurnRate;
-  let head = gazeHold
-    ? approachCapped(
-      c.headYaw, headTarget, headRate,
-      (world.config.gaze.maxHeadSpeedDeg * Math.PI) / 180, dt,
-    )
-    : approach(c.headYaw, headTarget, headRate, dt);
+  // v9s.19：有没有「明确的注视对象」决定两种完全不同的头部动力学：
+  //   有（威胁注视 / 拖拽 / 锁定）→ 世界坐标高速追随，头先于身体锁住目标；
+  //   无 → **在身体局部空间回正**：headYaw = bodyYaw + 偏角，偏角自己衰减。
+  //        旧版直接在世界坐标把 headYaw 拉向 facing，身体转身时头是按世界角追的，
+  //        偏角一大反而比身体转得慢（看起来头被落在后面）。
+  //        回正速度刻意比跟随慢（headReturnRate 3.5 vs headTurnRate 8）：
+  //        收势时头是「缓缓转回」，不是啪一下弹回正中。
+  const explicit = gazeActive || dragging || locked;
   const maxTurn = (o.maxHeadTurnDeg * Math.PI) / 180;
+  let head: number;
+  if (!explicit) {
+    const cur = wrapAngle(c.headYaw - c.bodyYaw);
+    const want = wrapAngle(headTarget - c.bodyYaw);
+    // 偏角在收（目标偏角更小）→ 用慢速回正；偏角在涨（转向新方向）→ 用正常速率，头仍领先身体
+    const converging = Math.abs(want) < Math.abs(cur) - 1e-9;
+    const rate = converging ? world.config.gaze.headReturnRate : o.headTurnRate;
+    const cap = converging
+      ? (world.config.gaze.headReturnSpeedDeg * Math.PI) / 180
+      : Number.POSITIVE_INFINITY;
+    const next = Number.isFinite(cap)
+      ? approachCapped(cur, want, rate, cap, dt)
+      : approach(cur, want, rate, dt);
+    head = c.bodyYaw + next;
+  } else {
+    // 威胁注视用更高速率（gaze.headTurnRate > bodyTurnRate）→ 头先于身体锁住主威胁
+    const headRate = gazeHold ? world.config.gaze.headTurnRate : o.headTurnRate;
+    head = gazeHold
+      ? approachCapped(
+        c.headYaw, headTarget, headRate,
+        (world.config.gaze.maxHeadSpeedDeg * Math.PI) / 180, dt,
+      )
+      : approach(c.headYaw, headTarget, headRate, dt);
+  }
   const rel = wrapAngle(head - c.bodyYaw);
   if (rel > maxTurn) head = c.bodyYaw + maxTurn;
   else if (rel < -maxTurn) head = c.bodyYaw - maxTurn;
@@ -235,8 +258,10 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   }
   const maxPitch = (Math.max(0, gz.maxHeadPitchDeg) * Math.PI) / 180;
   pitchTarget = clamp(pitchTarget, -maxPitch, maxPitch);
+  // 无注视对象时俯仰也用慢速回正（与 yaw 同一套语义：收势比跟随慢）
+  const pitchRate = explicit ? gz.headPitchRate : Math.min(gz.headPitchRate, gz.headReturnRate);
   c.headPitch = approachLinear(
-    c.headPitch, pitchTarget, gz.headPitchRate,
+    c.headPitch, pitchTarget, pitchRate,
     (Math.max(0, gz.maxHeadPitchDeg) * 4 * Math.PI) / 180, dt,
   );
   c.bodyPitch = approachLinear(

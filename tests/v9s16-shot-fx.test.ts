@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { warpTo } from '../src/core';
 import { shotFade, shotOrigin, shotPoint } from '../src/presentation/fx-shot';
-import { intent, makeWorld, run } from './helpers';
+import { CONFIG, intent, makeWorld, run } from './helpers';
 
 /** 把弓箭蓄满并射出去，返回「刚进后摇」的世界。 */
 function fireFullCharge(w = makeWorld()) {
@@ -22,78 +22,86 @@ function holdUntilIdle(w: ReturnType<typeof makeWorld>): number {
   return n;
 }
 
-describe('弓箭：冷却 / 后摇期间的按键缓冲（v9s.16）', () => {
-  it('后摇期间按下并按住 → 回到 idle 的同一帧开始蓄力', () => {
-    const w = fireFullCharge();
-    expect(w.combat.phase).not.toBe('idle');
+describe('弓箭：按住循环蓄力（v9s.19 取消冷却 + 蓄满自动放箭）', () => {
+  const chargeFrames = Math.ceil(CONFIG.core.combat.bow.maxChargeTime * 60);
 
-    // 后摇里再按一下：旧版这一下会被 `phase === 'idle'` 直接过滤掉
-    run(w, 1, intent({ attackPressed: true, attackHeld: true }));
-    expect(w.combat.charging).toBe(false);
-    expect(w.combat.bowQueued).toBe(true);
-
-    holdUntilIdle(w);
-    expect(w.combat.phase).toBe('idle');
-    expect(w.combat.charging).toBe(true);
-    expect(w.combat.bowQueued).toBe(false);
-  });
-
-  it('缓冲兑现后蓄力会正常增长，并能再次射出', () => {
-    const w = fireFullCharge();
-    run(w, 1, intent({ attackPressed: true, attackHeld: true }));
-    holdUntilIdle(w);
-    const before = w.combat.charge;
-    run(w, 30, intent({ attackHeld: true }));
-    expect(w.combat.charge).toBeGreaterThan(before);
-    const id = w.combat.attackId;
-    run(w, 1, intent({ attackHeld: false, attackReleased: true }));
-    expect(w.combat.attackId).toBe(id + 1);
-  });
-
-  it('后摇期间按下但提前松手 → 回到 idle 不蓄力', () => {
-    const w = fireFullCharge();
-    run(w, 1, intent({ attackPressed: true, attackHeld: true }));
-    expect(w.combat.bowQueued).toBe(true);
-    run(w, 1, intent({ attackHeld: false })); // 冷却没结束就松手
-    expect(w.combat.bowQueued).toBe(false);
-    holdUntilIdle(w);
-    expect(w.combat.phase).toBe('idle');
-    expect(w.combat.charging).toBe(false);
-  });
-
-  it('只有按住、没有新的按下沿 → 不会自己开始蓄力（不会自动连发）', () => {
-    const w = fireFullCharge();
-    holdUntilIdle(w);
-    expect(w.combat.phase).toBe('idle');
-    // 没有 attackPressed，只是 attackHeld 为真
-    run(w, 5, intent({ attackHeld: true }));
-    expect(w.combat.charging).toBe(false);
-    expect(w.combat.charge).toBe(0);
-  });
-
-  it('换武器 / 传送会清掉未兑现的缓冲', () => {
-    const a = fireFullCharge();
-    run(a, 1, intent({ attackPressed: true, attackHeld: true }));
-    expect(a.combat.bowQueued).toBe(true);
-    run(a, 1, intent({ weaponSlot: 1 }));
-    expect(a.combat.bowQueued).toBe(false);
-
-    const b = fireFullCharge();
-    run(b, 1, intent({ attackPressed: true, attackHeld: true }));
-    expect(b.combat.bowQueued).toBe(true);
-    warpTo(b, 0, 0);
-    expect(b.combat.bowQueued).toBe(false);
-    expect(b.combat.charging).toBe(false);
-  });
-
-  it('满蓄力释放：lastCharge 接近 1，攻击计数递增', () => {
+  it('按住即蓄力，不需要新的按下沿', () => {
     const w = makeWorld();
     run(w, 1, intent({ weaponSlot: 5 }));
-    const id = w.combat.attackId;
-    run(w, 1, intent({ attackPressed: true, attackHeld: true }));
-    run(w, 90, intent({ attackHeld: true }));
-    expect(w.combat.charge).toBeCloseTo(1, 5);
+    run(w, 1, intent({ attackHeld: true })); // 没有 attackPressed
+    expect(w.combat.charging).toBe(true);
+    run(w, 10, intent({ attackHeld: true }));
+    expect(w.combat.charge).toBeGreaterThan(0);
+  });
+
+  it('蓄满自动放箭，放完仍按住 → 立刻重新蓄力（没有「每箭冷却」）', () => {
+    const w = makeWorld();
+    w.modules.dummies = false;
+    run(w, 1, intent({ weaponSlot: 5 }));
+    const hold = intent({ attackHeld: true });
+    let frames = 0;
+    while (w.arrows.length === 0 && frames < chargeFrames + 10) {
+      run(w, 1, hold);
+      frames += 1;
+    }
+    // 放箭时刻由蓄力时间决定（0.85s），不额外加后摇
+    expect(w.arrows.length).toBe(1);
+    expect(frames).toBeLessThanOrEqual(chargeFrames + 2);
+
+    // 下一帧就重新蓄力 —— 旧版要等 windup+active+recovery+settle（≈0.58s）
+    run(w, 1, hold);
+    expect(w.combat.charging).toBe(true);
+    expect(w.combat.charge).toBeGreaterThan(0);
+  });
+
+  it('按住 2s 至少射出 2 支，节奏由蓄力时间决定而不是蓄力 + 后摇', () => {
+    const w = makeWorld();
+    w.modules.dummies = false;
+    run(w, 1, intent({ weaponSlot: 5 }));
+    run(w, 130, intent({ attackHeld: true }));
+    expect(w.arrows.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('松手提前射出；蓄力不足则取消', () => {
+    const w = makeWorld();
+    w.modules.dummies = false;
+    run(w, 1, intent({ weaponSlot: 5 }));
+    run(w, 20, intent({ attackHeld: true }));
     run(w, 1, intent({ attackHeld: false, attackReleased: true }));
+    expect(w.arrows.length).toBe(1);
+
+    const cancel = makeWorld();
+    cancel.modules.dummies = false;
+    run(cancel, 1, intent({ weaponSlot: 5 }));
+    run(cancel, 1, intent({ attackHeld: true }));
+    run(cancel, 1, intent({ attackHeld: false, attackReleased: true }));
+    expect(cancel.arrows.length).toBe(0);
+    expect(cancel.combat.phase).toBe('idle');
+  });
+
+  it('换武器 / 传送会清掉蓄力', () => {
+    const w = makeWorld();
+    run(w, 1, intent({ weaponSlot: 5 }));
+    run(w, 10, intent({ attackHeld: true }));
+    expect(w.combat.charging).toBe(true);
+    run(w, 1, intent({ weaponSlot: 1 }));
+    expect(w.combat.charging).toBe(false);
+    expect(w.combat.charge).toBe(0);
+
+    const b = makeWorld();
+    run(b, 1, intent({ weaponSlot: 5 }));
+    run(b, 10, intent({ attackHeld: true }));
+    warpTo(b, 0, 0);
+    expect(b.combat.charging).toBe(false);
+    expect(b.combat.charge).toBe(0);
+  });
+
+  it('满蓄自动放箭：lastCharge 接近 1，攻击计数递增', () => {
+    const w = makeWorld();
+    w.modules.dummies = false;
+    run(w, 1, intent({ weaponSlot: 5 }));
+    const id = w.combat.attackId;
+    run(w, chargeFrames + 2, intent({ attackHeld: true }));
     expect(w.combat.attackId).toBe(id + 1);
     expect(w.combat.lastCharge).toBeCloseTo(1, 5);
   });

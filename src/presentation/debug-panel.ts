@@ -211,6 +211,8 @@ export function createDebugPanel(
   /* ---- v9s.18：接敌注视（转头 / 抬头的速度与限幅）---- */
   const gz = cfg.gaze;
   const gazeF = sub(gaitRoot, '接敌注视 / 俯仰 (v9s.18)');
+  gazeF.add(gz, 'headReturnRate', 0.5, 12, 0.1).name('无目标回正速率 (1/s)');
+  gazeF.add(gz, 'headReturnSpeedDeg', 20, 400, 10).name('回正角速度上限 (°/s)');
   gazeF.add(gz, 'bodyTurnRate', 0.2, 12, 0.1).name('接敌身体转向速率');
   gazeF.add(gz, 'headTurnRate', 0.5, 30, 0.5).name('接敌头部转向速率');
   gazeF.add(gz, 'maxHeadSpeedDeg', 30, 900, 10).name('头部最大角速度 (°/s)');
@@ -254,8 +256,13 @@ export function createDebugPanel(
   fight.add(cb, 'autoCombo').name('按住自动连击');
   fight.add(cb.bow, 'maxChargeTime', 0.2, 2, 0.05).name('满蓄力时间 (s)');
   fight.add(cb.bow, 'minChargeToFire', 0, 1, 0.02).name('最小可发射蓄力');
+  fight.add(cb.bow, 'autoFire').name('蓄满自动放箭 (按住连射)');
   fight.add(cb.bow.trajectory, 'gravity', 0, 24, 0.5).name('箭矢重力 (m/s²)');
   fight.add(cb.bow.trajectory, 'speedMax', 8, 32, 0.5).name('满蓄初速 (m/s)');
+  fight.add(cb.bow.trajectory, 'homingRange', 0, 30, 1).name('自动瞄准距离 (m)');
+  fight.add(cb.bow.trajectory, 'turnRateDeg', 0, 240, 5).name('箭追踪转向 (°/s)');
+  fight.add(cb.bow.trajectory, 'homingTime', 0, 2, 0.05).name('追踪时长 (s)');
+  fight.add(cb.bow.trajectory, 'aimHeightRatio', 0, 1, 0.05).name('瞄准点高度');
   fight.add(cb.weapons.greatsword, 'windup', 0.02, 0.6, 0.01).name('大剑前摇');
   fight.add(cb.weapons.greatsword, 'active', 0.02, 0.6, 0.01).name('大剑命中帧');
   fight.add(cb.weapons.greatsword, 'recovery', 0.05, 1, 0.01).name('大剑后摇');

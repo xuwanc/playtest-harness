@@ -148,7 +148,8 @@ export function movementUpdate(world: World, dt: number, intents: Intents): void
     weaponMul *= cfg.combat.bow.chargeMoveMultiplier;
   } else if (world.abilities.channeling) {
     // 法杖引导奥术飞弹：不进入近战状态机，因此「可移动引导」；按配置轻微减速（默认 0.85）
-    weaponMul *= cfg.abilities.arcane.moveScale;
+    // v9s.19：引导减速由技能自己写入（不再硬编码 abilities.arcane）
+    weaponMul *= Math.max(0, Math.min(1, world.abilities.channelMoveScale));
   }
   const speed = cfg.moveSpeed * (c.sprinting ? cfg.sprintMultiplier : 1) * weaponMul;
   if (inAction) {

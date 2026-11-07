@@ -125,6 +125,7 @@
         "maxChargeTime": 0.85,
         "minChargeToFire": 0.15,
         "chargeMoveMultiplier": 0.55,
+        "autoFire": true,
         "release": {
           "windup": 0.04,
           "active": 0.12,
@@ -137,10 +138,16 @@
           "launchPitchDeg": 3.5,
           "gravity": 9,
           "maxLife": 2.4,
-          "radius": 0.14,
+          "radius": 0.2,
           "stickMinPitchDeg": 50,
           "groundStickLift": 0.32,
-          "stickSec": 4
+          "stickSec": 4,
+          "homingRange": 14,
+          "homingConeDeg": 30,
+          "turnRateDeg": 90,
+          "homingTime": 0.9,
+          "aimHeightRatio": 0.7,
+          "verticalTurnRate": 18
         }
       }
     },
@@ -176,6 +183,24 @@
         "knockback": 0.35
       }
     },
+    "skills": [
+      {
+        "id": "arcane",
+        "kind": "channelVolley",
+        "slot": "attack",
+        "weapon": "staff",
+        "paramsRef": "arcane",
+        "enabled": true
+      },
+      {
+        "id": "ring",
+        "kind": "groundRing",
+        "slot": "skill2",
+        "weapon": "staff",
+        "paramsRef": "ring",
+        "enabled": true
+      }
+    ],
     "targeting": {
       "range": 7,
       "maxAngleDeg": 90,
@@ -419,6 +444,8 @@
       "headTurnRate": 8,
       "maxHeadSpeedDeg": 300,
       "maxBodySpeedDeg": 130,
+      "headReturnRate": 3.5,
+      "headReturnSpeedDeg": 120,
       "aimHeightRatio": 0.75,
       "eyeHeightRatio": 0.78,
       "headPitchRate": 7,

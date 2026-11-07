@@ -134,18 +134,19 @@ describe('弓箭蓄力攻击', () => {
     const all = [
       ...run(w, 1, intent({ weaponSlot: 5 })),
       ...run(w, 1, intent({ attackPressed: true, attackHeld: true })),
-      ...run(w, 60, intent({ attackHeld: true })),
+      // v9s.19：蓄满会自动放箭，这里只按 0.5s（< maxChargeTime）验证蓄力读数
+      ...run(w, 30, intent({ attackHeld: true })),
     ];
     expect(w.combat.charging).toBe(true);
-    expect(w.combat.charge).toBeGreaterThan(0.5);
+    expect(w.combat.charge).toBeGreaterThan(0.4);
     all.push(...run(w, 1, intent({ attackReleased: true })));
 
     const rel = all.filter((e) => e.type === 'charge-release');
     expect(rel).toHaveLength(1);
-    expect(rel[0].value).toBeGreaterThan(0.5);
+    expect(rel[0].value).toBeGreaterThan(0.4);
     expect(w.combat.charging).toBe(false);
     expect(w.combat.charge).toBe(0);
-    expect(w.combat.lastCharge).toBeGreaterThan(0.5);
+    expect(w.combat.lastCharge).toBeGreaterThan(0.4);
     expect(all.some((e) => e.type === 'attack-start')).toBe(true);
   });
 

@@ -23,7 +23,6 @@ export function resetCombat(world: World): void {
   c.phaseTimer = 0;
   c.comboWindow = 0;
   c.queued = false;
-  c.bowQueued = false;
   c.charging = false;
   c.charge = 0;
   c.attackProgress = 0;
@@ -40,7 +39,6 @@ export function initialCombatState(weaponSlot: number) {
     phaseTimer: 0,
     comboWindow: 0,
     queued: false,
-    bowQueued: false,
     charging: false,
     charge: 0,
     attackProgress: 0,
@@ -266,35 +264,36 @@ export function combatUpdate(world: World, dt: number, intents: Intents): void {
     // 刻意留空分支：法杖 comboCount = 0、不蓄力、不进近战状态机，combat.phase 保持 idle，
     // 才能让「按住引导」时移动模块完全不锁速（v7c #12）。
   } else if (c.weapon === 'bow') {
-    // 弓箭：按住蓄力，松开释放；蓄力不足则取消。
-    // v9s.16：后摇 / 冷却期间的按下不再被丢掉 —— 记进 bowQueued（按下沿是瞬时的，
-    // 而 phase 要等 windup + active + recovery + settle 走完才回 idle，旧版正好把这段的
-    // 按键全过滤掉），回到 idle 且仍按住时立刻兑现为蓄力。松手则放弃缓冲。
+    // 弓箭（v9s.19）：按住即蓄力，蓄满自动放箭，放完立刻重新蓄力 —— 没有「每箭之间的冷却」。
+    //
+    // 旧版要等 phase 回到 idle 才允许下一次蓄力（windup+active+recovery+settle ≈ 0.58s），
+    // 于是按住不放只是「射一箭 → 卡半秒 → 再蓄力」，节奏是断的。现在蓄力与放箭动作解耦：
+    // 释放只负责播 0.42s 的放箭动画，蓄力从下一帧就能开始，满蓄时动作早就播完了。
+    // 松手仍可提前射出（蓄力 ≥ minChargeToFire），不强制等满。
     if (!dashing && !world.playerLink.consumedAttack) {
-      if (intents.attackPressed && c.phase !== 'idle') c.bowQueued = true;
-      if (!intents.attackHeld && !c.charging) c.bowQueued = false;
-      const wantDraw = c.phase === 'idle' && !c.charging && intents.attackHeld
-        && (intents.attackPressed || c.bowQueued);
-      if (wantDraw) {
-        c.bowQueued = false;
-        c.charging = true;
+      if (intents.attackHeld) {
+        if (!c.charging) {
+          c.charging = true;
+          c.charge = 0;
+          emit(world, 'charge-start', 0);
+        }
+        c.charge = Math.min(1, c.charge + dt / Math.max(cfg.bow.maxChargeTime, EPS));
+        if (cfg.bow.autoFire && c.charge >= 1) {
+          c.charging = false;
+          const charge = c.charge;
+          c.charge = 0;
+          startBowRelease(world, intents, charge);
+        }
+      } else if (c.charging) {
+        // 松手：按当前蓄力释放；不足最小蓄力则视为取消
+        c.charging = false;
+        const charge = c.charge;
         c.charge = 0;
-        emit(world, 'charge-start', 0);
-      }
-    }
-    if (c.charging && intents.attackHeld) {
-      c.charge = Math.min(1, c.charge + dt / Math.max(cfg.bow.maxChargeTime, EPS));
-    }
-    // 释放判定改用「失去按住」(attackHeld 转 false) 为主、attackReleased 沿为辅：
-    // 只要按钮 / 手指抬起，attackHeld 即变 false，蓄力必定结束，避免「抬按钮却卡在蓄力」。
-    if (c.charging && !dashing && (intents.attackReleased || !intents.attackHeld)) {
-      c.charging = false;
-      const charge = c.charge;
-      c.charge = 0;
-      if (charge >= cfg.bow.minChargeToFire && c.phase === 'idle') {
-        startBowRelease(world, intents, charge);
-      } else {
-        emit(world, 'charge-release', 0);
+        if (charge >= cfg.bow.minChargeToFire) {
+          startBowRelease(world, intents, charge);
+        } else {
+          emit(world, 'charge-release', 0);
+        }
       }
     }
   }
