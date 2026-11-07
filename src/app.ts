@@ -182,6 +182,9 @@ export function startApp(): void {
     gaitDebug: () => view.gaitDebug(),
     // v9s.23：挥击姿态（段号 / 方向 / 躯干三轴 / 肩部位移）
     swingDebug: () => view.swingDebug(),
+    // v9s.24：腕部滞后读数（武器相对手的自由度）
+    weaponDebug: () => view.weaponDebug(),
+    gripDebug: () => view.gripDebug(),
     // v9s.15：测试工位 —— 自动化验收可直接 goto 逐个工位截图 / 取状态
     lab: {
       stations: SCENE_CONFIG.stations ?? [],

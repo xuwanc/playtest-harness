@@ -81,6 +81,10 @@ export type SceneView = {
   trailDebug(): { count: number; visible: boolean };
   /** v9s.22：角色本帧四肢形变读数（1 = 原长） */
   stretchDebug(): { arm: number; leg: number; torso: number; impact: number };
+  /** v9s.24：腕部滞后读数（武器相对手的自由度），验收「剑不再焊在手上」 */
+  weaponDebug(): { wristPitch: number; wristTwist: number };
+  /** v9s.24：副手握持读数（握持权重 / 实际握点 / 到肩距离） */
+  gripDebug(): { active: boolean; dist: number; gy: number; pitch: number; joint: number; grip: number };
   /** v9s.23：本帧挥击姿态（段号 / 段类型 / 躯干三轴 / 两肩位置），供验收与真机诊断 */
   swingDebug(): {
     seg: number; kind: string; yaw: number; pitch: number; roll: number; strike: number;
@@ -178,6 +182,7 @@ export function createSceneView(
   const voxel = createVoxelRig(
     view.voxel, view.colors, world.config.moveSpeed, view.orientation, view.gait,
     view.weaponMount, view.lean, view.hurt, view.animation, view.ik, view.links,
+    view.weaponWrist,
   );
   // v9s.22：挥击拖尾挂在场景根节点（世界坐标采样，不随角色层级变换）
   const playerTrail = createWeaponTrail(view.weaponTrail);
@@ -621,6 +626,12 @@ export function createSceneView(
     },
     swingDebug() {
       return voxel.swingDebug();
+    },
+    weaponDebug() {
+      return voxel.weaponDebug();
+    },
+    gripDebug() {
+      return voxel.gripDebug();
     },
     render(w, frameDt): void {
       const c = w.character;

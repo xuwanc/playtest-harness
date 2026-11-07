@@ -914,7 +914,19 @@
       "bowPitchDeg": 6,
       "twoHandInsetX": 0.15,
       "twoHandGripY": -0.1,
-      "twoHandMaxStretch": 1.3
+      "twoHandMaxStretch": 1.3,
+      "twoHandMinGrip": 0.62,
+      "twoHandGripStart": 1.02,
+      "twoHandSlideRate": 9
+    },
+    "weaponWrist": {
+      "enabled": true,
+      "lag": 0.042,
+      "maxAngle": 0.72,
+      "rate": 24,
+      "twistLag": 0.03,
+      "maxTwist": 0.5,
+      "runDrag": 0.11
     },
     "lean": {
       "accelGain": 0.02,

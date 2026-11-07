@@ -290,10 +290,21 @@ export function createDebugPanel(
   exagg.add(view.projectiles, 'slashEnabled').name('旧斩击弧 开（已被刀光替代）');
   exagg.add(view.hitstop, 'enabled').name('命中定格 开');
   exagg.add(view.hitstop, 'duration', 0, 0.2, 0.005).name('定格时长 (s)');
+  // v9s.24：武器相对手的自由度 + 副手握持
+  const ww = view.weaponWrist;
+  exagg.add(ww, 'enabled').name('腕部滞后 开（关掉=武器焊在手上）');
+  exagg.add(ww, 'lag', 0, 0.08, 0.002).name('臂速 → 腕滞后');
+  exagg.add(ww, 'maxAngle', 0, 1.2, 0.02).name('腕滞后上限 (rad)');
+  exagg.add(ww, 'rate', 4, 50, 1).name('腕部跟随速率 (1/s)');
+  exagg.add(ww, 'twistLag', 0, 0.06, 0.002).name('躯干扭转 → 剑横甩');
+  exagg.add(ww, 'maxTwist', 0, 0.9, 0.02).name('横甩上限 (rad)');
   const wm = view.weaponMount;
   exagg.add(wm, 'twoHandInsetX', 0, 0.3, 0.01).name('双手武器内收 (m)');
   exagg.add(wm, 'twoHandGripY', -0.5, 0, 0.01).name('副握点在柄上的位置');
   exagg.add(wm, 'twoHandMaxStretch', 1, 1.8, 0.01).name('副手臂长拉伸上限');
+  exagg.add(wm, 'twoHandMinGrip', 0, 1, 0.02).name('最低握持权重（1=永不松手）');
+  exagg.add(wm, 'twoHandGripStart', 1, 1.4, 0.01).name('开始松手的臂展比');
+  exagg.add(wm, 'twoHandSlideRate', 0, 30, 1).name('握点滑柄跟随速率 (1/s)');
   fight.add(cb.bow.trajectory, 'gravity', 0, 24, 0.5).name('箭矢重力 (m/s²)');
   fight.add(cb.bow.trajectory, 'speedMax', 8, 32, 0.5).name('满蓄初速 (m/s)');
   fight.add(cb.bow.trajectory, 'homingRange', 0, 30, 1).name('自动瞄准距离 (m)');

@@ -1713,6 +1713,56 @@ export type WeaponMountConfig = {
    * 超过 1.35 会明显「拉面条」，建议 1.15~1.3。
    */
   twoHandMaxStretch: number;
+  /**
+   * v9s.24：够不到时副手允许松到的最低握持权重（1 = 永不松手）。
+   *
+   * 「全程握死」是靠把臂长拉长 1.3 倍换来的，代价是举顶时那一下胳膊明显变细变长。
+   * 允许在够不到的阶段松到 0.45~0.6，左手会停在柄附近「虚握」而不是被拉成面条 ——
+   * 真实挥大剑时副手本来就会在过顶那一下松开一点再握回去。
+   */
+  twoHandMinGrip: number;
+  /** 开始松手的臂展比（dist / 单臂长）。1.0 = 一伸直就松，1.3 = 拉到极限才松。 */
+  twoHandGripStart: number;
+  /**
+   * v9s.24：副握点沿柄滑动的跟随速率（1/s）。
+   *
+   * 够不到时握点会往主手方向滑。旧版是帧内一次性迭代到目标值，于是手臂姿态一动，
+   * 握点就在两帧之间从柄尾瞬移到护手（「左手跳了一下」）。给一个一阶跟随，
+   * 读起来才是「手沿柄推下去」。0 = 瞬移（旧行为）。
+   */
+  twoHandSlideRate: number;
+};
+
+/**
+ * v9s.24 · 腕部滞后（「武器不再焊在手上」）。
+ *
+ * 旧结构是 hand 直接挂 mount，武器相对手只有 mountPitch 一个角度，且是整段线性插值 ——
+ * 手臂怎么动剑就怎么动，读起来像「剑长在前臂延长线上」。真实握剑时肩、肘、腕是
+ * 三个串联的自由度，腕部会因为惯性**滞后**于手臂：挥出时剑落后，收势时再甩回来。
+ * 这一层把那个滞后量解出来，写在 hand 与 mount 之间新插的 wrist 节点上。
+ *
+ * 纯表现层：只读本帧已写好的手臂 / 躯干角度做差分，不参与 Core，不进快照。
+ */
+export type WeaponWristViewConfig = {
+  enabled: boolean;
+  /** 臂部俯仰角速度 → 腕部滞后角（rad per rad/s）。0.022 ≈ 20 rad/s 时滞后 25° */
+  lag: number;
+  /** 腕部滞后角上限（rad），防止极快挥击时手腕折断 */
+  maxAngle: number;
+  /** 滞后角的一阶平滑速率（1/s）：越小越「软」，越大越跟手 */
+  rate: number;
+  /** 躯干扭转角速度 → 腕部横向甩动（rad per rad/s） */
+  twistLag: number;
+  /** 横向甩动上限（rad） */
+  maxTwist: number;
+  /**
+   * 跑动时剑的后仰角（rad，满速时）。
+   *
+   * 这一项**不受攻击权重缩放** —— 它要解决的正是「非攻击状态下剑像焊在手上」：
+   * 拿着重物跑动时，剑会因为惯性落在手后面一点，角度随速度增大。
+   * 0.10 rad ≈ 5.7°，够读出「有重量」，又不至于看起来像手没握住。
+   */
+  runDrag: number;
 };
 
 /** 受击动画表现参数（弧度 / 强度），只影响观感。 */
@@ -1891,6 +1941,8 @@ export type ViewConfig = {
   /** v8c：攻击动画下半身权重过滤 + 跳跃 / 落地程序化蓄力缓冲 */
   animation: ProgramAnimViewConfig;
   weaponMount: WeaponMountConfig;
+  /** v9s.24：腕部滞后（武器相对手的自由度） */
+  weaponWrist: WeaponWristViewConfig;
   lean: LeanViewConfig;
   /** v8g：两骨 IK 足部锚定（玩家 / 假人同构） */
   ik: IKViewConfig;

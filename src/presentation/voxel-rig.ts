@@ -5,6 +5,7 @@ import type {
   IKViewConfig, LeanViewConfig, LinkState, LinkViewConfig, OrientationViewConfig,
   ProgramAnimViewConfig, SwingPoseViewConfig, TurnInPlaceState, VoxelConfig, WeaponId,
   WeaponMountConfig,
+  WeaponWristViewConfig,
 } from '../core';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
@@ -72,7 +73,16 @@ export type VoxelRig = {
   /** v9s.22：本帧四肢 squash & stretch 读数（1 = 原长），含命中脉冲强度。 */
   stretch(): StretchPose & { impact: number };
   /** v9s.22：副手握持读数（目标距离 / 实际采用的握点位置 / 解出的角度），调试用。 */
-  gripDebug(): { active: boolean; dist: number; gy: number; pitch: number; joint: number };
+  gripDebug(): {
+    active: boolean; dist: number; gy: number; pitch: number; joint: number;
+    /** v9s.24：本帧实际生效的握持权重（1 = 握死，<1 = 够不到而虚握） */
+    grip: number;
+  };
+  /**
+   * v9s.24：武器相对手的自由度读数（腕部滞后角）。
+   * 验收「剑不再焊在前臂延长线上」：快速挥击时 wristPitch 应明显非零并在收势时反向。
+   */
+  weaponDebug(): { wristPitch: number; wristTwist: number };
   /**
    * v9s.23：本帧挥击姿态读数（段号 / 段类型 / 躯干三轴 / 两肩位置）。
    * 供验收「段 1 从右到左、段 2 从左到右、段 3 举顶下劈」与「肩真的在动」。
@@ -126,6 +136,14 @@ type Limb = {
   root: THREE.Group;
   joint: THREE.Group;
   hand: THREE.Group;
+  /**
+   * v9s.24：腕关节（hand 与武器挂点之间的一层）。
+   *
+   * 之前 hand 直接挂 mount，武器相对手只有 mount 俯仰一个量 → 「剑 = 前臂延长线」。
+   * 插这一层之后，肩 / 肘 / 腕三个串联自由度齐了，武器可以**滞后**于手。
+   * 腿没有腕，直接复用 hand（永远 identity，零开销）。
+   */
+  wrist: THREE.Group;
   /** v9s.22：两段骨头的 mesh，供 squash & stretch 缩放 */
   upperMesh: THREE.Mesh;
   lowerMesh: THREE.Mesh;
@@ -284,9 +302,15 @@ export function createVoxelRig(
   ikCfg?: IKViewConfig,
   /** v9a：派生招举盾前撞姿态参数。省略时用内置缺省值（单测不传也安全）。 */
   linkCfg?: LinkViewConfig,
+  /** v9s.24：腕部滞后。省略时整层关闭 = 与 v9s.23 逐帧一致（单测 / A/B 用）。 */
+  wristCfg?: WeaponWristViewConfig,
 ): VoxelRig {
   const ikConfig: IKViewConfig = ikCfg ?? {
     enabled: false, weight: 0, attackScale: 1, maxCorrectionDeg: 70,
+  };
+  const wristView: WeaponWristViewConfig = wristCfg ?? {
+    enabled: false, lag: 0.022, maxAngle: 0.62, rate: 26,
+    twistLag: 0.018, maxTwist: 0.45, runDrag: 0,
   };
   const linkView: LinkViewConfig = linkCfg ?? {
     chargeColor: '#7fd4ff', ringRadius: 1.25, fxDuration: 0.42,
@@ -392,7 +416,11 @@ export function createVoxelRig(
     tip.position.y = -legLen / 2;
     knee.add(tip);
 
-    return { root: hip, joint: knee, hand: group(), tip, upperMesh: thigh, lowerMesh: shin, segLen: legLen / 2 };
+    const ankle = group();
+    return {
+      root: hip, joint: knee, hand: ankle, wrist: ankle, tip,
+      upperMesh: thigh, lowerMesh: shin, segLen: legLen / 2,
+    };
   };
 
   const makeArm = (sx: number): Limb => {
@@ -426,7 +454,16 @@ export function createVoxelRig(
     palm.position.y = 0.045;
     hand.add(palm);
 
-    return { root: shoulder, joint: elbow, hand, upperMesh: upperArm, lowerMesh: fore, segLen: armLen / 2 };
+    // v9s.24：腕关节。默认 identity，所以「不给它写值」= 与旧版逐帧一致；
+    // 只有 applyWrist 会在攻击 / 快速摆臂时给它一个滞后角。
+    const wrist = group();
+    wrist.name = sx < 0 ? 'wristL' : 'wristR';
+    hand.add(wrist);
+
+    return {
+      root: shoulder, joint: elbow, hand, wrist,
+      upperMesh: upperArm, lowerMesh: fore, segLen: armLen / 2,
+    };
   };
 
   const legL = makeLeg(-1);
@@ -450,8 +487,8 @@ export function createVoxelRig(
   const mountL = group();
   mountR.name = 'mountR';
   mountL.name = 'mountL';
-  armR.hand.add(mountR);
-  armL.hand.add(mountL);
+  armR.wrist.add(mountR);
+  armL.wrist.add(mountL);
 
   // ---- 五套体素武器，全部挂在握持挂点上 ----
   const staffModel = makeStaff(colors);
@@ -579,7 +616,26 @@ export function createVoxelRig(
   /** 上一帧挥击曲线值，用于检测「从高位回落」这个拐点 */
   let prevSwingVal = 0;
   /** v9s.22：副手握持诊断读数 */
-  let lastGrip = { active: false, dist: 0, gy: 0, pitch: 0, joint: 0 };
+  let lastGrip = {
+    active: false, dist: 0, gy: 0, pitch: 0, joint: 0, grip: 1,
+  };
+  /** v9s.24：副握点沿柄的当前位置（NaN = 未初始化，下次握持从默认点起步） */
+  let gripSlide = NaN;
+  /**
+   * v9s.24：腕部滞后状态。
+   *
+   * 为什么用「角速度差分 + 一阶平滑」而不是弹簧：弹簧是二阶系统，固定步长才稳定，
+   * 而这里 dt 会被暂停单步、时间缩放、掉帧改来改去。一阶指数平滑对任意 dt 都收敛，
+   * 且「滞后量」本身就是一阶低通的物理直觉（腕部阻尼大、跟手慢）。
+   */
+  let wristPitch = 0;
+  let wristTwist = 0;
+  /** 本帧速度比（速度 / 移动速度上限），供腕部跑动拖拽用 */
+  let wristSpeedRatio = 0;
+  let prevArmPitch = NaN;
+  let prevTorsoYaw = NaN;
+  /** 上一帧的连击段号（变化即代表「换姿势」而不是「挥击」） */
+  let prevSeg = -1;
 
   // ---- v9s.23 挥击身体 / 肩部状态（纯表现，不进 Core / 快照）----
   /** 上一帧解出的挥击姿态：段切换时作为插值起点，消掉「上段收势 → 下段起手」的单帧跳变 */
@@ -784,7 +840,7 @@ export function createVoxelRig(
    *
    * `root` 需要先刷新世界矩阵（调用方负责），否则读到的是上一帧的柄位置。
    */
-  function applySecondaryGrip(weight: number): void {
+  function applySecondaryGrip(weight: number, dt: number): void {
     const gripY = mountCfg.twoHandGripY ?? -0.16;
     const maxStretch = Math.max(1, mountCfg.twoHandMaxStretch ?? 1.25);
     const maxReach = armLen * maxStretch * 0.99;
@@ -800,19 +856,54 @@ export function createVoxelRig(
      * 收到可达为止：左手虽然握得偏上，但**始终在柄上**。
      * 这是「双手够不到」和「拉面条」之间的折中，也是真实动画里常用的做法。
      */
-    let t = { x: 0, y: 0, z: 0 };
-    let dist = Infinity;
-    let gy = gripY;
-    for (let k = 0; k < 5; k++) {
+    /** 取柄上 gy 处的点，换算成「相对左肩」的向量与距离（局部空间）。 */
+    const probeAt = (gy: number): { t: { x: number; y: number; z: number }; dist: number } => {
       const world = mountR.localToWorld(new THREE.Vector3(0, gy, 0));
-      const local = upper.worldToLocal(world.clone());
-      t = { x: local.x - sx, y: local.y - sy, z: local.z - sz };
-      dist = Math.hypot(t.x, t.y, t.z);
-      if (!Number.isFinite(dist) || dist <= EPS) return;
-      if (dist <= maxReach) break;
-      gy *= 0.45;
+      const local = upper.worldToLocal(world);
+      const t = { x: local.x - sx, y: local.y - sy, z: local.z - sz };
+      return { t, dist: Math.hypot(t.x, t.y, t.z) };
+    };
+
+    // 1) 求「需要滑到哪」：从默认副握点沿柄往主手方向滑，直到可达。
+    //    v9s.24：每步乘 0.78（旧版 0.45）—— 旧版一次就跳掉 55% 的柄长，握点会在两帧
+    //    之间从刀镡直接跳到柄尾，肉眼可见「左手瞬移」。
+    let gy = gripY;
+    let probe = probeAt(gy);
+    if (!Number.isFinite(probe.dist) || probe.dist <= EPS) return;
+    for (let k = 0; k < 18 && probe.dist > maxReach; k++) {
+      gy *= 0.78;
+      probe = probeAt(gy);
+      if (!Number.isFinite(probe.dist) || probe.dist <= EPS) return;
     }
-    const stretch = clamp(dist / Math.max(EPS, armLen), 1, maxStretch);
+
+    // 2) 握点是实体：沿柄滑动有惯性，不能一帧从柄尾瞬移到护手。
+    //    平滑之后若仍明显够不到（说明目标本身在移动，追不上），直接跟到位 ——
+    //    否则手会永远悬在半路，那比瞬移更难看。
+    if (!Number.isFinite(gripSlide)) gripSlide = gy;
+    const slideRate = Math.max(0, mountCfg.twoHandSlideRate ?? 9);
+    gripSlide += (gy - gripSlide) * (1 - Math.exp(-slideRate * dt));
+    // 不做「追不上就直接跳到位」的兜底：平滑值滞后于目标时，手确实会短暂够不到，
+    // 但那正是「虚握」—— solveTwoBoneIK 会把手臂解成伸直指向柄，手停在臂展末端。
+    // 兜底反而会在手臂到达最高点的那一帧把握点从柄中段瞬移到柄顶，比虚握难看得多。
+    const resolved = probeAt(gripSlide);
+    const t = resolved.t;
+    const dist = resolved.dist;
+    const reach = dist / Math.max(EPS, armLen);
+    const stretch = clamp(reach, 1, maxStretch);
+    /**
+     * v9s.24：握持权重随臂展比衰减 —— 「够不到就虚握」。
+     *
+     * 旧版要么把胳膊拉到 maxStretch 倍（细面条），要么手悬在空中（没握住），二选一。
+     * 真实动作里副手在过顶那一瞬本来就松，只是手还搭在柄附近。这里用臂展比做
+     * 一段平滑过渡：1.0 倍以内握死，到 maxStretch 时松到 twoHandMinGrip。
+     * 松手不改变 IK 目标点，只是降低「把手臂拽过去」的权重 —— 于是手停在
+     * 手臂自然姿态指向柄的位置，读起来是「虚握」，而不是「脱手」。
+     */
+    const gripStart = Math.max(1, mountCfg.twoHandGripStart ?? 1.02);
+    const gripEnd = Math.max(gripStart + 1e-3, maxStretch);
+    const minGrip = clamp(mountCfg.twoHandMinGrip ?? 1, 0, 1);
+    const soft = clamp((reach - gripStart) / (gripEnd - gripStart), 0, 1);
+    const gripW = 1 - soft * soft * (3 - 2 * soft) * (1 - minGrip);
     const seg = (armLen / 2) * stretch;
     // 肘向前折（bend = -1）：与手臂沿 -Y 伸出的骨架约定一致。
     const sol = solveTwoBoneIK(t, seg, seg, -1);
@@ -823,7 +914,7 @@ export function createVoxelRig(
         jointPitch: armL.joint.rotation.x,
       },
       sol,
-      weight,
+      clamp(weight * gripW, 0, 1),
       // v9s.23：旧版给 0.55 rad 的「单次修正上限」，本意是防止 IK 突然把手臂拽走；
       // 但举剑过顶（段 3 起手）时左臂初值在头顶、目标在柄下段，差角远超 31°，
       // 被截断后手就停在离柄轴 0.49m 的空中 —— 实测「举顶时副手没握住」。
@@ -843,7 +934,80 @@ export function createVoxelRig(
     armL.lowerMesh.scale.set(g, stretch, g);
     armL.lowerMesh.position.y = (-seg) / 2;
     armL.hand.position.y = -seg;
-    lastGrip = { active: true, dist, gy, pitch: angles.rootPitch, joint: armL.joint.rotation.x };
+    lastGrip = {
+      active: true, dist, gy: gripSlide, pitch: angles.rootPitch, joint: armL.joint.rotation.x, grip: gripW,
+    };
+  }
+
+  /**
+   * v9s.24 · 腕部滞后：把「武器相对手」的自由度解出来，写在 hand 与 mount 之间的
+   * wrist 节点上。这一层是「武器像焊在手上」的直接解药 —— 之前武器只有 mountPitch
+   * 一个角度、且是整段线性插值，手臂怎么动剑就怎么动，没有惯性可言。
+   *
+   * 两个输入都来自本帧已经写好的姿态，只做差分，不引入新的时间源：
+   *  - 手臂俯仰角速度 → 绕 X 的滞后（挥出时剑落后，收势时甩回来）
+   *  - 躯干扭转角速度 → 绕 Z 的横向甩动（腰胯带剑时剑尖「跟不上」的那一下）
+   *
+   * 符号说明：手臂 rotation.x 增大 = 向下 / 向前挥，此时剑受惯性留在后面，
+   * 所以腕角取**负**。躯干向右拧（upper.rotation.y 增大）时剑甩向左侧，取正。
+   */
+  function applyWrist(dt: number, seg: number): void {
+    if (!wristView.enabled) {
+      wristPitch = 0;
+      wristTwist = 0;
+      armR.wrist.rotation.set(0, 0, 0);
+      prevArmPitch = armR.root.rotation.x;
+      prevTorsoYaw = upper.rotation.y;
+      return;
+    }
+    const pitch = armR.root.rotation.x;
+    const yaw = upper.rotation.y;
+    /**
+     * 换段那一帧必须重新对齐基准：`attackProgress` 从 1 跳回 0，手臂角度是**瞬变**的，
+     * 拿它差分会得到几十 rad/s 的假角速度，腕部会「啪」地甩一下（实测单帧 10°）。
+     * 那不是挥击，是换姿势 —— 直接丢掉这一帧的差分，腕角保持不变。
+     */
+    if (seg !== prevSeg) {
+      prevSeg = seg;
+      prevArmPitch = pitch;
+      prevTorsoYaw = yaw;
+      armR.wrist.rotation.set(wristPitch, 0, wristTwist);
+      return;
+    }
+    // 首帧 / 暂停（dt=0）只做基准对齐：没有时间差就没有角速度，
+    // 强行除会得到 Infinity 并把手腕拧成 NaN。
+    if (!Number.isFinite(prevArmPitch) || dt <= 1e-5) {
+      prevArmPitch = pitch;
+      prevTorsoYaw = yaw;
+      armR.wrist.rotation.set(wristPitch, 0, wristTwist);
+      return;
+    }
+    const pitchVel = (pitch - prevArmPitch) / dt;
+    const yawVel = wrapAngle(yaw - prevTorsoYaw) / dt;
+    prevArmPitch = pitch;
+    prevTorsoYaw = yaw;
+
+    const limA = Math.max(0, wristView.maxAngle);
+    const limT = Math.max(0, wristView.maxTwist);
+    /**
+     * 权重随攻击混合系数缩放 —— 这是物理上正确的，不是偷懒。
+     *
+     * 人拿着重物走路时手腕是**主动锁定**的（握力 + 前臂肌群），几乎不甩；
+     * 只有快速挥击、且手臂在主动发力时才会有明显的「剑落后于手」。
+     * 不缩放的话，走路摆臂 6.9 rad/s 会解出 15° 的滞后，读起来像「手腕脱臼」。
+     *
+     * 留 0.15 的底：跑步时剑仍有一点跟随感，不至于完全刚性地钉在手上。
+     */
+    const gate = 0.15 + 0.85 * clamp(attackBlend, 0, 1);
+    // v9s.24：跑动拖拽不参与 gate —— 它专治「非攻击时剑焊死」：拿重物跑，剑会自然落后。
+    const spd = clamp(wristSpeedRatio, 0, 1.4);
+    const dragRun = -spd * Math.max(0, wristView.runDrag);
+    const wantPitch = clamp(-pitchVel * wristView.lag * gate + dragRun, -limA, limA);
+    const wantTwist = clamp(yawVel * wristView.twistLag * gate, -limT, limT);
+    const k = 1 - Math.exp(-Math.max(0, wristView.rate) * dt);
+    wristPitch += (wantPitch - wristPitch) * k;
+    wristTwist += (wantTwist - wristTwist) * k;
+    armR.wrist.rotation.set(wristPitch, 0, wristTwist);
   }
 
   /**
@@ -995,6 +1159,8 @@ export function createVoxelRig(
       swingSeg = 0;
       swingFade = 1;
       swingMountPitch = null;
+      // 收招：握点回到默认位置（否则下一轮起手会从上一轮滑到的地方开始）
+      gripSlide = NaN;
       // 内收量也归位（否则最后一段停在举顶时会带着 0 内收进待机）
       if (combat.weapon === 'greatsword') {
         mountR.position.x = -Math.max(0, mountCfg.twoHandInsetX ?? 0);
@@ -1548,6 +1714,7 @@ export function createVoxelRig(
       // 旧版只把惯性倾到 upper，盆骨完全不动，像「上身自己往前折」。现在同一份惯性
       // 在盆骨上取小比例（腿只带一点点），并让跑动时重心压低；脚由 IK 钉地。
       const speedRatio = speed / Math.max(moveSpeed, EPS);
+      wristSpeedRatio = speedRatio;
       const crouchRate = Number.isFinite(leanCfg.crouchSmoothing) ? leanCfg.crouchSmoothing : 8;
       const kc = 1 - Math.exp(-Math.max(0, crouchRate) * dt);
       crouchSmooth += (clamp(speedRatio, 0, 1) - crouchSmooth) * kc;
@@ -1695,6 +1862,13 @@ export function createVoxelRig(
       headPivot.rotation.x = -clamp(c.headPitch ?? 0, -0.7, 0.7);
       upper.rotation.x += -clamp(c.bodyPitch ?? 0, -0.4, 0.4);
 
+      // 3.4) v9s.24 腕部滞后：放在朝向 / 胸偏转之后 —— 它读的就是「躯干已经转到哪」，
+      //      早一步读会漏掉 chestYaw，横向甩动就只在攻击时才有、走路时没有。
+      //      又在副手握持之前 —— 握持 IK 取的是柄的世界坐标，腕部一摆，柄就动了。
+      // 传 frameDt 而不是 clamp 过的 dt：暂停 / 命中定格时 frameDt 为 0，
+      // 腕部必须真正冻结（clamp 后的 dt 下限是 1/240，会漏出微小抖动）。
+      applyWrist(frameDt, combat.comboIndex);
+
       // 3.5) v9s.22 副手握持：必须在朝向 / 胸偏转都写完之后解算 ——
       //  上半身一转动，柄的世界位置就变了，早一步解会「握在空气里」。
       //  只在双手武器挥击期间接管，其余时间（走路 / 收刀）保持步态摆臂。
@@ -1703,7 +1877,7 @@ export function createVoxelRig(
         // v9s.23：起手就给 0.65 的 IK 权重。旧版从 0 随 attackBlend 淡入，前 3 帧
         // 左手停在离柄轴 0.27m 的空中（「剑还没握住就挥了」）；大剑起手本来就是
         // 双手已经握好的姿势，这里直接吸到柄上，只保留最后 35% 的柔和过渡。
-        applySecondaryGrip(clamp(Math.max(0.65, attackBlend), 0, 1));
+        applySecondaryGrip(clamp(Math.max(0.65, attackBlend), 0, 1), dt);
       }
 
       // 4) v8g 足部 IK 锚定：放在所有姿态层之后，把「骨盆被额外推走」的差值
@@ -1746,6 +1920,9 @@ export function createVoxelRig(
     },
     gripDebug() {
       return { ...lastGrip };
+    },
+    weaponDebug() {
+      return { wristPitch, wristTwist };
     },
     swingDebug() {
       const p = swingPose;
