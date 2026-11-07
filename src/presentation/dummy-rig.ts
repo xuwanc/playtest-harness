@@ -6,6 +6,7 @@ import type {
 } from '../core';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
+  backHipYawTarget,
   stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir, stopYawFade,
 } from './gait';
 import type { GaitInput } from './gait';
@@ -274,8 +275,7 @@ export function createDummyRig(
       const latRatio = speed > 1e-6
         ? clamp((s.velocity.x * bodyRightX + s.velocity.z * bodyRightZ) / speed, -1, 1)
         : 0;
-      // v9s.13：侧后方改走后退步，下盘同步回正 —— 否则「已按后退摆腿」再带转下盘，
-      // 脚会沿一个偏斜的前后轴走，等于把斜拉换成斜退，方向读不准。
+      // v9s.14：侧后方走后退步时下盘朝移动反侧转（与主角同构）
       const bodyFwdRatio = speed > 1e-6
         ? clamp((s.velocity.x * Math.sin(s.bodyYaw) + s.velocity.z * Math.cos(s.bodyYaw)) / speed, -1, 1)
         : 1;
@@ -306,8 +306,11 @@ export function createDummyRig(
         // 与主角同构：静止归零，重新加速时按速度比例自然恢复侧移偏转
         yawFade = clamp(speed / Math.max(1e-6, gaitCfg.stopEnterRatio * referenceSpeed), 0, 1);
       }
-      const targetSide = strafeHipYaw(
-        latRatio * backKeep, gaitCfg.strafeHipScale, gaitCfg.strafeHipMaxDeg, gaitCfg.strafeHipBoost,
+      const strafeSide = strafeHipYaw(
+        latRatio, gaitCfg.strafeHipScale, gaitCfg.strafeHipMaxDeg, gaitCfg.strafeHipBoost,
+      );
+      const targetSide = backHipYawTarget(
+        bodyFwdRatio, latRatio, strafeSide, backKeep,
       ) * yawFade;
       sideYaw += (targetSide - sideYaw) * (1 - Math.exp(-12 * Math.max(0, frameDt)));
       lower.rotation.y = sideYaw;

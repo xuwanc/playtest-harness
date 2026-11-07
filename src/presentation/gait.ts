@@ -308,6 +308,46 @@ export function strafeHipYaw(latRatio: number, baseScale: number, maxDeg: number
   return clamp(scale * lat, -1, 1) * ((maxDeg * Math.PI) / 180);
 }
 
+/**
+ * v9s.14 · 侧后方下盘该朝哪边转（修正方向翻转）。
+ *
+ * 支撑相要「脚掌钉地」，要求脚相对身体的位移速度正好抵消身体速度。腿只能绕 X
+ * 做前后摆，所以**脚相对身体的摆动轴 = 下盘前后轴**；要让这个轴与真实移动方向
+ * 平行，下盘前后轴就必须落在移动方向上。
+ *
+ * 侧移段（|θ| ≤ 90°）靠 `strafeHipYaw` 带转一部分、再由 footX 侧摆补掉剩下的角度，
+ * 所以只转 0.35 倍就够（腿不必正对移动方向）。后退段不一样：`wS` 被 `backStrafeKeep`
+ * 收到 0，全部改由前后摆承担，下盘就必须**精确**对准移动轴 —— 而它落在移动方向的
+ * 反侧：
+ *
+ *   h_back = θ − sign(θ)·180°      // 135° 右后 → −45°（下盘朝左前）
+ *
+ * 这一点是「翻过来」的本质：腿在后退摆，脚往 θ 方向蹬出去，膝盖却朝 θ+180°，
+ * 所以下盘角度的符号与侧移偏转相反。v9s.13 把偏转直接归零，轴就停在身体正前方，
+ * 与斜向移动差 45° —— 那 45° 的横向分量没有脚补偿，正是滑步。
+ */
+export function backHipYawTarget(
+  localForward: number,
+  localRight: number,
+  strafeYaw: number,
+  backKeep: number,
+): number {
+  const speed = Math.hypot(localForward, localRight);
+  if (!(speed > 1e-6)) return strafeYaw;
+  const deg = (Math.atan2(localRight, localForward) * 180) / Math.PI;
+  const abs = Math.abs(deg);
+  // 侧移 / 前进段：完全交给既有的 strafeHipYaw（0.35 限幅 + 侧摆补偿）
+  if (abs <= 90) return strafeYaw;
+  const backYaw = ((deg - Math.sign(deg) * 180) * Math.PI) / 180;
+  // k=1 仍是侧移偏转，k=0 完全翻到「移动方向 − 180°」。
+  // 用平方让翻转快于侧摆收缩：`backStrafeKeep` 是 smoothstep，中段（110° 附近）
+  // 侧摆已经退了一半、下盘却只转了一小部分 —— 那是最难看的「半翻」状态：
+  // 既没有侧摆补偿，轴也没对上。平方后这段时间直接跃到下盘朝反侧。
+  const k = clamp(backKeep, 0, 1);
+  const flip = k * k;
+  return strafeYaw * flip + backYaw * (1 - flip);
+}
+
 /* -------------------------------------------------------------------------- *
  * v9o · 低速滑行修复：停步收相只在「确实在停下来」时接管
  * -------------------------------------------------------------------------- *

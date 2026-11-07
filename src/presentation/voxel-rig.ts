@@ -7,6 +7,7 @@ import type {
 } from '../core';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
+  backHipYawTarget,
   stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir,
   stopYawFade, solveTurnStep,
 } from './gait';
@@ -881,8 +882,10 @@ export function createVoxelRig(
       const bRightZ = -Math.sin(c.bodyYaw);
       const bodyLocalRight = c.velocity.x * bRightX + c.velocity.z * bRightZ;
       const latRatio = speed > EPS ? clamp(bodyLocalRight / speed, -1, 1) : 0;
-      // v9s.13：侧后方改走后退步，下盘同步回正 —— 已经按后退摆腿再带转下盘，脚会沿
-      // 一条偏斜的前后轴走，把「斜拉」换成「斜退」，方向反而更读不准。
+      // v9s.14：侧后方走后退步时，下盘不是回正、而是朝**移动方向的反侧**转
+      // （h = θ − 180°）—— 腿在后退摆，脚往移动方向蹬、膝盖朝反侧，下盘前后轴
+      // 才与真实位移平行，脚掌才能钉住地面。v9s.13 的「归零」让轴停在身体正前方，
+      // 与斜向移动差 45°，那部分横向位移没有脚补偿 = 滑步。
       const bodyFwdRatio = speed > EPS
         ? clamp((c.velocity.x * fx + c.velocity.z * fz) / speed, -1, 1)
         : 1;
@@ -923,8 +926,11 @@ export function createVoxelRig(
         yawFade = clamp(speed / Math.max(EPS, gaitCfg.stopEnterRatio * moveSpeed), 0, 1);
       }
       lastStopYawFade = yawFade;
-      const targetHipYaw = strafeHipYaw(
-        latRatio * backKeep, ori.legYawScale, ori.hipYawMaxDeg, gaitCfg.strafeHipBoost,
+      const strafeYaw = strafeHipYaw(
+        latRatio, ori.legYawScale, ori.hipYawMaxDeg, gaitCfg.strafeHipBoost,
+      );
+      const targetHipYaw = backHipYawTarget(
+        bodyFwdRatio, latRatio, strafeYaw, backKeep,
       ) * yawFade;
       hipYaw += (targetHipYaw - hipYaw) * (1 - Math.exp(-ori.hipYawSmoothing * dt));
 
