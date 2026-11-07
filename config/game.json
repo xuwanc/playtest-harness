@@ -141,7 +141,7 @@
         "hurtType": "light",
         "hurtDuration": 0.2,
         "knockback": 0.12,
-        "moveScale": 0.82
+        "moveScale": 0.6
       },
       "ring": {
         "radius": 2.4,
@@ -751,7 +751,7 @@
       "thicknessFactor": 0.16,
       "arcDeg": 180,
       "selectedArcDeg": 270,
-      "opacity": 0.3,
+      "opacity": 0.22,
       "playerOpacity": 0.44,
       "selectedOpacity": 0.62,
       "selectedScale": 1.06,
@@ -764,7 +764,7 @@
       "haloRadiusFactor": 1.16,
       "haloThicknessFactor": 2.6,
       "haloOpacity": 0.14,
-      "haloFadeInSec": 0.14,
+      "haloFadeInSec": 0.05,
       "haloFadeOutSec": 0.36,
       "meterRadiusFactor": 1.34,
       "meterThicknessFactor": 0.52,
@@ -777,7 +777,8 @@
       "warnOpacity": 0.9,
       "warnColor": "#ff5a4a",
       "areaOpacity": 0.5,
-      "landingOpacity": 0.55
+      "landingOpacity": 0.55,
+      "areaExpandSec": 0.22
     },
     "colors": {
       "ground": "#2b3440",

@@ -572,3 +572,25 @@ export function linkLandingPreview(
     radius: Math.max(0.3, hitRadius),
   };
 }
+
+/**
+ * AoE 范围圈的「展开」包络（v9s.12）。
+ *
+ * 电圈不是凭空出现一个满半径圆，而是从放置点（角色中心）向外推开：
+ * `age` 为已存在时长，`scale` 用 easeOutCubic 从 0 → 1，`alpha` 同步淡入。
+ * 只影响表现层的 mesh 缩放，Core 的命中半径始终是配置值 —— 视觉展开不能改变判定。
+ */
+export function areaOpen(age: number, expandSec: number): { scale: number; alpha: number } {
+  const d = Math.max(0.02, expandSec);
+  const t = Math.min(1, Math.max(0, age / d));
+  const ease = 1 - Math.pow(1 - t, 3);
+  return { scale: 0.06 + 0.94 * ease, alpha: t };
+}
+
+/**
+ * 环的贴地高度（v9s.12）：只跟随「落地时的脚下高度」，空中保持不变。
+ * 这样角色跳起来环不会被一起抬到空中，走上台阶时又能跟着地面。
+ */
+export function ringGroundHeight(grounded: boolean, y: number, lastGroundY: number): number {
+  return grounded ? y : lastGroundY;
+}

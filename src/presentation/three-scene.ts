@@ -4,7 +4,8 @@ import type { Box, ViewConfig, World } from '../core';
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
 import {
-  createArcMeter, createAreaRing, createGroundRing, dummyWindupWarning, fadeTowards,
+  areaOpen, createArcMeter, createAreaRing, createGroundRing, dummyWindupWarning, fadeTowards,
+  ringGroundHeight,
   groundRingRadius, linkLandingPreview, playerMeterSource, playerRingVisual, threatRingColor,
 } from './ground-ring';
 import { dummyThreatLevel, isHostileDummy } from '../core';
@@ -190,6 +191,8 @@ export function createSceneView(container: HTMLElement, world: World, view: View
   const ringThickness = bodyW * ringCfg.thicknessFactor;
   const baseArc = (ringCfg.arcDeg * Math.PI) / 180;
 
+  // 环的贴地高度：只在落地帧刷新，跳跃时留在最后落脚的地面
+  let ringGroundY = 0;
   const playerRing = createGroundRing({
     radius: playerRadius,
     thickness: ringThickness,
@@ -469,7 +472,9 @@ export function createSceneView(container: HTMLElement, world: World, view: View
         : 0;
       const pv = playerRingVisual(w.gaze.active, w.gaze.threat, guardRatio, w.time, ringCfg);
       threatRingColor(ringColor, playerRingColor, lowThreatRingColor, highThreatRingColor, pv.level);
-      playerRing.mesh.position.set(c.position.x, c.position.y + 0.028, c.position.z);
+      // v9s.12：环贴地不随跳跃升高 —— 只在落地时记录脚下高度（跟台阶），空中保持最后一次落地高度
+      ringGroundY = ringGroundHeight(c.grounded, c.position.y, ringGroundY);
+      playerRing.mesh.position.set(c.position.x, ringGroundY + 0.028, c.position.z);
       playerRing.update(pv.arcRad, pv.opacity, pv.scale, ringColor, ringYaw);
 
       // 进度弧：蓄力 > 引导 > 冲刺冷却，沿主环外侧从左往右填充（close → 满 = 可用）
@@ -655,7 +660,14 @@ export function createSceneView(container: HTMLElement, world: World, view: View
           continue;
         }
         const t = Math.max(0, Math.min(1, ring.life / Math.max(ring.duration, 1e-6)));
-        e.set(ring.x, ring.z, 0.045, ring.radius, ringCfg.areaOpacity * (0.35 + 0.65 * t), w.time);
+        // 从放置点（角色中心）向外展开：easeOutCubic，同时淡入，不是凭空出现一个满半径大圈
+        const open = areaOpen(Math.max(0, ring.duration - ring.life), ringCfg.areaExpandSec);
+        e.set(
+          ring.x, ring.z, 0.045,
+          ring.radius * open.scale,
+          ringCfg.areaOpacity * (0.35 + 0.65 * t) * open.alpha,
+          w.time,
+        );
       }
 
       if (arrowTime >= 0) {

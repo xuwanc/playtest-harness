@@ -1357,8 +1357,10 @@ export type GroundRingViewConfig = {
   warnOpacity: number;
   /** 假人起手预警色 */
   warnColor: string;
-  /** AoE 范围圈透明度（内部填充自动取 20%） */
+  /** AoE 范围圈透明度（内部填充自动取 26%） */
   areaOpacity: number;
+  /** AoE 范围圈从中心展开到满半径的时长（秒） */
+  areaExpandSec: number;
   /** 冲锋落点圈透明度 */
   landingOpacity: number;
 };
