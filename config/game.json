@@ -850,6 +850,23 @@
       "landingOpacity": 0.55,
       "areaExpandSec": 0.22
     },
+    "projectiles": {
+      "arrowColor": "#ffe3a6",
+      "arrowHeadColor": "#fff6d8",
+      "arrowTrailColor": "#ffcf86",
+      "arrowLength": 0.72,
+      "arrowWidth": 0.05,
+      "arrowHeadSize": 0.16,
+      "arrowGlowSize": 0.5,
+      "trailLength": 1.05,
+      "trailOpacity": 0.42,
+      "boltColor": "#a9ecff",
+      "boltGlowColor": "#7fe3ff",
+      "boltGlowScale": 2.5,
+      "boltTrailScale": 3.4,
+      "slashThickness": 0.075,
+      "slashGlowOpacity": 0.34
+    },
     "lab": {
       "enabled": true,
       "showLabels": true,

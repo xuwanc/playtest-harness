@@ -11,6 +11,7 @@ import {
 } from './ground-ring';
 import { dummyThreatLevel, isHostileDummy } from '../core';
 import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
+import { shotFade, shotOrigin, shotPoint } from './fx-shot';
 import { createVoxelRig } from './voxel-rig';
 import type { HurtPose } from './hurt-pose';
 
@@ -308,12 +309,67 @@ export function createSceneView(
   const warnRingColor = new THREE.Color(ringCfg.warnColor);
 
 
-  // ---- 战斗特效（全部挂在角色朝向锚点上，局部 +Z = 前方） ----
+  // ---- 战斗特效 ----
   const fxAnchor = new THREE.Group();
   scene.add(fxAnchor);
 
+  const pfx = view.projectiles;
+
+  /** v9s.16：径向柔光贴图（白心 → 透明）。Sprite 恒面向镜头，是「任何角度都看得见」的兜底。 */
+  function makeGlowTexture(): THREE.Texture {
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const c = canvas.getContext('2d');
+    if (c) {
+      const g = c.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+      g.addColorStop(0, 'rgba(255,255,255,1)');
+      g.addColorStop(0.28, 'rgba(255,255,255,0.72)');
+      g.addColorStop(0.62, 'rgba(255,255,255,0.22)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      c.fillStyle = g;
+      c.fillRect(0, 0, size, size);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  /**
+   * 拖尾渐变：圆柱 UV 的 v=0 在近弹端、v=1 在尾端（CanvasTexture 默认 flipY，
+   * 故贴图自上而下画成「透明 → 亮」）。
+   */
+  function makeTrailTexture(): THREE.Texture {
+    const w = 2;
+    const h = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const c = canvas.getContext('2d');
+    if (c) {
+      const g = c.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, 'rgba(255,255,255,0)');
+      g.addColorStop(0.55, 'rgba(255,255,255,0.35)');
+      g.addColorStop(1, 'rgba(255,255,255,0.95)');
+      c.fillStyle = g;
+      c.fillRect(0, 0, w, h);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  const glowTex = makeGlowTexture();
+  const trailTex = makeTrailTexture();
+
+  // ---- 斩击弧：管径加粗 + 一层加色光晕，俯视下不再是一条 1px 的细线 ----
   const slashMat = new THREE.MeshBasicMaterial({
     color: 0xbfe8ff, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false,
+  });
+  const slashGlowMat = new THREE.MeshBasicMaterial({
+    color: 0xd8f2ff, transparent: true, opacity: 0, side: THREE.DoubleSide,
+    depthWrite: false, blending: THREE.AdditiveBlending,
   });
   // 斩击弧：Torus 盘面法线（特效中心轴）恒为角色局部 +Z（水平、正前方）。
   // v7c #10：撤销 v6a 为「配合 2.5D 俯视」加的 -pitchDeg 绕 X 倾斜 —— 那个补偿把轴
@@ -326,21 +382,93 @@ export function createSceneView(
   const slashTilt = new THREE.Group();
   slashTilt.rotation.x = slashTiltX(view.camera.pitchDeg);
   slashPivot.add(slashTilt);
-  const slash = new THREE.Mesh(new THREE.TorusGeometry(0.78, 0.045, 6, 24, Math.PI * 1.15), slashMat);
-  slashTilt.add(slash);
+  const slashGeo = new THREE.TorusGeometry(0.78, pfx.slashThickness, 6, 28, Math.PI * 1.15);
+  const slashGroup = new THREE.Group();
+  const slash = new THREE.Mesh(slashGeo, slashMat);
+  const slashGlow = new THREE.Mesh(slashGeo, slashGlowMat);
+  slashGlow.scale.setScalar(1.09);
+  slashGlow.renderOrder = 4;
+  slashGroup.add(slash, slashGlow);
+  slashTilt.add(slashGroup);
+
+  // ---- v9s.16 箭矢：世界坐标独立飞行 ----
+  // 旧版把箭挂在 fxAnchor（朝向锚点）上，而锚点 yaw 在释放动作结束后从 attackFacing
+  // 切回 bodyYaw —— 慢速箭（蓄力不足）还在空中时会被父节点「拽偏」；且 3.5cm 的细杆正对
+  // 镜头时投影成 1px 的线。现改为：起手时快照世界起点 / 朝向，之后每帧自行推进；
+  // 实体 = 箭杆 + 箭头 + 交叉尾羽 + 恒面向镜头的柔光 + 锥形拖尾。
+  const arrowGroup = new THREE.Group();
+  arrowGroup.visible = false;
+  arrowGroup.renderOrder = 6;
+  scene.add(arrowGroup);
+
+  const arrowShaftMat = new THREE.MeshBasicMaterial({ color: pfx.arrowColor, transparent: true });
+  const arrowTipMat = new THREE.MeshBasicMaterial({ color: pfx.arrowHeadColor, transparent: true });
+  const arrowTrailMat = new THREE.MeshBasicMaterial({
+    color: pfx.arrowTrailColor, map: trailTex, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const arrowGlowMat = new THREE.SpriteMaterial({
+    map: glowTex, color: pfx.arrowColor, transparent: true, opacity: 0.85,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+
+  const arrowShaftGeo = new THREE.BoxGeometry(pfx.arrowWidth, pfx.arrowWidth, pfx.arrowLength);
+  const arrowShaft = new THREE.Mesh(arrowShaftGeo, arrowShaftMat);
+  const arrowTipGeo = new THREE.ConeGeometry(pfx.arrowHeadSize * 0.42, pfx.arrowHeadSize, 4);
+  arrowTipGeo.rotateX(Math.PI / 2); // 圆锥默认指向 +Y，转到 +Z（飞行方向）
+  const arrowTip = new THREE.Mesh(arrowTipGeo, arrowTipMat);
+  arrowTip.position.z = pfx.arrowLength / 2 + pfx.arrowHeadSize * 0.42;
+  // 尾羽：一对交叉薄片，侧看能立刻认出「这是箭」
+  const arrowFinGeo = new THREE.BoxGeometry(pfx.arrowWidth * 2.6, pfx.arrowWidth * 0.4, 0.1);
+  const arrowFinA = new THREE.Mesh(arrowFinGeo, arrowShaftMat);
+  const arrowFinB = new THREE.Mesh(arrowFinGeo, arrowShaftMat);
+  arrowFinA.position.z = -pfx.arrowLength / 2 + 0.08;
+  arrowFinB.position.z = arrowFinA.position.z;
+  arrowFinB.rotation.z = Math.PI / 2;
+  const arrowGlow = new THREE.Sprite(arrowGlowMat);
+  arrowGlow.scale.setScalar(pfx.arrowGlowSize);
+  arrowGlow.renderOrder = 6;
+  // 锥形拖尾：旋转轴 → -Z，向尾部收细；贴图 UV 让亮度向尾端淡出
+  const arrowTrailGeo = new THREE.CylinderGeometry(
+    pfx.arrowWidth * 0.45, pfx.arrowWidth * 1.3, pfx.trailLength, 6, 1, true,
+  );
+  arrowTrailGeo.rotateX(-Math.PI / 2);
+  arrowTrailGeo.translate(0, 0, -pfx.trailLength / 2);
+  const arrowTrail = new THREE.Mesh(arrowTrailGeo, arrowTrailMat);
+  arrowTrail.renderOrder = 5;
+  arrowGroup.add(arrowShaft, arrowTip, arrowFinA, arrowFinB, arrowGlow, arrowTrail);
 
   // ---- 法杖技能实体（v7c #12）：奥术飞弹沿世界方向自由飞行、电环贴地脉冲 ----
   // 直接读 world.abilities 的实体状态（自带半径 / 剩余寿命），池化 mesh 按数量显隐，
   // 不引入表现层计时状态 → 暂停 / 时间缩放下与 Core 完全同步。世界坐标，不随 fxAnchor 旋转。
   const boltGeo = new THREE.IcosahedronGeometry(1, 0);
   const boltMat = new THREE.MeshBasicMaterial({
-    color: 0x7fe3ff, transparent: true, opacity: 0.95, depthWrite: false,
+    color: pfx.boltColor, transparent: true, opacity: 0.98, depthWrite: false,
   });
+  const boltGlowMat = new THREE.SpriteMaterial({
+    map: glowTex, color: pfx.boltGlowColor, transparent: true, opacity: 0.6,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const boltTrailMat = new THREE.MeshBasicMaterial({
+    color: pfx.boltGlowColor, map: trailTex, transparent: true, opacity: pfx.trailOpacity,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
+  // 单位尺寸建模、整组按 pr.radius 缩放：几何与比例只写一次
+  const boltTrailGeo = new THREE.CylinderGeometry(0.14, 0.8, pfx.boltTrailScale, 6, 1, true);
+  boltTrailGeo.rotateX(-Math.PI / 2);
+  boltTrailGeo.translate(0, 0, -pfx.boltTrailScale / 2);
   const bolts = Array.from({ length: 16 }, () => {
-    const mesh = new THREE.Mesh(boltGeo, boltMat);
-    mesh.visible = false;
-    scene.add(mesh);
-    return mesh;
+    const group = new THREE.Group();
+    const core = new THREE.Mesh(boltGeo, boltMat);
+    const glow = new THREE.Sprite(boltGlowMat);
+    glow.scale.setScalar(pfx.boltGlowScale);
+    glow.renderOrder = 6;
+    const trail = new THREE.Mesh(boltTrailGeo, boltTrailMat);
+    trail.renderOrder = 5;
+    group.add(core, glow, trail);
+    group.visible = false;
+    scene.add(group);
+    return { group, core };
   });
   // RingGeometry 内外半径按 1 归一化，实例用 scale 套用状态里的真实半径
   // 电环范围：v9s.11 从「一条细环」升级为「内部柔光 + 边界呼吸」的范围圈，
@@ -353,12 +481,6 @@ export function createSceneView(
     scene.add(area.group);
     return area;
   });
-
-  const arrowMat = new THREE.MeshBasicMaterial({
-    color: 0xffe0a0, transparent: true, opacity: 0, depthWrite: false,
-  });
-  const arrowFx = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.5), arrowMat);
-  fxAnchor.add(arrowFx);
 
   // ---- 冲刺 / 闪避一次性光环（世界坐标、池化复用，不随角色旋转） ----
   // 用 dash.id 变化触发（而非 events）：step 每帧开头会清空事件队列，低帧率一帧多步时
@@ -418,8 +540,11 @@ export function createSceneView(
   let lastDashKind = 'none';
 
   let lastAttackId = 0;
+  // 箭矢：起手瞬间快照世界起点 / 朝向，之后完全由表现层推进（不跟随父节点）
   let arrowTime = -1;
   let arrowPower = 1;
+  let arrowOrigin: { x: number; y: number; z: number } = { x: 0, y: 1, z: 0 };
+  let arrowYaw = 0;
 
   // ---- 2.5D 相机（叠加 Core 的智能构图意图） ----
   const cam = createCameraRig(view.camera, view.smartCamera, view.zoom, w0 / h0);
@@ -644,27 +769,35 @@ export function createSceneView(
       if (cb.attackId !== lastAttackId) {
         lastAttackId = cb.attackId;
         if (cb.weapon === 'bow' && cb.phase !== 'idle') {
+          // 起手瞬间把「弓口位置 + 锁定朝向」拍成世界坐标：之后即使释放动作结束、
+          // 父锚点切回 bodyYaw，空中的箭也不会被拽偏
           arrowTime = 0;
           arrowPower = 0.6 + cb.lastCharge * 0.9;
+          arrowYaw = cb.attackFacing;
+          arrowOrigin = shotOrigin(
+            c.position.x, c.position.y, c.position.z, arrowYaw, 0.6, 0.95,
+          );
         }
       }
 
       const showSlash = cb.phase === 'active' && cb.comboIndex > 0;
-      slashMat.opacity = showSlash ? 0.78 : 0;
+      slashMat.opacity = showSlash ? 0.9 : 0;
+      slashGlowMat.opacity = showSlash ? pfx.slashGlowOpacity : 0;
       if (showSlash) {
-        slash.rotation.z = -1.2 + cb.attackProgress * 3.2;
-        slash.scale.setScalar(0.9 + cb.comboIndex * 0.13);
+        slashGroup.rotation.z = -1.2 + cb.attackProgress * 3.2;
+        slashGroup.scale.setScalar(0.9 + cb.comboIndex * 0.13);
       }
 
-      // 奥术飞弹：按实体同步位置 / 半径，多余的隐藏（自转纯装饰）
+      // 奥术飞弹：按实体同步位置 / 半径 / 朝向（组朝飞行方向，只有核心自转），多余的隐藏
       for (let i = 0; i < bolts.length; i++) {
         const pr = w.abilities.projectiles[i];
-        const mesh = bolts[i];
-        mesh.visible = !!pr;
+        const e = bolts[i];
+        e.group.visible = !!pr;
         if (pr) {
-          mesh.position.set(pr.x, pr.y, pr.z);
-          mesh.scale.setScalar(pr.radius);
-          mesh.rotation.y += frameDt * 6;
+          e.group.position.set(pr.x, pr.y, pr.z);
+          e.group.scale.setScalar(pr.radius);
+          e.group.rotation.y = Math.atan2(pr.dirX, pr.dirZ);
+          e.core.rotation.y += frameDt * 6;
         }
       }
       // 电环：范围圈（内部柔光 + 边界呼吸），边界越接近消失越暗 —— 剩余时间可直接读
@@ -689,11 +822,23 @@ export function createSceneView(
       if (arrowTime >= 0) {
         arrowTime += frameDt;
         const dist = arrowTime * 14 * arrowPower;
-        arrowFx.position.set(0, 0.85, 0.6 + dist);
-        arrowMat.opacity = dist < 9 ? 0.95 : 0;
-        if (dist >= 9) arrowTime = -1;
+        // 末端 1.4m 淡出，避免「飞到 9m 突然消失」
+        const fade = shotFade(dist, 9, 1.4);
+        if (fade <= 0.02) {
+          arrowTime = -1;
+          arrowGroup.visible = false;
+        } else {
+          arrowGroup.visible = true;
+          const p = shotPoint(arrowOrigin, arrowYaw, dist);
+          arrowGroup.position.set(p.x, p.y, p.z);
+          arrowGroup.rotation.y = arrowYaw;
+          arrowShaftMat.opacity = fade;
+          arrowTipMat.opacity = fade;
+          arrowGlowMat.opacity = 0.85 * fade;
+          arrowTrailMat.opacity = pfx.trailOpacity * fade;
+        }
       } else {
-        arrowMat.opacity = 0;
+        arrowGroup.visible = false;
       }
 
       cam.update(c.position.x, c.position.y, c.position.z, frameDt, w.camera);
@@ -810,13 +955,25 @@ export function createSceneView(
       playerMeter.dispose();
       for (const m of dummyWarns) m.dispose();
       landingPreview.dispose();
-      slash.geometry.dispose();
+      slashGeo.dispose();
       slashMat.dispose();
+      slashGlowMat.dispose();
       boltGeo.dispose();
       boltMat.dispose();
+      boltGlowMat.dispose();
+      boltTrailMat.dispose();
+      boltTrailGeo.dispose();
       for (const e of shockRings) e.dispose();
-      arrowFx.geometry.dispose();
-      arrowMat.dispose();
+      arrowShaftGeo.dispose();
+      arrowTipGeo.dispose();
+      arrowFinGeo.dispose();
+      arrowTrailGeo.dispose();
+      arrowShaftMat.dispose();
+      arrowTipMat.dispose();
+      arrowGlowMat.dispose();
+      arrowTrailMat.dispose();
+      glowTex.dispose();
+      trailTex.dispose();
       for (const r of dashRings) r.mat.dispose();
       dashRingGeo.dispose();
       for (const r of linkRings) r.mat.dispose();

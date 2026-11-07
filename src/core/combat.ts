@@ -22,6 +22,7 @@ export function resetCombat(world: World): void {
   c.phaseTimer = 0;
   c.comboWindow = 0;
   c.queued = false;
+  c.bowQueued = false;
   c.charging = false;
   c.charge = 0;
   c.attackProgress = 0;
@@ -38,6 +39,7 @@ export function initialCombatState(weaponSlot: number) {
     phaseTimer: 0,
     comboWindow: 0,
     queued: false,
+    bowQueued: false,
     charging: false,
     charge: 0,
     attackProgress: 0,
@@ -260,12 +262,21 @@ export function combatUpdate(world: World, dt: number, intents: Intents): void {
     // 刻意留空分支：法杖 comboCount = 0、不蓄力、不进近战状态机，combat.phase 保持 idle，
     // 才能让「按住引导」时移动模块完全不锁速（v7c #12）。
   } else if (c.weapon === 'bow') {
-    // 弓箭：按住蓄力，松开释放；蓄力不足则取消
-    if (!dashing && !world.playerLink.consumedAttack
-      && intents.attackPressed && c.phase === 'idle' && !c.charging) {
-      c.charging = true;
-      c.charge = 0;
-      emit(world, 'charge-start', 0);
+    // 弓箭：按住蓄力，松开释放；蓄力不足则取消。
+    // v9s.16：后摇 / 冷却期间的按下不再被丢掉 —— 记进 bowQueued（按下沿是瞬时的，
+    // 而 phase 要等 windup + active + recovery + settle 走完才回 idle，旧版正好把这段的
+    // 按键全过滤掉），回到 idle 且仍按住时立刻兑现为蓄力。松手则放弃缓冲。
+    if (!dashing && !world.playerLink.consumedAttack) {
+      if (intents.attackPressed && c.phase !== 'idle') c.bowQueued = true;
+      if (!intents.attackHeld && !c.charging) c.bowQueued = false;
+      const wantDraw = c.phase === 'idle' && !c.charging && intents.attackHeld
+        && (intents.attackPressed || c.bowQueued);
+      if (wantDraw) {
+        c.bowQueued = false;
+        c.charging = true;
+        c.charge = 0;
+        emit(world, 'charge-start', 0);
+      }
     }
     if (c.charging && intents.attackHeld) {
       c.charge = Math.min(1, c.charge + dt / Math.max(cfg.bow.maxChargeTime, EPS));

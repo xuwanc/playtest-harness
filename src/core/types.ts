@@ -185,6 +185,12 @@ export type CombatState = {
   phaseTimer: number;
   comboWindow: number;
   queued: boolean;
+  /**
+   * v9s.16：弓箭「后摇 / 冷却期间按下」的缓冲。
+   * 旧版只在 `phase === 'idle'` 时接受 `attackPressed`，于是冷却期按下的那一下被直接丢掉，
+   * 冷却结束后即使仍按住也不会开始蓄力。现在把按下沿记在这里，回到 idle 且仍按住时兑现。
+   */
+  bowQueued: boolean;
   charging: boolean;
   /** 0..1 */
   charge: number;
@@ -1457,8 +1463,47 @@ export type ViewConfig = {
   groundRing: GroundRingViewConfig;
   /** v9s.15：测试工位地面标识 / 浮动标牌（纯表现层，可整体关闭看画面） */
   lab: LabViewConfig;
+  /** v9s.16：箭矢 / 奥术飞弹 / 斩击弧的实体尺寸与发光参数（纯观感） */
+  projectiles: ProjectileViewConfig;
   colors: ColorConfig;
   dummies: DummyViewConfig;
+};
+
+/**
+ * v9s.16：投射物与斩击特效的表现参数。
+ *
+ * 反馈是「箭 / 飞弹经常看不见，只在某条地上的线上看到一点光过去」——根因是原来的箭
+ * 只有 3.5cm 粗的一根盒子，正对镜头飞行时投影成 1px 的线；飞弹则是一个没有光晕的
+ * 二十面体，远看只是一个点。这里把「实体尺寸」与「镜头朝向光晕 / 拖尾」都外置成参数，
+ * 观感靠 `glowSize`（Sprite 恒面向镜头）保证任意角度都有可见面积，靠拖尾读出速度方向。
+ * 全部纯表现层：不进 Core，不影响命中判定（命中仍是 `abilities.projectiles` 的圆形相交）。
+ */
+export type ProjectileViewConfig = {
+  /** 箭杆颜色 / 箭头与尾羽颜色 / 拖尾颜色 */
+  arrowColor: string;
+  arrowHeadColor: string;
+  arrowTrailColor: string;
+  /** 箭杆长度与粗细（米）。长度 0.72 ≈ 一个身位，远看能读出「一支箭」而不是一个点 */
+  arrowLength: number;
+  arrowWidth: number;
+  /** 箭头长度（米） */
+  arrowHeadSize: number;
+  /** 恒面向镜头的柔光直径（米）：这是「任何角度都看得见」的兜底 */
+  arrowGlowSize: number;
+  /** 拖尾长度（米）与不透明度 */
+  trailLength: number;
+  trailOpacity: number;
+  /** 飞弹颜色 / 光晕颜色 */
+  boltColor: string;
+  boltGlowColor: string;
+  /** 飞弹光晕直径 = 光晕倍数 × 飞弹半径 */
+  boltGlowScale: number;
+  /** 飞弹拖尾长度 = 倍数 × 飞弹半径 */
+  boltTrailScale: number;
+  /** 斩击弧管径（米）：原 0.045 在俯视下只有 1~2px */
+  slashThickness: number;
+  /** 斩击弧外层加色光晕的不透明度（0 = 关闭） */
+  slashGlowOpacity: number;
 };
 
 export type LabViewConfig = {
