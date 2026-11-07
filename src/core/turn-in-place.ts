@@ -103,6 +103,23 @@ function ease(t: number): number {
 }
 
 /**
+ * v9s：预判本帧是否「应该由 turnInPlace 驱动 bodyYaw」。
+ * 与 turnInPlaceUpdate 的激活前判据一致（闸门开放 + 有目视目标 + 夹角 > 触发角），
+ * 但不等待 armSec 防抖。供 orientation 在转身「临近触发」时提前停掉常规 approach，
+ * 避免激活瞬间从「approach 的快速逼近」陡降到「ease 的慢速起步」造成的卡顿
+ * （用户反馈「转身的时候整体会卡一下」）。触发角 / 防抖仍由配置热改。
+ */
+export function turnShouldDrive(world: World, intents: Intents): boolean {
+  const cfg = world.config.turnInPlace;
+  if (!cfg.enabled || !world.modules.turnInPlace) return false;
+  if (!gatesOpen(world, intents, cfg)) return false;
+  const look = resolveLookYaw(world, intents, cfg.lookRange);
+  if (look === null) return false;
+  const delta = wrapAngle(look - world.character.bodyYaw);
+  return Math.abs(delta) > Math.max(0, cfg.triggerDeg) * DEG;
+}
+
+/**
  * 单帧状态转移。必须在 orientationUpdate **之后**调用：
  *  - orientation 在 active 期间跳过 bodyYaw 的常规 approach（由本模块按固定进度驱动）；
  *  - 本模块随后写 bodyYaw，并在「非拖拽」场景同步写 facing，避免转身结束后
@@ -147,10 +164,13 @@ export function turnInPlaceUpdate(world: World, dt: number, intents: Intents): v
     const dur = Math.max(cfg.durationSec, world.config.fixedDt);
     t.progress = Math.min(1, t.progress + dt / dur);
     c.bodyYaw = wrapAngle(t.fromYaw + (t.targetYaw - t.fromYaw) * ease(t.progress));
-    // 非拖拽时把面朝向一起带到目标角：否则完成帧回到 idle 后，orientation 的
+    // 非拖拽时让面朝向跟随身体一起旋转：否则完成帧回到 idle 后，orientation 的
     // approach 会以旧 facing 为目标把身体慢慢拉回去，转身等于白做。
-    // 拖拽时 facing 本就等于目视方向，交给 orientation 每帧重设即可，不覆盖。
-    if (!dragging) c.facing = t.targetYaw;
+    // v9s 修正：原先写死 c.facing = t.targetYaw，激活当帧就把 facing 从旧值瞬间
+    // 跳到目标角（单帧 170°+），既触发遥测 dirJump、又让头部抽搐。改跟随 bodyYaw
+    // 平滑旋转 —— 激活帧 facing≈bodyYaw≈旧值、零跳变；完成帧二者都等于 targetYaw，
+    // 同样不再回拉。拖拽时 facing 本就由 orientation 每帧重设为实时拖拽方向，不动。
+    if (!dragging) c.facing = c.bodyYaw;
     if (t.progress >= 1) {
       // 完成当帧已把 bodyYaw 精确写到 targetYaw；下一帧夹角只剩余角，不会再触发。
       t.phase = 'idle';

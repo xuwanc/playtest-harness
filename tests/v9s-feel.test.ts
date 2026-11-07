@@ -46,13 +46,13 @@ describe('v9s 默认参数', () => {
   it('Core 原地转身配置与模块开关写入默认配置 / World', () => {
     const tip = RAW_CONFIG.core.turnInPlace;
     expect(tip.enabled).toBe(true);
-    expect(tip.triggerDeg).toBe(75);
+    expect(tip.triggerDeg).toBe(50);
     expect(tip.settleDeg).toBe(8);
     expect(tip.durationSec).toBe(0.45);
     expect(tip.idleSpeedRatio).toBe(0.05);
     expect(tip.inputDeadZone).toBe(0.12);
     expect(tip.lookRange).toBe(0);
-    expect(tip.armSec).toBe(0.08);
+    expect(tip.armSec).toBe(0.03);
     const w = makeWorld();
     expect(w.modules.turnInPlace).toBe(true);
     expect(w.turnInPlace.phase).toBe('idle');
@@ -134,8 +134,8 @@ describe('v9s Core turnInPlace：静止盯视触发、起步攻击立即中止',
   it('目视方向在背后 → 超过阈值才触发，快照目标角并留余角', () => {
     const w = makeWorld();
     w.modules.dummies = false;
-    // 前 3 帧仍在防抖窗口内
-    run(w, 3, BEHIND);
+    // 前 1 帧仍在防抖窗口内（armSec=0.03 ≈ 2 帧）
+    run(w, 1, BEHIND);
     expect(w.turnInPlace.phase).toBe('idle');
     run(w, 6, BEHIND);
     expect(w.turnInPlace.phase).toBe('active');
@@ -340,5 +340,54 @@ describe('v9s 骨架：停步偏差消化与惯性 IK', () => {
     expect(sample(0.5).turnStep).toBeGreaterThan(0.9);
     // 静止时 solveGait 本返回 idle，踏步层让腿真的动起来
     expect(Math.abs(sample(0.5).legLPitch)).toBeGreaterThan(0.1);
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * v9s.1 · 转身驱动权移交：修 dirJump（无输入单帧 170° 跳变）与「转身卡一下」
+ * -------------------------------------------------------------------------- */
+describe('v9s.1 转身驱动权移交：修 dirJump 与卡顿', () => {
+  it('非拖拽：激活帧 facing 不瞬跳到 targetYaw（修遥测 dirJump），激活期跟随 bodyYaw 平滑旋转并收敛', () => {
+    const w = makeWorld();
+    w.modules.dummies = false; // 冻结假人 AI，避免受击打断转身
+    const p = w.character.position;
+    // 背后放一个假人（朝向初始 +Z，假人在 -Z = 180°）
+    w.dummies.forEach((d) => { d.position.x = p.x; d.position.z = p.z - 3; });
+    // 跑到激活
+    for (let i = 0; i < 30 && w.turnInPlace.phase !== 'active'; i++) run(w, 1, intent());
+    expect(w.turnInPlace.phase).toBe('active');
+    let prevF = w.character.facing;
+    let prevB = w.character.bodyYaw;
+    let maxJump = 0;
+    for (let i = 0; i < 50; i++) {
+      run(w, 1, intent());
+      const df = Math.abs(wrapAngle(w.character.facing - prevF));
+      if (df > maxJump) maxJump = df;
+      prevF = w.character.facing;
+      prevB = w.character.bodyYaw;
+    }
+    // 单帧跳变远小于 50°，旧逻辑会在激活帧把 facing 从旧值瞬跳到 targetYaw（170°+）
+    expect(maxJump).toBeLessThan(50 * DEG);
+    // 非拖拽：facing 全程跟随 bodyYaw（不再写死 targetYaw）
+    expect(Math.abs(wrapAngle(w.character.facing - w.character.bodyYaw))).toBeLessThan(2 * DEG);
+    // 完成回到 idle，facing≈bodyYaw≈targetYaw（留余角，无回拉）
+    expect(w.turnInPlace.phase).toBe('idle');
+    expect(Math.abs(wrapAngle(w.character.facing - w.character.bodyYaw))).toBeLessThan(5 * DEG);
+  });
+
+  it('拖拽：激活前 orientation 跳过 approach，bodyYaw 不被预旋（修「转身卡一下」）', () => {
+    const w = makeWorld();
+    w.modules.dummies = false;
+    const start = w.character.bodyYaw;
+    // 拖拽瞄准指向背后 (-Z)：facing 会被瞬间拉向 ~π，但 bodyYaw 不该提前甩过去
+    run(w, 1, intent({ aimActive: true, aimX: 0, aimZ: -1 }));
+    expect(w.turnInPlace.phase).toBe('idle'); // arm 防抖首帧尚未激活
+    expect(Math.abs(wrapAngle(w.character.facing - start))).toBeGreaterThan(15 * DEG); // facing 已转向目视方向
+    expect(Math.abs(wrapAngle(w.character.bodyYaw - start))).toBeLessThan(3 * DEG);   // bodyYaw 未预旋（approach 被跳过）
+    // 继续：转身被触发并平滑进行
+    for (let i = 0; i < 20 && w.turnInPlace.phase !== 'active'; i++) {
+      run(w, 1, intent({ aimActive: true, aimX: 0, aimZ: -1 }));
+    }
+    expect(w.turnInPlace.phase).toBe('active');
   });
 });

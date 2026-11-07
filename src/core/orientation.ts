@@ -1,4 +1,5 @@
 import { resolveFacingYaw } from './aim';
+import { turnShouldDrive } from './turn-in-place';
 import type { Intents, World } from './types';
 
 const EPS = 1e-6;
@@ -97,7 +98,12 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   //    v9s：原地转身 active 期间跳过 —— bodyYaw 由 turn-in-place 模块按固定进度驱动，
   //    这里若照常 approach 会把「固定节奏的转身」拖成两套插值叠加，转身起止发飘。
   //    headYaw 仍按本帧的 bodyYaw（上一帧转身写入值）限幅，头先于身体到位的关系不变。
-  if (world.turnInPlace.phase !== 'active') {
+  //    v9s 续：转身「即将触发」（夹角已超阈值、闸门开放）时也跳过常规 approach ——
+  //    否则激活瞬间 bodyYaw 会从「approach 的快速逼近(~19°/帧)」陡降到「ease 的慢速起步
+  //    (~1.4°/帧)」，观感就是「转身的时候整体会卡一下」。提前停掉 approach，转身从
+  //    静止匀速起步；激活帧 bodyYaw≈旧值，无突变。
+  const turning = world.turnInPlace.phase === 'active' || turnShouldDrive(world, intents);
+  if (!turning) {
     c.bodyYaw = approach(c.bodyYaw, c.facing, o.bodyTurnRate, dt);
   }
 
