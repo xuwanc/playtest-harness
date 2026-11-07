@@ -32,13 +32,13 @@ if (!g.document) {
 
 function hit(over: Partial<HurtState> = {}): HurtState {
   return {
-    type: 'knock', timer: 0.21, duration: 0.42,
+    lastAt: 0, type: 'knock', timer: 0.21, duration: 0.42,
     dirX: 0, dirZ: -1, knockX: 0, knockZ: 0,
     ...over,
   };
 }
 const NONE: HurtState = {
-  type: 'none', timer: 0, duration: 0, dirX: 0, dirZ: 0, knockX: 0, knockZ: 0,
+  lastAt: -1e9, type: 'none', timer: 0, duration: 0, dirX: 0, dirZ: 0, knockX: 0, knockZ: 0, // -1e9 = 从未受击
 };
 
 function footTip(rig: { group: any }, side: 'L' | 'R'): THREE.Object3D {

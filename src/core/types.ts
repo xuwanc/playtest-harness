@@ -328,6 +328,11 @@ export type HurtType = 'none' | 'light' | 'heavy' | 'knock';
 /** 受击状态：Core 计时，表现层用 1 - timer/duration 归一化进度驱动后仰与闪色。 */
 export type HurtState = {
   type: HurtType;
+  /**
+   * 最近一次受击的世界时间（秒，world.time）；从未受击为 0。
+   * v9s.7：接敌准备据此实现「受击后 N 秒内不退出」——刚被打过不立刻放下戒备。
+   */
+  lastAt: number;
   /** 剩余时长（秒） */
   timer: number;
   /** 本次受击总时长（秒），0 = 未受击 */
@@ -601,8 +606,13 @@ export type GazeConfig = {
    * 主动进入接敌准备（先转身戒备）。关掉则只保留 瞄准 / 被攻击 两种进入源。
    */
   reactToApproach: boolean;
-  /** v9s.6：主动接敌的进入距离（米，默认 3）：敌对模式单位进入此距离即转身戒备 */
+  /** v9s.6：主动接敌的进入距离（米，默认 2.5）：敌对模式单位进入此距离即转身戒备 */
   approachDist: number;
+  /**
+   * v9s.7：受击后强制保持接敌的时长（秒，默认 2）。
+   * 即使敌人已拉开到 recoveryDist 之外，只要距上次被攻击不足此时长就继续接敌（不放下戒备）。
+   */
+  hurtHoldSec: number;
   /** v9s.6：modeWeight >= 此值才算「敌对」（idle 0.2 / wander 0.45 不算，follow 0.8 起算） */
   hostileModeWeight: number;
   /**

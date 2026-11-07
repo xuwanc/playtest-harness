@@ -17,7 +17,7 @@ function cfg(over: Partial<HurtViewConfig> = {}): HurtViewConfig {
 /** p = 1 - timer/duration = 0.5，落在脉冲回弹段（两端为 0，中段 > 0）。 */
 function hurt(over: Partial<HurtState> = {}): HurtState {
   return {
-    type: 'heavy', timer: 0.16, duration: 0.32,
+    lastAt: 0, type: 'heavy', timer: 0.16, duration: 0.32,
     dirX: 0, dirZ: -1, knockX: 0, knockZ: 0,
     ...over,
   };

@@ -71,12 +71,12 @@ describe('voxel-rig 攻击时上半身不会飞出去', () => {
     w.character.bodyYaw = 0; // 身体前方 = +Z
 
     // 正面命中：攻击者在前方，hit.dir 从攻击者指向角色 = 指向 -Z；角色应朝后倒（rotation.x < 0）
-    w.playerHurt = { type: 'heavy', timer: 0.2, duration: 0.4, dirX: 0, dirZ: -1, knockX: 0, knockZ: 0 };
+    w.playerHurt = { lastAt: 0, type: 'heavy', timer: 0.2, duration: 0.4, dirX: 0, dirZ: -1, knockX: 0, knockZ: 0 };
     rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt);
     const frontLean = upper.rotation.x;
 
     // 背后命中：攻击者正后方，hit.dir 指向 +Z（角色前方）；角色应朝前倒（rotation.x > 0）
-    w.playerHurt = { type: 'heavy', timer: 0.2, duration: 0.4, dirX: 0, dirZ: 1, knockX: 0, knockZ: 0 };
+    w.playerHurt = { lastAt: 0, type: 'heavy', timer: 0.2, duration: 0.4, dirX: 0, dirZ: 1, knockX: 0, knockZ: 0 };
     rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt);
     const backLean = upper.rotation.x;
 

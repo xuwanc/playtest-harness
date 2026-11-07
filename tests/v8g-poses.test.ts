@@ -27,7 +27,7 @@ if (!g.document) {
 const IK_ON: IKViewConfig = { ...raw.view.ik, enabled: true, weight: 1 };
 const IK_OFF: IKViewConfig = { ...IK_ON, enabled: false };
 const NONE: HurtState = {
-  type: 'none', timer: 0, duration: 0, dirX: 0, dirZ: 0, knockX: 0, knockZ: 0,
+  lastAt: -1e9, type: 'none', timer: 0, duration: 0, dirX: 0, dirZ: 0, knockX: 0, knockZ: 0, // -1e9 = 从未受击
 };
 
 function clone<T>(v: T): T {
@@ -233,7 +233,7 @@ describe('v8g #2 大剑重击时身体不再离开腿', () => {
 
   it('knock 受击（大剑击退）：上半身相对骨盆位移被限幅，躯干始终连着骨盆', () => {
     const h: HurtState = {
-      type: 'knock', timer: 0.21, duration: 0.42,
+      lastAt: 0, type: 'knock', timer: 0.21, duration: 0.42,
       dirX: 0, dirZ: -1, knockX: 0, knockZ: 0,
     };
     const w = makeWorld();
@@ -249,7 +249,7 @@ describe('v8g #2 大剑重击时身体不再离开腿', () => {
 
   it('A/B：关掉位移限幅后，上半身被推出远超 0.1m（正是旧版「身体离开腿」）', () => {
     const h: HurtState = {
-      type: 'knock', timer: 0.21, duration: 0.42,
+      lastAt: 0, type: 'knock', timer: 0.21, duration: 0.42,
       dirX: 0, dirZ: -1, knockX: 0, knockZ: 0,
     };
     const hu = Object.assign(clone(raw.view.hurt), {
@@ -267,7 +267,7 @@ describe('v8g #2 大剑重击时身体不再离开腿', () => {
     const s = w.dummies[0];
     s.bodyYaw = 0;
     s.hurt = {
-      type: 'knock', timer: 0.21, duration: 0.42,
+      lastAt: 0, type: 'knock', timer: 0.21, duration: 0.42,
       dirX: 0, dirZ: -1, knockX: 0, knockZ: 0,
     };
     const rig = createDummyRig(

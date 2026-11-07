@@ -105,9 +105,12 @@ export function gazeUpdate(world: World, _dt: number, intents: Intents): void {
     || (cfg.reactToAttack && incoming && threat >= cfg.enterThreshold)
     || (cfg.reactToApproach && approaching)
   );
-  // 保持：只要还有敌人留在 recoveryDist（默认 5m）内就继续接敌（滞回），
-  //       全部拉出 recoveryDist → 交还身体控制（「远离威胁一定距离退出」）。
-  const hold = prevActive && inRecovery;
+  // 保持：只要还有敌人留在 recoveryDist（默认 3.5m）内就继续接敌（滞回）；
+  //       v9s.7 追加「受击守卫」——距上次被攻击不足 hurtHoldSec（默认 2s）时不退出，
+  //       即使敌人已拉开距离也先保持戒备，避免刚被打完就立刻卸下姿态。
+  const hurtGuard = cfg.hurtHoldSec > EPS
+    && world.time - world.playerHurt.lastAt < cfg.hurtHoldSec;
+  const hold = prevActive && (inRecovery || hurtGuard);
   g.active = desired || hold;
 
   if (!g.active) {

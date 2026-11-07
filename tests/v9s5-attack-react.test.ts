@@ -45,17 +45,17 @@ describe('v9s.5 被攻击触发威胁注视（无需主动瞄准）', () => {
     gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(true);
 
-    // v9s.6：敌对模式（attack）进入 approachDist(3m) 即主动接敌，哪怕还没出手
+    // v9s.6：敌对模式（attack）进入 approachDist(2.5m) 即主动接敌，哪怕还没出手
     const w2 = makeWorld();
     w2.modules.dummies = false;
-    placeOnly(w2, [[0, 0, 5.5, 'idle']]); // dist 2.5 < 3
+    placeOnly(w2, [[0, 0, 6, 'idle']]); // dist 2 < approachDist 2.5
     gazeUpdate(w2, DT, intent({}));
     expect(w2.gaze.active).toBe(true);
 
     // 非敌对模式（idle 0.2 < hostileModeWeight 0.6）→ 不进入，避免站在假人旁边就转身
     const w3 = makeWorld();
     w3.modules.dummies = false;
-    placeOnly(w3, [[0, 0, 6, 'idle', 'idle']]); // dist 2，但 mode=idle 非敌对
+    placeOnly(w3, [[0, 0, 6, 'idle', 'idle']]); // dist 2 逼近，但 mode=idle 非敌对
     gazeUpdate(w3, DT, intent({}));
     expect(w3.gaze.active).toBe(false);
   });
@@ -72,10 +72,10 @@ describe('v9s.5 被攻击触发威胁注视（无需主动瞄准）', () => {
     expect(w.gaze.active).toBe(true);
   });
 
-  it('攻击间隙保持：进入后敌人回到 idle，只要仍在 recoveryDist(5m) 内就继续盯住', () => {
+  it('攻击间隙保持：进入后敌人回到 idle，只要仍在 recoveryDist(3.5m) 内就继续盯住', () => {
     const w = makeWorld();
     w.modules.dummies = false;
-    placeOnly(w, [[0, 0, 4, 'windup']]); // dist 4
+    placeOnly(w, [[0, 0, 5, 'windup']]); // dist 3 < recoveryDist 3.5
     gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(true);
 
@@ -83,7 +83,7 @@ describe('v9s.5 被攻击触发威胁注视（无需主动瞄准）', () => {
     gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(true);    // 距离未变 → hold
 
-    w.dummies[0].position.z = -5;        // dist 13 > recoveryDist 5 → 交还
+    w.dummies[0].position.z = -5;        // dist 13 > recoveryDist 3.5 → 交还
     gazeUpdate(w, DT, intent({}));
     expect(w.gaze.active).toBe(false);
   });

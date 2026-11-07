@@ -29,14 +29,14 @@ function makeRig(hurt: HurtViewConfig = hurtCfg()): VoxelRig {
 /** p = 0.5，落在脉冲回弹段；正面命中 dir=(0,-1)。 */
 function hit(over: Partial<HurtState> = {}): HurtState {
   return {
-    type: 'heavy', timer: 0.16, duration: 0.32,
+    lastAt: 0, type: 'heavy', timer: 0.16, duration: 0.32,
     dirX: 0, dirZ: -1, knockX: 0, knockZ: 0,
     ...over,
   };
 }
 
 const NONE: HurtState = {
-  type: 'none', timer: 0, duration: 0, dirX: 0, dirZ: 0, knockX: 0, knockZ: 0,
+  lastAt: -1e9, type: 'none', timer: 0, duration: 0, dirX: 0, dirZ: 0, knockX: 0, knockZ: 0, // -1e9 = 从未受击
 };
 
 /** 用静止、落地的 Core 状态驱动一帧（步态 idle，腿姿态基线为 0，便于隔离受击叠加量）。 */

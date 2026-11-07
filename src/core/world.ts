@@ -3,7 +3,7 @@ import { initialCameraIntent, resetCameraIntent } from './camera';
 import { initialCombatState } from './combat';
 import { initialDashState, resetDash } from './dash';
 import { createDummies, resetDummies } from './dummies';
-import { initialHurt } from './hits';
+import { initialHurt, NEVER_HURT_AT } from './hits';
 import { initialLinkState, resetLink } from './links';
 import { resetCharacter } from './movement';
 import { initialTargetState } from './targeting';
@@ -115,6 +115,7 @@ export function resetWorld(world: World): void {
   t.hasTarget = false;
   const h = world.playerHurt;
   h.type = 'none';
+  h.lastAt = NEVER_HURT_AT; // 复位 = 重新开始，不残留「刚被打过」的接敌保持
   h.timer = 0;
   h.duration = 0;
   h.dirX = 0;

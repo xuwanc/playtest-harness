@@ -17,8 +17,14 @@ export type HitSpec = {
 const EPS = 1e-6;
 const DEG = Math.PI / 180;
 
+/** 「从未受击」哨兵：用大负数而非 -Infinity，保证 JSON 快照往返不丢失。 */
+export const NEVER_HURT_AT = -1e9;
+
 export function initialHurt(): HurtState {
-  return { type: 'none', timer: 0, duration: 0, dirX: 0, dirZ: 0, knockX: 0, knockZ: 0 };
+  return {
+    type: 'none', lastAt: NEVER_HURT_AT, timer: 0, duration: 0,
+    dirX: 0, dirZ: 0, knockX: 0, knockZ: 0,
+  };
 }
 
 function emit(world: World, type: EventType, value: number, at: Vec3): void {
@@ -52,6 +58,7 @@ export function applyHit(world: World, target: HitTarget, spec: HitSpec): void {
   if (target.kind === 'player') {
     const h = world.playerHurt;
     applyHurt(h, spec.type, duration, spec.dirX, spec.dirZ);
+    h.lastAt = world.time;   // v9s.7：接敌准备用「最近一次受击时刻」做维持判定
     if (!world.config.hits.noDamageToPlayer && spec.knockback > EPS) {
       const v0 = spec.knockback * world.config.hits.knockbackDecay;
       h.knockX = spec.dirX * v0;
