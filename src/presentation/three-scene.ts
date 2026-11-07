@@ -81,6 +81,12 @@ export type SceneView = {
   trailDebug(): { count: number; visible: boolean };
   /** v9s.22：角色本帧四肢形变读数（1 = 原长） */
   stretchDebug(): { arm: number; leg: number; torso: number; impact: number };
+  /** v9s.23：本帧挥击姿态（段号 / 段类型 / 躯干三轴 / 两肩位置），供验收与真机诊断 */
+  swingDebug(): {
+    seg: number; kind: string; yaw: number; pitch: number; roll: number; strike: number;
+    shoulderL: { x: number; y: number; z: number };
+    shoulderR: { x: number; y: number; z: number };
+  };
   /** v9s.15：传送后把相机跟随目标瞬移过去，避免跨场地滑行 */
   snapCamera(x: number, y: number, z: number): void;
   dispose(): void;
@@ -613,6 +619,9 @@ export function createSceneView(
       const s = voxel.stretch();
       return { arm: s.arm, leg: s.leg, torso: s.torso, impact: s.impact };
     },
+    swingDebug() {
+      return voxel.swingDebug();
+    },
     render(w, frameDt): void {
       const c = w.character;
       const cb = w.combat;
@@ -647,7 +656,10 @@ export function createSceneView(
         frozen ? 0 : frameDt,
         frozen ? null : voxel.weaponBlade(),
         !frozen && (
-          cb.phase === 'active' || cb.phase === 'windup'
+          // v9s.23：只在实际挥出的 active 段采样。旧版把 windup 也算进来，
+          // 举剑起手那 0.2s 的慢速位移会先拉出一条长带，接上 active 的横扫后
+          // 变成一整个半圆「白色拱门」，把角色整个人挡住。
+          cb.phase === 'active'
           || w.playerLink.phase === 'active'
           || (rolling && w.dash.duration > 0)
         ),
@@ -835,7 +847,7 @@ export function createSceneView(
       // v9s.22：轻击不再画「斩击弧」—— 那是一个固定在身前的白色环，和真实刀轨
       // 没关系，反而会盖住贴刀身的拖尾。只有 comboIndex >= 3 的重击保留弧光，
       // 作为「这一下特别重」的额外信号。
-      const showSlash = cb.phase === 'active' && cb.comboIndex >= 3;
+      const showSlash = pfx.slashEnabled && cb.phase === 'active' && cb.comboIndex >= 3;
       slashMat.opacity = showSlash ? 0.7 : 0;
       slashGlowMat.opacity = showSlash ? pfx.slashGlowOpacity : 0;
       if (showSlash) {

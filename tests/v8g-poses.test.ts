@@ -204,8 +204,12 @@ describe('v8g #2 大剑重击时身体不再离开腿', () => {
       maxX = Math.max(maxX, Math.abs(p.x as number));
     }
     expect(sawAttack).toBe(true);
-    expect(maxZ).toBeLessThan(0.13);
-    expect(maxX).toBeLessThan(0.12);
+    // v9s.23 起大剑多了一层「挥击重心前压」（pelvisZ 最大 0.13），与攻跨步叠加后
+    // 峰值约 0.18m —— 这是**刻意**加的身体幅度（下劈时重心压到前脚），不是旧版那种
+    // 「上半身整体平移离开骨盆」的 bug：upper.position 仍受限幅，脚由 IK 钉住。
+    // 这里放宽上限但仍然守住「单轴不超过两个肩宽的一半」。
+    expect(maxZ).toBeLessThan(0.22);
+    expect(maxX).toBeLessThan(0.16);
   });
 
   it('A/B：heavyScale=1 且跨步幅度调回旧值时，骨盆位移明显更大', () => {
@@ -222,9 +226,12 @@ describe('v8g #2 大剑重击时身体不再离开腿', () => {
       }
       return maxZ;
     };
-    const now = sample(clone(raw.view.animation));
-    const legacy = sample(Object.assign(clone(raw.view.animation), {
-      stride: Object.assign(clone(raw.view.animation.stride), {
+    // v9s.23：新挥击层也写骨盆，会盖住 stride 的差异 —— A/B 先关掉它，只比跨步幅度
+    const base = clone(raw.view.animation);
+    base.swing = Object.assign(clone(raw.view.animation.swing!), { enabled: false });
+    const now = sample(base);
+    const legacy = sample(Object.assign(clone(base), {
+      stride: Object.assign(clone(base.stride), {
         stepReach: 0.17, stepSideReach: 0.14, stepDipReach: 0.05, heavyScale: 1,
       }),
     }));

@@ -109,12 +109,20 @@ export function createWeaponTrail(cfg: TrailConfig): WeaponTrail {
     for (let i = 0; i < n; i++) {
       const s = samples[i];
       const t = Math.max(0, 1 - s.age / life);
-      // 两端收窄：最老的一段接近 0，最新的一段刚到 1，避免轨迹「啪」地出现/消失
+      // 两端收窄：最老的一段接近 0，最新的一段刚到 1，避免轨迹「啪」地出现/消失。
+      // v9s.23：平方衰减 + 沿年龄收窄（见下）组合使用。只靠平方时尾巴还有 30%
+      // 亮度、几个采样点连成「白色拱门」；只靠立方时又淡到看不见。
       const fade = t * t;
       const speedGain = Math.min(1, s.speed / Math.max(1e-3, cfg.minSpeed * 2));
       const bright = cfg.intensity * fade * (0.55 + 0.45 * speedGain);
+      // v9s.23：带子沿年龄收窄（刃根向刃尖靠拢），尾巴收成一个点。
+      // 不收窄时，大剑下劈的剑尖在 0.18s 内扫过 2m 多，6 个采样点连成一条等宽
+      // 的白带，从斜上方看就是一整个「拱门」；收窄后才读成一条被拉长的划痕。
+      const w = 0.18 + 0.82 * t;
       const o = i * 6;
-      pos[o] = s.bx; pos[o + 1] = s.by; pos[o + 2] = s.bz;
+      pos[o] = s.tx + (s.bx - s.tx) * w;
+      pos[o + 1] = s.ty + (s.by - s.ty) * w;
+      pos[o + 2] = s.tz + (s.bz - s.tz) * w;
       pos[o + 3] = s.tx; pos[o + 4] = s.ty; pos[o + 5] = s.tz;
       const r = baseColor.r * bright;
       const g = baseColor.g * bright;

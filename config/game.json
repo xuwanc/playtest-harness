@@ -889,6 +889,19 @@
         "impactDecay": 11,
         "volumeExp": 0.5,
         "smoothing": 30
+      },
+      "swing": {
+        "enabled": true,
+        "bodyScale": 1.0,
+        "shoulderLift": 0.055,
+        "shoulderPush": 0.045,
+        "shoulderIn": 0.032,
+        "segBlend": 0.1,
+        "weaponScale": {
+          "greatsword": 1.0,
+          "sword-shield": 0.62,
+          "dual-swords": 0.55
+        }
       }
     },
     "weaponMount": {
@@ -1021,17 +1034,18 @@
       "boltShapeZ": 0.85,
       "boltGlowScale": 1.6,
       "boltTrailScale": 2.2,
+      "slashEnabled": false,
       "slashThickness": 0.075,
       "slashGlowOpacity": 0.34
     },
     "weaponTrail": {
       "enabled": true,
-      "maxSamples": 22,
-      "minStep": 0.02,
-      "life": 0.2,
+      "maxSamples": 8,
+      "minStep": 0.04,
+      "life": 0.09,
       "minSpeed": 5.5,
-      "color": "#a8d8ff",
-      "intensity": 0.5,
+      "color": "#8fd0ff",
+      "intensity": 0.42,
       "tipBoost": 0.35
     },
     "hitstop": {

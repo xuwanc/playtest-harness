@@ -180,6 +180,8 @@ export function startApp(): void {
     speedSamples: () => motionDebug.samples(),
     // v9n：停步收相 / 侧移偏转 / 双腿姿态读数（验收用手感诊断）
     gaitDebug: () => view.gaitDebug(),
+    // v9s.23：挥击姿态（段号 / 方向 / 躯干三轴 / 肩部位移）
+    swingDebug: () => view.swingDebug(),
     // v9s.15：测试工位 —— 自动化验收可直接 goto 逐个工位截图 / 取状态
     lab: {
       stations: SCENE_CONFIG.stations ?? [],

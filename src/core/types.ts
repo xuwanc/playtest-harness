@@ -1525,7 +1525,37 @@ export type ProgramAnimViewConfig = {
   stretch: StretchViewConfig;
   /** v9s.22：挥击拖尾（纯表现，可整体关闭） */
   trail: TrailViewConfig;
+  /** v9s.23：近战挥击的身体 / 肩部幅度（纯表现，可整体关闭） */
+  swing?: SwingPoseViewConfig;
 };
+
+/**
+ * v9s.23 · 近战挥击的「身体 / 肩部」幅度。
+ *
+ * 旧版近战只写手臂俯仰 + 一点 upper.rotation.y，躯干 / 骨盆 / 重心几乎不动，
+ * 观感是「胳膊在原地比划」；而且 shoulder.position 是常量，手臂抬到头顶时
+ * 肩点还钉在躯干侧面，像装在支架上。
+ *
+ * 这一层把「一段挥击」的关键帧（起手 / 命中）解成躯干扭转、前后倾、侧倾、
+ * 骨盆重心偏移与肩部（上臂根部）位移，手臂轨迹由同一份数据给出。
+ * 三段方向（右→左 / 左→右 / 举顶下劈）也在这里定义，见 `presentation/swing-pose.ts`。
+ */
+export type SwingPoseViewConfig = {
+  enabled: boolean;
+  /** 躯干 / 骨盆幅度总倍率（拉 0 可 A/B 对照「只有手臂在动」） */
+  bodyScale: number;
+  /** 肩部抬升上限（m） */
+  shoulderLift: number;
+  /** 肩部前送上限（m） */
+  shoulderPush: number;
+  /** 双手武器攻击时两肩向中线内收（m） */
+  shoulderIn: number;
+  /** 段间姿态过渡时长（s）：上段收势 → 下段起手不再是单帧跳变 */
+  segBlend: number;
+  /** 各武器幅度倍率（大剑最夸张，短剑收敛） */
+  weaponScale: Record<string, number>;
+};
+
 
 /**
  * v9s.22 · 挥击拖尾（刀光）参数。
@@ -1917,6 +1947,15 @@ export type ProjectileViewConfig = {
   boltGlowScale: number;
   /** 飞弹拖尾长度 = 倍数 × 飞弹半径 */
   boltTrailScale: number;
+  /**
+   * v9s.23：旧斩击弧是否显示。
+   *
+   * v6a 时它是唯一能表达「挥了一刀」的特效；v9s.22 加了真实的刃尖拖尾之后，
+   * 两者叠在一起就是「凭空出现一个固定朝向的半圆 + 一条跟剑走的划痕」，
+   * 而且半圆半径 1.3m、不透明度 0.7，在近距镜头下直接把角色挡住。
+   * 默认关闭，保留开关做 A/B。
+   */
+  slashEnabled: boolean;
   /** 斩击弧管径（米）：原 0.045 在俯视下只有 1~2px */
   slashThickness: number;
   /** 斩击弧外层加色光晕的不透明度（0 = 关闭） */

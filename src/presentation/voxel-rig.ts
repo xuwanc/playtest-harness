@@ -3,7 +3,8 @@ import { wrapAngle } from '../core';
 import type {
   CharacterState, ColorConfig, CombatState, GaitViewConfig, HurtState, HurtViewConfig,
   IKViewConfig, LeanViewConfig, LinkState, LinkViewConfig, OrientationViewConfig,
-  ProgramAnimViewConfig, TurnInPlaceState, VoxelConfig, WeaponId, WeaponMountConfig,
+  ProgramAnimViewConfig, SwingPoseViewConfig, TurnInPlaceState, VoxelConfig, WeaponId,
+  WeaponMountConfig,
 } from '../core';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
@@ -27,6 +28,8 @@ import {
   decayImpact, NEUTRAL_STRETCH, smoothStretch, solveStretch,
 } from './limb-stretch';
 import type { StretchConfig, StretchPose } from './limb-stretch';
+import { blendSwingPose, segEase, solveSwingPose } from './swing-pose';
+import type { SwingPose } from './swing-pose';
 
 export type VoxelRig = {
   group: THREE.Group;
@@ -70,6 +73,20 @@ export type VoxelRig = {
   stretch(): StretchPose & { impact: number };
   /** v9s.22：副手握持读数（目标距离 / 实际采用的握点位置 / 解出的角度），调试用。 */
   gripDebug(): { active: boolean; dist: number; gy: number; pitch: number; joint: number };
+  /**
+   * v9s.23：本帧挥击姿态读数（段号 / 段类型 / 躯干三轴 / 两肩位置）。
+   * 供验收「段 1 从右到左、段 2 从左到右、段 3 举顶下劈」与「肩真的在动」。
+   */
+  swingDebug(): {
+    seg: number;
+    kind: string;
+    yaw: number;
+    pitch: number;
+    roll: number;
+    strike: number;
+    shoulderL: { x: number; y: number; z: number };
+    shoulderR: { x: number; y: number; z: number };
+  };
   /** 下盘相对身体的连续偏航（v8b），供验收「引导/后退时跨朝向不跳变」。 */
   hipYaw(): number;
   /** v9n：停步收相进度（-1 = 未接管）与本帧双腿姿态，供浏览器验收过渡是否平滑。
@@ -281,6 +298,13 @@ export function createVoxelRig(
     enabled: false, swingArm: 1, chargeArm: 1, runLeg: 1, torsoGain: 0,
     impactSquash: 0, impactDecay: 12, volumeExp: 0.5, smoothing: 26,
   };
+  // v9s.23：老调用方（单测里手工构造的 config）没有 swing 段时整层关闭，
+  // 精确回到 v9s.22 的「手臂在动、身体不动」姿态，便于 A/B 对照。
+  const swingCfg: SwingPoseViewConfig = animCfg.swing ?? {
+    enabled: false, bodyScale: 1, shoulderLift: 0.045, shoulderPush: 0.035,
+    shoulderIn: 0.03, segBlend: 0.1,
+    weaponScale: { greatsword: 1, 'sword-shield': 0.62, 'dual-swords': 0.55 },
+  };
   // ---- v8f 合理骨架层级：共享骨盆 → 上 / 下半身分离 ----
   // 旧结构里 lower 与上半身组都直接挂在 root（原点 = 脚底），于是上半身 rotation.x 是
   // 「整个人绕脚底刚性倾倒」，腿完全不动 —— 用户反馈的「脚底锚定身体倾斜」。
@@ -468,11 +492,11 @@ export function createVoxelRig(
   }
   // 刃根只取「靠近刀尖的一小段」：整条刀身都参与的话，拖尾会变成一根
   // 和刀一样长的白棍（实测 0.69 m 宽），读不出「划过的轨迹」。
-  markBlade(parts['sword-shield'].right, 0.40, 0.55);
-  markBlade(parts['dual-swords'].right, 0.40, 0.55);
-  markBlade(parts['dual-swords'].left, 0.40, 0.55);
-  markBlade(parts.greatsword.right, 0.64, 0.85);
-  markBlade(parts.staff.right, 0.70, 0.92);
+  markBlade(parts['sword-shield'].right, 0.44, 0.55);
+  markBlade(parts['dual-swords'].right, 0.44, 0.55);
+  markBlade(parts['dual-swords'].left, 0.44, 0.55);
+  markBlade(parts.greatsword.right, 0.74, 0.88);
+  markBlade(parts.staff.right, 0.78, 0.92);
 
   let currentWeapon: WeaponId | null = null;
 
@@ -556,6 +580,19 @@ export function createVoxelRig(
   let prevSwingVal = 0;
   /** v9s.22：副手握持诊断读数 */
   let lastGrip = { active: false, dist: 0, gy: 0, pitch: 0, joint: 0 };
+
+  // ---- v9s.23 挥击身体 / 肩部状态（纯表现，不进 Core / 快照）----
+  /** 上一帧解出的挥击姿态：段切换时作为插值起点，消掉「上段收势 → 下段起手」的单帧跳变 */
+  let swingPose: SwingPose | null = null;
+  /** 段切换瞬间冻结的起点姿态 */
+  let swingFrom: SwingPose | null = null;
+  let swingSeg = 0;
+  /** 段间过渡进度 0..1 */
+  let swingFade = 1;
+  /** 本帧实际采用的肩部位移（诊断用） */
+  let lastShoulder = { lx: 0, ly: 0, lz: 0, rx: 0, ry: 0, rz: 0 };
+  /** 本帧挥击层要求的武器挂点俯仰（null = 用武器默认值） */
+  let swingMountPitch: number | null = null;
 
   // ---- v8c 程序动画分层状态（全部纯表现，不进入 Core / 快照）----
   /** 攻击姿态混合系数 0..1：指数平滑进出攻击，避免下盘姿态单帧跳变 */
@@ -691,11 +728,18 @@ export function createVoxelRig(
     for (const m of flashMats) m.emissive.copy(hurtColor).multiplyScalar(pose.flash);
   }
 
-  /** 挥击曲线：蓄势(-1) → 挥出(+1) → 收势(0) */
+  /**
+   * 挥击曲线：蓄势(-1) → 挥出(+1) → 收势(0)。
+   *
+   * v9s.23：断点从 0.3 / 0.62 提前到 0.22 / 0.50，让「挥出」对齐 Core 的 active 段。
+   * 旧断点下 active 结束时（大剑 progress ≈ 0.49）swing 才走到 0.16 —— 判定已经结算、
+   * 剑还在半路，真正挥到位发生在 recovery（既无位移也无判定），读起来就是「挥了个寂寞」。
+   * 现在 active 末 swing ≈ 0.9，命中那一帧手臂、躯干、刀光基本同时到位。
+   */
   function swingCurve(t: number): number {
-    if (t < 0.3) return -1;
-    if (t < 0.62) return -1 + ((t - 0.3) / 0.32) * 2;
-    return Math.max(0, 1 - (t - 0.62) / 0.38);
+    if (t < 0.22) return -1;
+    if (t < 0.5) return -1 + ((t - 0.22) / 0.28) * 2;
+    return Math.max(0, 1 - (t - 0.5) / 0.5);
   }
 
   /**
@@ -780,7 +824,11 @@ export function createVoxelRig(
       },
       sol,
       weight,
-      0.55,
+      // v9s.23：旧版给 0.55 rad 的「单次修正上限」，本意是防止 IK 突然把手臂拽走；
+      // 但举剑过顶（段 3 起手）时左臂初值在头顶、目标在柄下段，差角远超 31°，
+      // 被截断后手就停在离柄轴 0.49m 的空中 —— 实测「举顶时副手没握住」。
+      // IK 目标本身是连续的（柄随右手平滑移动），不需要这层限幅，改成不截断。
+      Math.PI,
     );
     armL.root.rotation.x = angles.rootPitch;
     armL.root.rotation.z = angles.rootRoll;
@@ -796,6 +844,98 @@ export function createVoxelRig(
     armL.lowerMesh.position.y = (-seg) / 2;
     armL.hand.position.y = -seg;
     lastGrip = { active: true, dist, gy, pitch: angles.rootPitch, joint: armL.joint.rotation.x };
+  }
+
+  /**
+   * v9s.23：把解出的挥击姿态写进骨骼。
+   *
+   * 只写「绝对量」的节点（手臂三轴 + 肘）与「叠加量」的节点（躯干 / 骨盆），
+   * 因为 update() 已在开头把 upper.rotation.x/z、pelvis.position 归零，
+   * 而 2.6 / 2.8 的惯性、落地缓冲、跨步层都在本函数之后才 +=，可以安全叠上去。
+   */
+  function writeSwingPose(p: SwingPose): void {
+    swingMountPitch = p.mountPitch;
+    upper.rotation.y += p.yaw;
+    upper.rotation.x += p.pitch;
+    upper.rotation.z += p.roll;
+    pelvis.position.z += p.pelvisZ;
+    pelvis.position.x += p.pelvisX;
+    if (p.armR) {
+      armR.root.rotation.x = p.armR.pitch;
+      armR.root.rotation.y = p.armR.yaw;
+      armR.root.rotation.z = p.armR.roll;
+      armR.joint.rotation.x = p.armR.elbow;
+    }
+    if (p.armL) {
+      armL.root.rotation.x = p.armL.pitch;
+      armL.root.rotation.y = p.armL.yaw;
+      armL.root.rotation.z = p.armL.roll;
+      armL.joint.rotation.x = p.armL.elbow;
+    }
+  }
+
+  /**
+   * v9s.23：解出本帧姿态，并在**段切换**处做一次短过渡。
+   *
+   * 连击换段时 `attackProgress` 从 1 直接跳回 0，上一段的收势姿态与本段起手
+   * （尤其段 2 起手在左侧、段 3 起手举顶）差得很远，不插值就是「啪」地换姿势。
+   * 这里只在 comboIndex 变化的那一帧冻结起点，用 `segBlend` 秒数平滑过去；
+   * 段内的挥出速度完全不受影响（不引入逐帧平滑，否则会吃掉冲击力）。
+   */
+  function solveSwingFor(combat: CombatState, dt: number): SwingPose {
+    const target = solveSwingPose(
+      combat.weapon, combat.comboIndex, swingCurve(combat.attackProgress), swingCfg,
+    );
+    if (combat.comboIndex !== swingSeg) {
+      swingFrom = swingPose;
+      swingFade = 0;
+      swingSeg = combat.comboIndex;
+    }
+    const span = Math.max(0.008, swingCfg.segBlend);
+    swingFade = Math.min(1, swingFade + dt / span);
+    const pose = swingFrom && swingFade < 1
+      ? blendSwingPose(swingFrom, target, segEase(swingFade))
+      : target;
+    swingPose = pose;
+    return pose;
+  }
+
+  /**
+   * v9s.23：肩部（上臂根部）位移 —— 「肩膀在动」的来源。
+   *
+   * 旧版 shoulder.position 是常量，手臂抬到头顶时肩点仍钉在躯干侧面上沿，
+   * 读起来像「胳膊装在支架上」。真实人体抬手时肩胛会耸起、前送，挥击时
+   * 同侧肩还会跟着躯干拧出去。这里用**手臂当前的俯仰角**反推三件事：
+   *   - 抬得越高 → 肩越往上（lift，最大 shoulderLift）
+   *   - 抬到身前 → 肩越往前（push，最大 shoulderPush）
+   *   - 双手武器挥击 → 两肩一起向中线内收（让副手够得到柄）
+   *
+   * 位移始终在 2~4cm 量级：体素方块人的躯干只有 0.4m 高，再大就穿帮。
+   * 每帧无条件写（关闭时写回基准），不依赖是否攻击 —— 走路摆臂也会带一点。
+   */
+  function applyShoulderPose(attacking: boolean, weapon: WeaponId): void {
+    const baseX = bodyW / 2 + t / 2;
+    const baseY = bodyH - 0.04;
+    if (!swingCfg.enabled) {
+      armL.root.position.set(-baseX, baseY, 0);
+      armR.root.position.set(baseX, baseY, 0);
+      lastShoulder = { lx: -baseX, ly: baseY, lz: 0, rx: baseX, ry: baseY, rz: 0 };
+      return;
+    }
+    const liftMax = Math.max(0, swingCfg.shoulderLift);
+    const pushMax = Math.max(0, swingCfg.shoulderPush);
+    const inw = attacking && weapon === 'greatsword' ? Math.max(0, swingCfg.shoulderIn) : 0;
+    const lift = (pitch: number) => liftMax * clamp((-pitch - 0.5) / 1.45, 0, 1);
+    const push = (pitch: number) => pushMax * clamp((-pitch - 0.2) / 1.9, 0, 1);
+    const lx = -baseX + inw;
+    const ly = baseY + lift(armL.root.rotation.x);
+    const lz = push(armL.root.rotation.x);
+    const rx = baseX - inw;
+    const ry = baseY + lift(armR.root.rotation.x);
+    const rz = push(armR.root.rotation.x);
+    armL.root.position.set(lx, ly, lz);
+    armR.root.position.set(rx, ry, rz);
+    lastShoulder = { lx, ly, lz, rx, ry, rz };
   }
 
   /** 攻击跨步：每段攻击在挥出时向前跨一步，连击左右腿交替（combo 段奇偶决定方向），
@@ -826,7 +966,7 @@ export function createVoxelRig(
   // 现在统一由 update() 的「挥击跨步层」按 attackLegWeight 叠加 attackStridePose，
   // applyCombatPose 只负责上半身与武器姿态，职责单一。
 
-  function applyCombatPose(combat: CombatState): void {
+  function applyCombatPose(combat: CombatState, dt: number): void {
     // 每帧复位可变的武器部件，避免姿态残留
     bowModel.drawString.position.z = -0.06;
     arrowModel.position.z = 0;
@@ -848,7 +988,19 @@ export function createVoxelRig(
       return;
     }
 
-    if (combat.phase === 'idle') return;
+    if (combat.phase === 'idle') {
+      // 收招：清空段间过渡状态，下次起手从本段起手帧开始（不继承上一轮收势）
+      swingFrom = null;
+      swingPose = null;
+      swingSeg = 0;
+      swingFade = 1;
+      swingMountPitch = null;
+      // 内收量也归位（否则最后一段停在举顶时会带着 0 内收进待机）
+      if (combat.weapon === 'greatsword') {
+        mountR.position.x = -Math.max(0, mountCfg.twoHandInsetX ?? 0);
+      }
+      return;
+    }
 
     // settle 停顿阶段：attackProgress 定格为 1，姿态保持收势末态，形成「前移 → 定住」的节奏
     const swing = swingCurve(combat.attackProgress);
@@ -863,49 +1015,61 @@ export function createVoxelRig(
       armR.root.rotation.x = 0.9 - forth * 0.8;
       armR.joint.rotation.x = -0.3;
     } else if (combat.weapon === 'greatsword') {
-      // 大剑：双手持握，双臂前伸收拢于身前，左手套下段柄、右手握上段护手；
-      // 每段攻击双手一起抡（而非单臂），重心下沉、跨步更夸张。
-      // v8g：旋身幅度随 heavyScale 收敛，避免双手大抡时上半身被拧得离开下盘。
-      const both = -1.6 * back + 1.25 * forth;
-      const heavy = clamp(
-        Number.isFinite(animCfg.stride.heavyScale) ? animCfg.stride.heavyScale : 1, 0, 1,
-      );
-      armR.root.rotation.x = both;
-      armR.joint.rotation.x = -(0.25 + back * 0.4);
-      armL.root.rotation.x = both + 0.06;
-      armL.joint.rotation.x = -(0.32 + back * 0.4);
-      // 双肩内收：双手要「合握」，两只手必须都往中线靠。
-      // 只收左肩（旧版）等于让左臂横跨整个肩宽去够右手，几何上不可能。
-      armL.root.rotation.z = 0.42;
-      armR.root.rotation.z = 0;
-      // 关键：手臂已经前举（rotation.x ≈ -1.6）时绕 Z 转几乎无效 ——
-      // 向量本来就沿着 Z，绕 Z 不改变方向。要让右手往身体中线收，必须绕 Y 摆。
-      // 而且符号要跟着「手在身前还是身后」翻：前举时往左侧收，后摆时往右侧收。
-      // 用 tanh 平滑过零，避免挥到中立位时 yaw 跳变。
-      const armFwd = -Math.sin(armR.root.rotation.x);
-      armR.root.rotation.y = -0.72 * Math.tanh(armFwd * 4);
-      upper.rotation.y = -0.2 * swing * heavy;
-    } else {
-      // 剑类三连击：段1 右上劈、段2 左横斩、段3 双手大力下劈
-      const seg = combat.comboIndex;
-      if (seg === 1) {
-        armR.root.rotation.x = -1.7 * back + 1.1 * forth;
-        armR.joint.rotation.x = -(0.2 + back * 0.5);
-        armL.root.rotation.x = 0.1;
-        upper.rotation.y = -0.18 * swing;
-      } else if (seg === 2) {
-        armL.root.rotation.x = -1.5 * back + 1.0 * forth;
-        armL.joint.rotation.x = -(0.2 + back * 0.5);
-        armR.root.rotation.x = 0.2;
-        upper.rotation.y = 0.45 * -swing;
+      if (swingCfg.enabled) {
+        // v9s.23：三段各自一条关键帧曲线（右→左 / 左→右 / 举顶下劈），
+        // 躯干扭转 + 前后倾 + 骨盆重心一起给出，手臂只做小幅内收让副手够得到柄。
+        writeSwingPose(solveSwingFor(combat, dt));
       } else {
-        const both = -1.9 * back + 1.2 * forth;
-        armL.root.rotation.x = both;
+        // v9s.22 姿态：双手前伸、三段共用同一条曲线（保留作 A/B 对照）
+        const both = -1.6 * back + 1.25 * forth;
+        const heavy = clamp(
+          Number.isFinite(animCfg.stride.heavyScale) ? animCfg.stride.heavyScale : 1, 0, 1,
+        );
         armR.root.rotation.x = both;
-        armL.joint.rotation.x = -(0.15 + back * 0.4);
-        armR.joint.rotation.x = -(0.15 + back * 0.4);
-        upper.rotation.y = -0.3 * swing;
+        armR.joint.rotation.x = -(0.25 + back * 0.4);
+        armL.root.rotation.x = both + 0.06;
+        armL.joint.rotation.x = -(0.32 + back * 0.4);
+        armL.root.rotation.z = 0.42;
+        armR.root.rotation.z = 0;
+        const armFwd = -Math.sin(armR.root.rotation.x);
+        armR.root.rotation.y = -0.72 * Math.tanh(armFwd * 4);
+        upper.rotation.y = -0.2 * swing * heavy;
       }
+    } else {
+      if (swingCfg.enabled) {
+        writeSwingPose(solveSwingFor(combat, dt));
+      } else {
+        // 剑类三连击（v9s.22 旧姿态）：段1 右上劈、段2 左横斩、段3 双手大力下劈
+        const seg = combat.comboIndex;
+        if (seg === 1) {
+          armR.root.rotation.x = -1.7 * back + 1.1 * forth;
+          armR.joint.rotation.x = -(0.2 + back * 0.5);
+          armL.root.rotation.x = 0.1;
+          upper.rotation.y = -0.18 * swing;
+        } else if (seg === 2) {
+          armL.root.rotation.x = -1.5 * back + 1.0 * forth;
+          armL.joint.rotation.x = -(0.2 + back * 0.5);
+          armR.root.rotation.x = 0.2;
+          upper.rotation.y = 0.45 * -swing;
+        } else {
+          const both = -1.9 * back + 1.2 * forth;
+          armL.root.rotation.x = both;
+          armR.root.rotation.x = both;
+          armL.joint.rotation.x = -(0.15 + back * 0.4);
+          armR.joint.rotation.x = -(0.15 + back * 0.4);
+          upper.rotation.y = -0.3 * swing;
+        }
+      }
+    }
+
+    // v9s.23：双手武器的内收量随手臂抬高衰减。
+    // `twoHandInsetX` 是为了让副手够得到柄（肩距 0.6、单臂 0.42），但它把剑柄
+    // 从 x=0.30（头右侧外）拉到 x=0.15 —— 一旦举过头顶，那截 0.46m 的下段柄
+    // 正好从头顶穿出来（实测段 3 起手剑柄插在头里）。举高时取消内收，剑回到
+    // 头侧；副手靠握点滑动 + 臂长拉伸去够，够不到时允许短暂半松。
+    if (combat.weapon === 'greatsword') {
+      const raise = clamp((-armR.root.rotation.x - 1.3) / 1.2, 0, 1);
+      mountR.position.x = -Math.max(0, mountCfg.twoHandInsetX ?? 0) * (1 - raise);
     }
 
     // 各武器统一的跨步覆盖（在武器姿态之上再叠加前向 / 左右步幅）
@@ -1399,7 +1563,7 @@ export function createVoxelRig(
       lower.position.y += inertia.crouch * (1 - clamp(ikW, 0, 1));
 
       // 2) 战斗姿态覆盖（只在攻击 / 蓄力 / 停顿期间生效）
-      applyCombatPose(combat);
+      applyCombatPose(combat, dt);
       // 2.05) 法杖引导姿态：不进近战状态机，在基础步态之上单独叠加（v7c #12）
       applyChannelPose(channeling, c.gaitPhase);
       // 2.06) v9a 派生招姿态（举盾前撞）：与 combat.phase 正交，按 link.progress 独立驱动
@@ -1413,7 +1577,18 @@ export function createVoxelRig(
       const wantDrag = greatOn && combat.phase === 'idle' && sp > 0.5;
       const dragTarget = wantDrag ? Math.min(1.15, sp / Math.max(moveSpeed, 0.001) * 0.9) : 0;
       dragAngle += (dragTarget - dragAngle) * (1 - Math.exp(-6 * dt));
-      if (greatOn) mountR.rotation.x = gsPitch + dragAngle;
+      if (greatOn) {
+        // v9s.23：武器挂点俯仰随手臂高度补偿。
+        // 挂点原本是固定 58°（相对前臂），这个值只在「手臂大致前举」时读起来正常。
+        // 举剑过顶（手臂绕 X 转 −169°）后，58° 会被翻成「剑尖朝后下方」——
+        // 实测段 3 起手刃尖在 (0.58, 0.36, −0.61)，即插在身后腰侧，同时那截下段柄
+        // 从头顶穿出来。真实持剑时手腕会反向转，让剑始终保持「前上方」，
+        // 这里把这个反向补偿外置：手臂越往上，挂点越往后掰。
+        // 系数取 1.0 = 剑的世界朝向完全稳定；调小则剑会跟着手臂多翻一点。
+        // 举顶下劈由挥击层直接给挂点角（与手臂同向）；其余段用武器默认 58°。
+        // 走「挂点角」而不是「补偿手臂角」，是因为后者会让剑在收势时又抬起来。
+        mountR.rotation.x = (swingMountPitch ?? gsPitch) + dragAngle;
+      }
 
       // 2.2) 弓 / 箭「向前 90°」补偿：持弓左臂前伸、拉弦右臂抬肘累计约 90° 俯仰，
       //      会把弓面和搭在弦上的箭转成朝天 / 朝地。这里抵消手臂的 X 旋转，
@@ -1469,6 +1644,11 @@ export function createVoxelRig(
         pelvis.rotation.z += stride.pelvisRoll * s;
       }
 
+      // 2.85) v9s.23 肩部（上臂根部）位移：必须在手臂角度全部写完之后，
+      //   否则读到的是上一帧的俯仰，耸肩会慢一帧；又必须在副手 IK 之前，
+      //   否则 IK 会用旧肩点解算，握点差一个肩位移。
+      applyShoulderPose(attacking, combat.weapon);
+
       // 2.9) v9s.22 四肢 squash & stretch：放在所有姿态层之后、朝向与 IK 之前。
       //  形变只影响骨骼长度与粗细，不写 position / rotation，所以不会和受击、跨步、
       //  落地缓冲打架；足部 IK 在下一步读 footTip 世界坐标，读到的是形变后的脚位。
@@ -1520,7 +1700,10 @@ export function createVoxelRig(
       //  只在双手武器挥击期间接管，其余时间（走路 / 收刀）保持步态摆臂。
       if (combat.weapon === 'greatsword' && combat.phase !== 'idle' && !combat.charging) {
         root.updateWorldMatrix(true, true);
-        applySecondaryGrip(clamp(attackBlend, 0, 1));
+        // v9s.23：起手就给 0.65 的 IK 权重。旧版从 0 随 attackBlend 淡入，前 3 帧
+        // 左手停在离柄轴 0.27m 的空中（「剑还没握住就挥了」）；大剑起手本来就是
+        // 双手已经握好的姿势，这里直接吸到柄上，只保留最后 35% 的柔和过渡。
+        applySecondaryGrip(clamp(Math.max(0.65, attackBlend), 0, 1));
       }
 
       // 4) v8g 足部 IK 锚定：放在所有姿态层之后，把「骨盆被额外推走」的差值
@@ -1563,6 +1746,19 @@ export function createVoxelRig(
     },
     gripDebug() {
       return { ...lastGrip };
+    },
+    swingDebug() {
+      const p = swingPose;
+      return {
+        seg: swingSeg,
+        kind: p?.kind ?? 'right-left',
+        yaw: p?.yaw ?? 0,
+        pitch: p?.pitch ?? 0,
+        roll: p?.roll ?? 0,
+        strike: p?.strike ?? 0,
+        shoulderL: { x: lastShoulder.lx, y: lastShoulder.ly, z: lastShoulder.lz },
+        shoulderR: { x: lastShoulder.rx, y: lastShoulder.ry, z: lastShoulder.rz },
+      };
     },
     attackBlend(): number {
       return attackBlend;
