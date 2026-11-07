@@ -4,7 +4,8 @@ import type { Box, ViewConfig, World } from '../core';
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
 import {
-  createGroundRing, groundRingRadius, playerRingVisual, threatRingColor,
+  createArcMeter, createAreaRing, createGroundRing, dummyWindupWarning, fadeTowards,
+  groundRingRadius, linkLandingPreview, playerMeterSource, playerRingVisual, threatRingColor,
 } from './ground-ring';
 import { dummyThreatLevel, isHostileDummy } from '../core';
 import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
@@ -217,7 +218,9 @@ export function createSceneView(container: HTMLElement, world: World, view: View
     scene.add(ring.mesh);
     return ring;
   });
-  // 选中外发光：更宽更淡的一圈，和主环同色，只负责把「选中」从背景里拔出来
+  // 选中外发光：更宽更淡的一圈，和主环同色，只负责把「选中」从背景里拔出来。
+  // v9s.11：径向剖面换成高斯（`profile: 'glow'`），配合下面每帧的淡入 / 淡出缓动，
+  // 才是「光渗出来 / 收回去」而不是一盏灯被拧开拧灭。
   const dummyHalos = world.dummies.map((s) => {
     const halo = createGroundRing({
       radius: dummyRadius * ringCfg.haloRadiusFactor,
@@ -226,6 +229,7 @@ export function createSceneView(container: HTMLElement, world: World, view: View
       edgeFade: ringCfg.edgeFade,
       color: ringCfg.neutralColor,
       opacity: 0,
+      profile: 'glow',
       y: 0.019,
       renderOrder: 4,
     });
@@ -233,11 +237,56 @@ export function createSceneView(container: HTMLElement, world: World, view: View
     scene.add(halo.mesh);
     return halo;
   });
+  // 选中混合量：主环形态（弧长 / 厚度 / 提亮）与外侧光晕各自一条缓动曲线
+  const selMix = world.dummies.map(() => 0);
+  const haloMix = world.dummies.map(() => 0);
+
+  // ---- v9s.11 环上的信息层 ----
+  // 玩家进度弧：主环外侧一圈，蓄力 / 引导 / 冲刺冷却沿弧填充
+  const playerMeter = createArcMeter({
+    radius: playerRadius * ringCfg.meterRadiusFactor,
+    thickness: ringThickness * ringCfg.meterThicknessFactor,
+    arcRad: baseArc,
+    edgeFade: 0.06,
+    color: ringCfg.meterColorCharge,
+    y: 0.03,
+    renderOrder: 8,
+  });
+  playerMeter.mesh.name = 'player-ground-meter';
+  scene.add(playerMeter.mesh);
+
+  // 假人起手预警弧：和假人环同半径、更厚，windup 期间从左往右填满，满格即命中
+  const dummyWarns = world.dummies.map((s) => {
+    const m = createArcMeter({
+      radius: dummyRadius * ringCfg.warnRadiusFactor,
+      thickness: ringThickness * ringCfg.warnThicknessFactor,
+      arcRad: baseArc,
+      edgeFade: 0.02,
+      color: ringCfg.warnColor,
+      y: 0.031,
+      renderOrder: 9,
+    });
+    m.mesh.name = `dummy-ground-warn-${s.id}`;
+    scene.add(m.mesh);
+    return m;
+  });
+  // 冲锋落点预览（玩家派生招 windup 阶段）
+  // 落点圈用玩家色系：红色会被读成「敌人的危险范围」，而这是「我自己要冲到这里」
+  const landingPreview = createAreaRing({
+    color: ringCfg.playerColor, y: 0.042, renderOrder: 3,
+  });
+  landingPreview.group.name = 'player-landing-preview';
+  scene.add(landingPreview.group);
+
   const ringColor = new THREE.Color();
   const playerRingColor = new THREE.Color(ringCfg.playerColor);
   const neutralRingColor = new THREE.Color(ringCfg.neutralColor);
   const lowThreatRingColor = new THREE.Color(ringCfg.lowThreatColor);
   const highThreatRingColor = new THREE.Color(ringCfg.highThreatColor);
+  const chargeMeterColor = new THREE.Color(ringCfg.meterColorCharge);
+  const channelMeterColor = new THREE.Color(ringCfg.meterColorChannel);
+  const cooldownMeterColor = new THREE.Color(ringCfg.meterColorCooldown);
+  const warnRingColor = new THREE.Color(ringCfg.warnColor);
 
 
   // ---- 战斗特效（全部挂在角色朝向锚点上，局部 +Z = 前方） ----
@@ -275,17 +324,15 @@ export function createSceneView(container: HTMLElement, world: World, view: View
     return mesh;
   });
   // RingGeometry 内外半径按 1 归一化，实例用 scale 套用状态里的真实半径
-  const shockGeo = new THREE.RingGeometry(0.86, 1, 40);
+  // 电环范围：v9s.11 从「一条细环」升级为「内部柔光 + 边界呼吸」的范围圈，
+  // 玩家一眼能读出「这块地危险、还有多久」，而不是只看到一个光圈。
   const shockRings = Array.from({ length: 6 }, () => {
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0x9ad0ff, transparent: true, opacity: 0,
-      side: THREE.DoubleSide, depthWrite: false,
+    const area = createAreaRing({
+      color: '#9ad0ff', edgeWidthRatio: 0.038, y: 0.045, renderOrder: 2,
     });
-    const mesh = new THREE.Mesh(shockGeo, mat);
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.visible = false;
-    scene.add(mesh);
-    return { mesh, mat };
+    area.group.visible = false;
+    scene.add(area.group);
+    return area;
   });
 
   const arrowMat = new THREE.MeshBasicMaterial({
@@ -425,13 +472,48 @@ export function createSceneView(container: HTMLElement, world: World, view: View
       playerRing.mesh.position.set(c.position.x, c.position.y + 0.028, c.position.z);
       playerRing.update(pv.arcRad, pv.opacity, pv.scale, ringColor, ringYaw);
 
+      // 进度弧：蓄力 > 引导 > 冲刺冷却，沿主环外侧从左往右填充（close → 满 = 可用）
+      const meter = playerMeterSource({
+        charging: cb.charging,
+        charge: cb.charge,
+        channeling: w.abilities.channeling,
+        fireTimer: w.abilities.fireTimer,
+        fireInterval: w.config.abilities.arcane.fireInterval,
+        dashCooldown: w.dash.cooldown,
+        dashCooldownMax: w.dash.kind === 'blink'
+          ? w.config.dash.blinkCooldown
+          : w.config.dash.rollCooldown,
+      });
+      playerMeter.mesh.position.set(c.position.x, c.position.y + 0.03, c.position.z);
+      playerMeter.set(
+        meter.ratio,
+        meter.source === 'none' ? 0 : ringCfg.meterOpacity,
+        meter.source === 'charge' ? chargeMeterColor
+          : meter.source === 'channel' ? channelMeterColor : cooldownMeterColor,
+        ringYaw,
+      );
+
+      // 冲锋落点预览：起手阶段就在落点画范围圈，冲锋不再是「盲跳」
+      const lp = w.playerLink;
+      const landMove = lp.weapon ? w.config.links.moves[lp.weapon] : undefined;
+      const landing = linkLandingPreview(
+        lp.phase, c.position.x, c.position.z, lp.facing, lp.travel,
+        landMove?.hit.radius ?? 0.9,
+      );
+      landingPreview.set(
+        landing.x, landing.z, 0.042, landing.radius,
+        landing.active ? ringCfg.landingOpacity : 0, w.time,
+      );
+
       for (let i = 0; i < dummyRings.length; i++) {
         const d = w.dummies[i];
         const ring = dummyRings[i];
         const halo = dummyHalos[i];
+        const warnArc = dummyWarns[i];
         if (!d) {
           ring.mesh.visible = false;
           halo.mesh.visible = false;
+          warnArc.mesh.visible = false;
           continue;
         }
         const selected = w.targeting.hasTarget && w.targeting.targetId === d.id;
@@ -441,23 +523,52 @@ export function createSceneView(container: HTMLElement, world: World, view: View
         } else {
           ringColor.copy(neutralRingColor);
         }
-        const arcDeg = selected ? ringCfg.selectedArcDeg : ringCfg.arcDeg;
-        // 选中：3/4 环 + 加厚 + 提亮 + 外发光（呼吸只在选中时出现）
-        const breath = selected ? 1 + 0.02 * Math.sin(w.time * 2.2 + d.id) : 1;
+        // 起手预警：windup 阶段把主环压向警示红，同时让预警弧从左往右「读秒」
+        const warn = dummyWindupWarning(
+          d.attackPhase, d.attackPhaseTimer, w.config.dummies.attackWindup,
+        );
+        if (warn.active) {
+          ringColor.lerp(warnRingColor, 0.5 * warn.urgency);
+          warnArc.mesh.position.set(d.position.x, d.position.y + 0.031, d.position.z);
+          warnArc.set(
+            warn.ratio,
+            ringCfg.warnOpacity * (0.65 + 0.35 * warn.urgency),
+            warnRingColor,
+            ringYaw,
+          );
+        } else {
+          warnArc.set(0, 0, warnRingColor, ringYaw);
+        }
+        // 选中混合量：弧长 / 厚度 / 提亮 / 外发光全部走同一条缓动曲线，
+        // 淡入 0.14s、淡出 0.36s —— 切换目标时是「环长出来 / 光收回去」，不是瞬间换一张贴图。
+        const mixTarget = selected ? 1 : 0;
+        const tau = mixTarget > selMix[i] ? ringCfg.haloFadeInSec : ringCfg.haloFadeOutSec;
+        selMix[i] = fadeTowards(selMix[i], mixTarget, frameDt, tau);
+        const sm = selMix[i];
+        // 呼吸只在选中时出现，且随混合量淡入，避免刚取消时还在跳
+        const breath = 1 + 0.02 * sm * Math.sin(w.time * 2.2 + d.id);
+        const arcDeg = ringCfg.arcDeg + (ringCfg.selectedArcDeg - ringCfg.arcDeg) * sm;
         ring.mesh.position.set(d.position.x, d.position.y + 0.022, d.position.z);
         ring.update(
           (arcDeg * Math.PI) / 180,
-          selected ? ringCfg.selectedOpacity : ringCfg.opacity,
-          selected ? ringCfg.selectedScale * breath : 1,
+          ringCfg.opacity + (ringCfg.selectedOpacity - ringCfg.opacity) * sm,
+          1 + (ringCfg.selectedScale - 1) * sm * breath,
           ringColor,
           ringYaw,
-          selected ? ringCfg.selectedThicknessScale : 1,
+          1 + (ringCfg.selectedThicknessScale - 1) * sm,
         );
+        // 外发光跟随同一条混合量，但淡出更慢：光晕在环已经收回半环之后才彻底散掉，
+        // 半径从 1.0 收到 0.94，读起来是「光慢慢缩回去」而不是硬切黑。
+        haloMix[i] = fadeTowards(
+          haloMix[i], mixTarget, frameDt,
+          mixTarget > haloMix[i] ? ringCfg.haloFadeInSec : ringCfg.haloFadeOutSec,
+        );
+        const mix = haloMix[i];
         halo.mesh.position.set(d.position.x, d.position.y + 0.019, d.position.z);
         halo.update(
           (arcDeg * Math.PI) / 180,
-          selected ? ringCfg.haloOpacity * (0.75 + 0.25 * breath) : 0,
-          selected ? ringCfg.selectedScale * breath : 1,
+          ringCfg.haloOpacity * mix * (0.88 + 0.12 * Math.sin(w.time * 2.2 + d.id)),
+          ringCfg.selectedScale * (0.94 + 0.06 * mix) * breath,
           ringColor,
           ringYaw,
         );
@@ -535,17 +646,16 @@ export function createSceneView(container: HTMLElement, world: World, view: View
           mesh.rotation.y += frameDt * 6;
         }
       }
-      // 电环：贴地、按剩余寿命淡出；脉冲命中时 Core 会写长受击时长，视觉上体现为持续亮环
+      // 电环：范围圈（内部柔光 + 边界呼吸），边界越接近消失越暗 —— 剩余时间可直接读
       for (let i = 0; i < shockRings.length; i++) {
         const ring = w.abilities.rings[i];
         const e = shockRings[i];
-        e.mesh.visible = !!ring;
-        if (ring) {
-          const t = Math.max(0, Math.min(1, ring.life / Math.max(ring.duration, 1e-6)));
-          e.mesh.position.set(ring.x, 0.05, ring.z);
-          e.mesh.scale.setScalar(ring.radius);
-          e.mat.opacity = 0.25 + 0.55 * t;
+        if (!ring) {
+          e.group.visible = false;
+          continue;
         }
+        const t = Math.max(0, Math.min(1, ring.life / Math.max(ring.duration, 1e-6)));
+        e.set(ring.x, ring.z, 0.045, ring.radius, ringCfg.areaOpacity * (0.35 + 0.65 * t), w.time);
       }
 
       if (arrowTime >= 0) {
@@ -659,12 +769,14 @@ export function createSceneView(container: HTMLElement, world: World, view: View
       playerRing.dispose();
       for (const ring of dummyRings) ring.dispose();
       for (const halo of dummyHalos) halo.dispose();
+      playerMeter.dispose();
+      for (const m of dummyWarns) m.dispose();
+      landingPreview.dispose();
       slash.geometry.dispose();
       slashMat.dispose();
       boltGeo.dispose();
       boltMat.dispose();
-      shockGeo.dispose();
-      for (const e of shockRings) e.mat.dispose();
+      for (const e of shockRings) e.dispose();
       arrowFx.geometry.dispose();
       arrowMat.dispose();
       for (const r of dashRings) r.mat.dispose();

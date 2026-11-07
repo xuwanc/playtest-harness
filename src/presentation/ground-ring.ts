@@ -38,6 +38,17 @@ const SEGMENTS = 64;
 const RADIAL_PROFILE = [0, 0.24, 0.76, 1];
 const RADIAL_ALPHA = [0, 1, 1, 0];
 
+/**
+ * v9s.11 · 光晕剖面：径向 7 圈按高斯衰减（中间最亮、内外都长尾收敛）。
+ * 旧版 halo 直接复用环带剖面，等于「一条更宽更淡的硬带」，选中切换时像一盏灯被拧开 / 关掉；
+ * 换成高斯后边缘没有硬边，配合透明度缓动才读得出「光慢慢渗出来 / 收回去」。
+ */
+const GLOW_PROFILE = [0, 0.12, 0.28, 0.5, 0.72, 0.88, 1];
+const GLOW_ALPHA = [0, 0.16, 0.5, 1, 0.5, 0.16, 0];
+
+/** 径向剖面预设：`band` = 环带，`glow` = 外发光。 */
+export type RingProfile = 'band' | 'glow';
+
 function smooth01(x: number, width: number): number {
   if (width <= 1e-6) return 1;
   const t = Math.min(1, Math.max(0, x / width));
@@ -54,10 +65,13 @@ export function buildGroundRingGeometry(
   arcRad: number,
   edgeFade: number,
   segments = SEGMENTS,
+  profile: RingProfile = 'band',
 ): THREE.BufferGeometry {
   const inner = Math.max(0.001, radius - thickness * 0.5);
   const outer = Math.max(inner + 0.001, radius + thickness * 0.5);
-  const rows = RADIAL_PROFILE.length;
+  const radialProfile = profile === 'glow' ? GLOW_PROFILE : RADIAL_PROFILE;
+  const radialAlpha = profile === 'glow' ? GLOW_ALPHA : RADIAL_ALPHA;
+  const rows = radialProfile.length;
   const cols = segments + 1;
   const positions = new Float32Array(cols * rows * 3);
   const colors = new Float32Array(cols * rows * 4);
@@ -71,12 +85,12 @@ export function buildGroundRingGeometry(
     const sx = Math.sin(theta);
     const sz = Math.cos(theta);
     for (let r = 0; r < rows; r++) {
-      const rad = inner + (outer - inner) * RADIAL_PROFILE[r];
+      const rad = inner + (outer - inner) * radialProfile[r];
       const vi = i * rows + r;
       positions[vi * 3] = sx * rad;
       positions[vi * 3 + 1] = 0;
       positions[vi * 3 + 2] = sz * rad;
-      const a = edge * RADIAL_ALPHA[r];
+      const a = edge * radialAlpha[r];
       colors[vi * 4] = 1;
       colors[vi * 4 + 1] = 1;
       colors[vi * 4 + 2] = 1;
@@ -107,6 +121,8 @@ export type GroundRingOptions = {
   edgeFade: number;
   color: string;
   opacity: number;
+  /** 径向剖面：环带（默认）/ 外发光渐变，见 `RingProfile` */
+  profile?: RingProfile;
   /** 贴地高度（米），用来给玩家 / 假人环分先后，避免共面闪烁 */
   y: number;
   /** 渲染顺序：大的后画（半透明不写深度，靠顺序叠） */
@@ -123,20 +139,37 @@ export function createGroundRing(opt: GroundRingOptions): GroundRing {
     vertexColors: true,
     toneMapped: false,
   });
-  // 预生成默认弧 + 3/4 环两套几何：选中切换只换指针，零运行时缓冲上传
+  // 预生成几何并按「量化档位」缓存：选中切换只换指针，零运行时缓冲上传
   // （v9s.5 的教训：切换假人状态时同步上传纹理 / 几何会在鸿蒙上卡 1~2 帧）。
+  // v9s.11：弧长 / 厚度现在会随选中混合量连续过渡，因此把档位量化到
+  // 1.8°（1/32 弧度）与 0.05 厚度 —— 相邻两档肉眼无差，缓存条目收敛在几十个以内。
   const geoCache = new Map<string, THREE.BufferGeometry>();
+  let currentGeo: THREE.BufferGeometry | null = null;
   const build = (arcRad: number, thicknessScale: number): THREE.BufferGeometry => {
-    const key = `${Math.round(arcRad * 1000)}|${Math.round(thicknessScale * 100)}`;
+    const qArc = Math.round(arcRad * 32) / 32;
+    const qTh = Math.max(0.05, Math.round(thicknessScale * 20) / 20);
+    const key = `${Math.round(qArc * 32)}|${Math.round(qTh * 20)}`;
     const hit = geoCache.get(key);
     if (hit) return hit;
     const geo = buildGroundRingGeometry(
-      opt.radius, opt.thickness * thicknessScale, arcRad, opt.edgeFade,
+      opt.radius, opt.thickness * qTh, qArc, opt.edgeFade,
+      SEGMENTS, opt.profile ?? 'band',
     );
     geoCache.set(key, geo);
+    // 上限保护：连续过渡期间档位不会无限增长，超过就释放一个「当前没在用」的最旧档位
+    if (geoCache.size > 64) {
+      for (const [k, g] of geoCache) {
+        if (k !== key && g !== currentGeo) {
+          g.dispose();
+          geoCache.delete(k);
+          break;
+        }
+      }
+    }
     return geo;
   };
-  const mesh = new THREE.Mesh(build(opt.arcRad, 1), mat);
+  currentGeo = build(opt.arcRad, 1);
+  const mesh = new THREE.Mesh(currentGeo, mat);
   mesh.position.y = opt.y;
   mesh.renderOrder = opt.renderOrder ?? 4;
 
@@ -148,7 +181,8 @@ export function createGroundRing(opt: GroundRingOptions): GroundRing {
     update(arcRad, opacity, scale, color, yawRad, nextThicknessScale = 1): void {
       const th = Math.max(0.05, nextThicknessScale);
       if (Math.abs(arcRad - arc) > 0.01 || Math.abs(th - thicknessScale) > 0.01) {
-        mesh.geometry = build(arcRad, th);
+        currentGeo = build(arcRad, th);
+        mesh.geometry = currentGeo;
         arc = arcRad;
         thicknessScale = th;
       }
@@ -228,4 +262,313 @@ export function threatRingColor(
   if (lv <= 0.001) return out.copy(base);
   if (lv < 0.5) return out.copy(base).lerp(low, lv * 2);
   return out.copy(low).lerp(high, (lv - 0.5) * 2);
+}
+
+/* ===================================================================================
+ * v9s.11 · 从「一个装饰环」升级为「环上的信息层」
+ *
+ * 设计原则：一个环只承载一层语义，多层信息用同心环叠，而不是往同一个 mesh 上堆颜色。
+ *   · 主环（内）：身份 / 接敌状态 —— 已有，`createGroundRing`
+ *   · 进度弧（外）：蓄力 / 引导 / 冷却 CD —— `createArcMeter`，沿弧长填充
+ *   · 预警弧（假人）：起手 windup 倒计时 —— 同一个 `createArcMeter`，满格即命中
+ *   · 范围圈（地面）：电环 / 冲锋落点 —— `createAreaRing`，填充 + 边界
+ * 全部零运行时几何上传：进度用 `setDrawRange`，范围圈用 scale 套归一化几何。
+ * =================================================================================== */
+
+/**
+ * 实心圆盘几何（中心 → 边缘 alpha 衰减），用于 AoE 范围填充。
+ * 半径为 1，调用方用 scale 套真实半径 —— 换半径零重建。
+ */
+export function buildGroundDiscGeometry(
+  segments = 64,
+  innerRatio = 0.06,
+  rings = 5,
+): THREE.BufferGeometry {
+  const cols = segments + 1;
+  const rows = rings + 1;
+  const positions = new Float32Array(cols * rows * 3);
+  const colors = new Float32Array(cols * rows * 4);
+  const indices: number[] = [];
+
+  for (let i = 0; i < cols; i++) {
+    const theta = (i / segments) * Math.PI * 2;
+    const sx = Math.sin(theta);
+    const sz = Math.cos(theta);
+    for (let r = 0; r < rows; r++) {
+      const t = r / rings;
+      const rad = innerRatio + (1 - innerRatio) * t;
+      const vi = i * rows + r;
+      positions[vi * 3] = sx * rad;
+      positions[vi * 3 + 1] = 0;
+      positions[vi * 3 + 2] = sz * rad;
+      // 中心略实、向外平滑收零：读作「这块地」而不是「一个圈」
+      const a = Math.pow(1 - t, 1.8) * 0.9 + (r === 0 ? 0.1 : 0);
+      colors[vi * 4] = 1;
+      colors[vi * 4 + 1] = 1;
+      colors[vi * 4 + 2] = 1;
+      colors[vi * 4 + 3] = Math.min(1, a);
+    }
+  }
+  for (let i = 0; i < segments; i++) {
+    for (let r = 0; r < rings; r++) {
+      const a = i * rows + r;
+      const b = a + rows;
+      indices.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 4));
+  geo.setIndex(indices);
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+export type ArcMeterOptions = {
+  radius: number;
+  thickness: number;
+  arcRad: number;
+  edgeFade: number;
+  color: string;
+  y: number;
+  renderOrder?: number;
+  segments?: number;
+  profile?: RingProfile;
+};
+
+export type ArcMeter = {
+  mesh: THREE.Mesh;
+  /** ratio 0..1：从左端向右端填充；opacity=0 时整体隐藏 */
+  set(ratio: number, opacity: number, color: THREE.Color, yawRad: number, scale?: number): void;
+  ratio(): number;
+  /** 当前显示的段数（供验收：确认填充真的在增长） */
+  filledSegments(): number;
+  dispose(): void;
+};
+
+/**
+ * 进度弧：一次生成「满弧」几何，靠 `setDrawRange` 露出前 N 段。
+ * 之所以不按弧长重建几何：蓄力 / 引导 / CD 每帧都在变，重建会持续上传顶点缓冲
+ * （v9s.5 的卡顿教训）；drawRange 只是改一个整数，零上传、零 GC。
+ */
+export function createArcMeter(opt: ArcMeterOptions): ArcMeter {
+  const segments = opt.segments ?? SEGMENTS;
+  const profile = opt.profile ?? 'band';
+  const rows = profile === 'glow' ? GLOW_PROFILE.length : RADIAL_PROFILE.length;
+  const idxPerSeg = (rows - 1) * 6;
+  const geo = buildGroundRingGeometry(
+    opt.radius, opt.thickness, opt.arcRad, opt.edgeFade, segments, profile,
+  );
+  const mat = new THREE.MeshBasicMaterial({
+    color: opt.color,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    vertexColors: true,
+    toneMapped: false,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.y = opt.y;
+  mesh.renderOrder = opt.renderOrder ?? 7;
+  mesh.visible = false;
+  geo.setDrawRange(0, 0);
+
+  let filled = 0;
+
+  return {
+    mesh,
+    set(ratio, opacity, color, yawRad, scale = 1): void {
+      const r = Math.min(1, Math.max(0, ratio));
+      const segs = Math.round(r * segments);
+      // 至少露 1 段：ratio 刚起步时也给一个可见的「起点像素」
+      const count = r > 0.001 ? Math.max(1, segs) * idxPerSeg : 0;
+      if (count !== geo.drawRange.count) geo.setDrawRange(0, count);
+      filled = segs;
+      mat.opacity = opacity;
+      mat.color.copy(color);
+      mesh.scale.set(scale, 1, scale);
+      mesh.rotation.y = yawRad;
+      mesh.visible = opacity > 0.002 && r > 0.001;
+    },
+    ratio(): number {
+      return segments > 0 ? filled / segments : 0;
+    },
+    filledSegments(): number {
+      return filled;
+    },
+    dispose(): void {
+      geo.dispose();
+      mat.dispose();
+    },
+  };
+}
+
+export type AreaRingOptions = {
+  color: string;
+  /** 边界环带宽度占半径的比例（0.04 ≈ 半径 2.4m 时约 0.1m） */
+  edgeWidthRatio?: number;
+  y: number;
+  renderOrder?: number;
+};
+
+export type AreaRing = {
+  group: THREE.Group;
+  /** 位置、真实半径（米）、整体透明度 0..1、时间（用于边界呼吸） */
+  set(x: number, z: number, y: number, radius: number, opacity: number, time: number): void;
+  dispose(): void;
+};
+
+/**
+ * AoE 范围圈：内部柔光填充 + 外圈边界，几何按半径 1 归一化，靠 scale 套真实半径。
+ * 电环、冲锋落点共用一套 —— 范围类信息全部长这样，玩家不用学第二种视觉语言。
+ */
+export function createAreaRing(opt: AreaRingOptions): AreaRing {
+  const group = new THREE.Group();
+  const fillGeo = buildGroundDiscGeometry(48);
+  const fillMat = new THREE.MeshBasicMaterial({
+    color: opt.color, transparent: true, opacity: 0, depthWrite: false,
+    side: THREE.DoubleSide, vertexColors: true, toneMapped: false,
+  });
+  const fill = new THREE.Mesh(fillGeo, fillMat);
+  fill.renderOrder = opt.renderOrder ?? 2;
+  group.add(fill);
+
+  const ew = Math.max(0.01, opt.edgeWidthRatio ?? 0.045);
+  const edgeGeo = buildGroundRingGeometry(1 - ew * 0.5, ew, Math.PI * 2, 0, 64, 'band');
+  const edgeMat = new THREE.MeshBasicMaterial({
+    color: opt.color, transparent: true, opacity: 0, depthWrite: false,
+    side: THREE.DoubleSide, vertexColors: true, toneMapped: false,
+  });
+  const edge = new THREE.Mesh(edgeGeo, edgeMat);
+  edge.renderOrder = (opt.renderOrder ?? 2) + 1;
+  group.add(edge);
+
+  group.position.y = opt.y;
+
+  return {
+    group,
+    set(x, z, y, radius, opacity, time): void {
+      const o = Math.min(1, Math.max(0, opacity));
+      group.position.set(x, y, z);
+      fill.scale.set(radius, 1, radius);
+      edge.scale.set(radius, 1, radius);
+      // 内部填充永远比边界淡：先把「范围」铺出来，再让边界去抓眼睛
+      fillMat.opacity = o * 0.26;
+      edgeMat.opacity = o * (0.72 + 0.18 * Math.sin(time * 7));
+      group.visible = o > 0.004;
+    },
+    dispose(): void {
+      fillGeo.dispose();
+      fillMat.dispose();
+      edgeGeo.dispose();
+      edgeMat.dispose();
+    },
+  };
+}
+
+/* ---------------- 纯数值：信号解算（不碰 three，可单测） ---------------- */
+
+/** 指数趋近；`tauSec` 为时间常数（越小越快）。dt<=0 或 tau 极小时直接取目标。 */
+export function fadeTowards(current: number, target: number, dt: number, tauSec: number): number {
+  if (tauSec <= 1e-4 || dt <= 0) return target;
+  const k = 1 - Math.exp(-dt / tauSec);
+  return current + (target - current) * k;
+}
+
+export type WindupWarning = {
+  active: boolean;
+  /** 0..1 起手进度：填满瞬间就是命中帧 */
+  ratio: number;
+  /** 0..1 紧迫度：越接近出手越高，用于呼吸加快 / 亮度 */
+  urgency: number;
+};
+
+/**
+ * 假人起手预警（v9s.11）。
+ * `elapsed` 传 `DummyState.attackPhaseTimer`（windup 阶段是已流逝时间）。
+ * 只在 windup 阶段亮，active / recovery 立刻熄灭 —— 预警必须「有敌意才亮」，
+ * 否则和受击闪红混在一起，玩家就读不出「下一步要挨打」。
+ */
+export function dummyWindupWarning(
+  phase: string,
+  elapsed: number,
+  windupSec: number,
+): WindupWarning {
+  if (phase !== 'windup') return { active: false, ratio: 0, urgency: 0 };
+  const total = Math.max(1e-4, windupSec);
+  const ratio = Math.min(1, Math.max(0, elapsed / total));
+  return { active: true, ratio, urgency: 0.35 + 0.65 * ratio };
+}
+
+export type RingMeterSource = 'none' | 'charge' | 'channel' | 'cooldown';
+
+export type PlayerMeter = {
+  source: RingMeterSource;
+  ratio: number;
+};
+
+export type PlayerMeterInput = {
+  charging: boolean;
+  charge: number;
+  channeling: boolean;
+  fireTimer: number;
+  fireInterval: number;
+  /** 冲刺 / 闪现剩余冷却（秒） */
+  dashCooldown: number;
+  /** 该动作的冷却总时长（秒），用当前武器那一档 */
+  dashCooldownMax: number;
+};
+
+/**
+ * 玩家进度弧的唯一数据源（v9s.11）。
+ * 优先级 = 操作意图的紧迫度：正在蓄力 > 正在引导 > 技能在冷却。
+ * 冷却只在剩冷却时显示（≤1s 的一次反馈），不会变成常驻噪音。
+ */
+export function playerMeterSource(input: PlayerMeterInput): PlayerMeter {
+  if (input.charging) {
+    return { source: 'charge', ratio: Math.min(1, Math.max(0, input.charge)) };
+  }
+  if (input.channeling) {
+    const iv = Math.max(1e-4, input.fireInterval);
+    // fireTimer 是「距下一发还剩多少」，倒过来就是这一发的填充进度
+    return { source: 'channel', ratio: 1 - Math.min(1, Math.max(0, input.fireTimer / iv)) };
+  }
+  if (input.dashCooldown > 0 && input.dashCooldownMax > 0) {
+    return {
+      source: 'cooldown',
+      ratio: 1 - Math.min(1, Math.max(0, input.dashCooldown / input.dashCooldownMax)),
+    };
+  }
+  return { source: 'none', ratio: 0 };
+}
+
+export type LandingPreview = {
+  active: boolean;
+  x: number;
+  z: number;
+  radius: number;
+};
+
+/**
+ * 冲锋落点预览：派生招起手（windup）阶段，在「起点 + 朝向 × 冲锋距离」画范围圈。
+ * windup 期间玩家还没位移，所以当前位置就是起点，不需要额外记录起手点。
+ */
+export function linkLandingPreview(
+  phase: string,
+  x: number,
+  z: number,
+  facingYaw: number,
+  travel: number,
+  hitRadius: number,
+): LandingPreview {
+  if (phase !== 'windup' || travel <= 0.05) {
+    return { active: false, x, z, radius: 0 };
+  }
+  return {
+    active: true,
+    x: x + Math.sin(facingYaw) * travel,
+    z: z + Math.cos(facingYaw) * travel,
+    radius: Math.max(0.3, hitRadius),
+  };
 }

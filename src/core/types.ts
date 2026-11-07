@@ -1330,6 +1330,37 @@ export type GroundRingViewConfig = {
   haloThicknessFactor: number;
   /** 选中外发光透明度 */
   haloOpacity: number;
+  /** 外发光淡入时间常数（秒）：越小起得越快 */
+  haloFadeInSec: number;
+  /** 外发光淡出时间常数（秒）：刻意比淡入慢，光「收回去」才自然 */
+  haloFadeOutSec: number;
+
+  /* ---- v9s.11：环上的信息层 ---- */
+
+  /** 进度弧半径倍率（相对玩家环，1.24 → 落在主环外侧一圈） */
+  meterRadiusFactor: number;
+  /** 进度弧环带厚度倍率（相对基础厚度） */
+  meterThicknessFactor: number;
+  /** 进度弧透明度 */
+  meterOpacity: number;
+  /** 蓄力（剑 / 弓）进度色 */
+  meterColorCharge: string;
+  /** 法杖引导进度色 */
+  meterColorChannel: string;
+  /** 冲刺 / 闪现冷却恢复色 */
+  meterColorCooldown: string;
+  /** 假人起手预警弧半径倍率（相对假人环） */
+  warnRadiusFactor: number;
+  /** 假人起手预警弧厚度倍率 */
+  warnThicknessFactor: number;
+  /** 假人起手预警弧透明度 */
+  warnOpacity: number;
+  /** 假人起手预警色 */
+  warnColor: string;
+  /** AoE 范围圈透明度（内部填充自动取 20%） */
+  areaOpacity: number;
+  /** 冲锋落点圈透明度 */
+  landingOpacity: number;
 };
 
 export type ColorConfig = {

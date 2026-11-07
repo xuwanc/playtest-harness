@@ -763,7 +763,21 @@
       "highThreatColor": "#ff3b30",
       "haloRadiusFactor": 1.16,
       "haloThicknessFactor": 2.6,
-      "haloOpacity": 0.14
+      "haloOpacity": 0.14,
+      "haloFadeInSec": 0.14,
+      "haloFadeOutSec": 0.36,
+      "meterRadiusFactor": 1.34,
+      "meterThicknessFactor": 0.52,
+      "meterOpacity": 0.9,
+      "meterColorCharge": "#ffd166",
+      "meterColorChannel": "#b48cff",
+      "meterColorCooldown": "#7fb8d8",
+      "warnRadiusFactor": 1.14,
+      "warnThicknessFactor": 1.5,
+      "warnOpacity": 0.9,
+      "warnColor": "#ff5a4a",
+      "areaOpacity": 0.5,
+      "landingOpacity": 0.55
     },
     "colors": {
       "ground": "#2b3440",
