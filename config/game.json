@@ -383,6 +383,26 @@
       "maxPitchDelta": 7,
       "framingBias": 0.55
     },
+    "gaze": {
+      "enabled": true,
+      "headLookLimitDeg": 55,
+      "headGazeRange": 7,
+      "threatRange": 8,
+      "recoveryDist": 12,
+      "maxThreats": 3,
+      "bodyTurnRate": 7,
+      "enterThreshold": 0.05,
+      "modeWeight": {
+        "idle": 0.2,
+        "wander": 0.45,
+        "follow": 0.8,
+        "keep-distance": 0.7,
+        "attack": 1.5
+      },
+      "attackBoost": 0.6,
+      "nearDistance": 1.5,
+      "saturation": 2.6
+    },
     "dummies": {
       "count": 4,
       "spawn": [

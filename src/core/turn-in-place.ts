@@ -49,6 +49,11 @@ export function resetTurnInPlace(world: World): void {
  * 返回 null 表示「没有可盯的目标」，不触发转身。
  */
 export function resolveLookYaw(world: World, intents: Intents, lookRange: number): number | null {
+  // v9s.3：威胁注视激活时，身体（原地转身）优先朝「主威胁 + 最近高权威胁」的加权中心，
+  // 与 orientation 的身体朝向目标一致；瞄准拖拽只决定 facing（战斗起手），不抢身体朝向。
+  if (world.modules.gaze && world.gaze.active) {
+    return world.gaze.centroidYaw;
+  }
   if (intents.aimActive && Math.hypot(intents.aimX, intents.aimZ) > EPS) {
     return Math.atan2(intents.aimX, intents.aimZ);
   }

@@ -95,6 +95,10 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   if (Math.hypot(v.x, v.z) > 0.15) c.moveYaw = Math.atan2(v.x, v.z);
 
   // 3) 身体平滑追随（慢）
+  //    v9s.3：威胁注视激活时，身体趋向「主威胁 + 最近高权威胁」的加权中心（centroidYaw），
+  //    而非面朝向 —— 即使边瞄准边走位，身体也始终压向包围中心；普通模式仍追随 facing。
+  const gazeActive = world.modules.gaze && world.gaze.active;
+  const bodyTargetYaw = gazeActive ? world.gaze.centroidYaw : c.facing;
   //    v9s：原地转身 active 期间跳过 —— bodyYaw 由 turn-in-place 模块按固定进度驱动，
   //    这里若照常 approach 会把「固定节奏的转身」拖成两套插值叠加，转身起止发飘。
   //    headYaw 仍按本帧的 bodyYaw（上一帧转身写入值）限幅，头先于身体到位的关系不变。
@@ -104,11 +108,31 @@ export function orientationUpdate(world: World, dt: number, intents: Intents): v
   //    静止匀速起步；激活帧 bodyYaw≈旧值，无突变。
   const turning = world.turnInPlace.phase === 'active' || turnShouldDrive(world, intents);
   if (!turning) {
-    c.bodyYaw = approach(c.bodyYaw, c.facing, o.bodyTurnRate, dt);
+    c.bodyYaw = approach(c.bodyYaw, bodyTargetYaw, o.bodyTurnRate, dt);
   }
 
-  // 4) 头部快速追随（快）→ 头先于身体到位；再相对身体限幅
-  let head = approach(c.headYaw, c.facing, o.headTurnRate, dt);
+  // 4) 头部：v9s.3 注视逻辑（快追随 → 头先于身体到位 → 相对身体限幅）
+  //    威胁注视 → 头看主威胁(mainYaw)；普通注视 → 头看可注视目标（拖拽 > 锁定目标），
+  //    无目标则跟随 facing（移动/瞄准方向）。注意：头部**不**做「最近假人」兜底 —— 那是
+  //    turn-in-place（身体）的机制，头部只跟明确的拖拽/锁定意图，未锁定时自然看向移动方向。
+  //    头部相对身体的偏转角超过 headLookLimitDeg 时，平滑转回看「移动方向」（而非硬卡在极限）。
+  let headTarget = c.facing;
+  if (gazeActive) {
+    headTarget = world.gaze.mainYaw;
+  } else if (intents.aimActive && Math.hypot(intents.aimX, intents.aimZ) > EPS) {
+    headTarget = Math.atan2(intents.aimX, intents.aimZ);
+  } else if (
+    world.config.targeting.targetAssist
+    && world.modules.targeting
+    && world.targeting.hasTarget
+  ) {
+    headTarget = world.targeting.targetYaw;
+  }
+  const headLimit = (world.config.gaze.headLookLimitDeg * Math.PI) / 180;
+  if (Math.abs(wrapAngle(headTarget - c.bodyYaw)) > headLimit) {
+    headTarget = c.moveYaw; // 超过头限制角：头看向移动方向
+  }
+  let head = approach(c.headYaw, headTarget, o.headTurnRate, dt);
   const maxTurn = (o.maxHeadTurnDeg * Math.PI) / 180;
   const rel = wrapAngle(head - c.bodyYaw);
   if (rel > maxTurn) head = c.bodyYaw + maxTurn;

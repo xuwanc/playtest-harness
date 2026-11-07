@@ -10,6 +10,7 @@ import { orientationUpdate } from './orientation';
 import { crowdResistanceUpdate, separationUpdate } from './separation';
 import { targetingUpdate } from './targeting';
 import { turnInPlaceUpdate } from './turn-in-place';
+import { gazeUpdate } from './gaze';
 import { EMPTY_INTENTS } from './types';
 import type { Intents, World } from './types';
 import { resetWorld } from './world';
@@ -66,6 +67,8 @@ export function step(world: World, dt: number, intents: Intents): World {
   if (world.modules.combat) combatUpdate(world, dt, intents);
   if (world.modules.dash) dashUpdate(world, dt, intents);
   if (world.modules.movement) movementUpdate(world, dt, intents);
+  // v9s.3：注视 / 威胁评估（读上一帧假人位置，纯几何，先于 orientation 让头/身本帧即用）
+  if (world.modules.gaze) gazeUpdate(world, dt, intents);
   if (world.modules.orientation) orientationUpdate(world, dt, intents);
   // v9s：总是调用（内部处理 enabled / modules 开关并清理残留状态），保证关闭时
   // 不会把「转身进行中」卡住；与 links 同一套模块开关语义。

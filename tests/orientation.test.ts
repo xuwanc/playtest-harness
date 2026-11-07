@@ -56,6 +56,9 @@ describe('程序化朝向：面朝向 / 身体朝向 / 移动方向分离', () =
 
   it('攻击中四个角彼此分离：面朝向锁定、身体滞后、头部领先、移动方向保持', () => {
     const w = makeWorld();
+    w.modules.gaze = false;       // 隔离注视：本测试验证朝向四角分离基础，头部应跟随 facing
+    w.modules.targeting = false;  // 排除锁定目标对头部的牵引
+    w.config.gaze.headLookLimitDeg = 180; // 隔离 v9s.3 头限制角特性（已在 v9s3-gaze 单独覆盖）
     run(w, 60, intent({ moveX: 1, moveZ: 0 })); // 稳定朝 +X
     const moveDir = w.character.moveYaw;
     expect(Math.abs(wrapAngle(moveDir - HALF_PI))).toBeLessThan(0.1);

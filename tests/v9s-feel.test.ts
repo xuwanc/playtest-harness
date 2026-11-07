@@ -134,6 +134,7 @@ describe('v9s Core turnInPlace：静止盯视触发、起步攻击立即中止',
   it('目视方向在背后 → 超过阈值才触发，快照目标角并留余角', () => {
     const w = makeWorld();
     w.modules.dummies = false;
+    w.modules.gaze = false;   // 隔离威胁注视：本测试验证「身体转向瞄准方向」的转身机制本身
     // 前 1 帧仍在防抖窗口内（armSec=0.03 ≈ 2 帧）
     run(w, 1, BEHIND);
     expect(w.turnInPlace.phase).toBe('idle');
@@ -149,6 +150,7 @@ describe('v9s Core turnInPlace：静止盯视触发、起步攻击立即中止',
   it('转身按固定进度推进 bodyYaw，完成后回 idle 且不残留', () => {
     const w = makeWorld();
     w.modules.dummies = false;
+    w.modules.gaze = false;   // 隔离威胁注视：身体应转向瞄准方向（背后），而非威胁质心
     run(w, 9, BEHIND);
     expect(w.turnInPlace.phase).toBe('active');
     const mid = w.character.bodyYaw;

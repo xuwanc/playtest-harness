@@ -8,6 +8,19 @@ import { initialLinkState, resetLink } from './links';
 import { resetCharacter } from './movement';
 import { initialTargetState } from './targeting';
 import { initialTurnInPlaceState, resetTurnInPlace } from './turn-in-place';
+import type { GazeState } from './types';
+
+/** v9s.3：注视 / 威胁初始状态（无威胁、未激活）。 */
+export function initialGazeState(): GazeState {
+  return {
+    active: false,
+    mainId: 0,
+    mainYaw: 0,
+    centroidYaw: 0,
+    threatCount: 0,
+    threat: 0,
+  };
+}
 import { buildBoxes } from './scene';
 import type { CoreConfig, SceneConfig, World } from './types';
 
@@ -55,6 +68,7 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
       centroidX: core.spawn.x,
       centroidZ: core.spawn.z,
     },
+    gaze: initialGazeState(),
     dummies: createDummies(core.dummies),
     dummyAttackCount: 0,
     events: [],
@@ -71,6 +85,7 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
       separation: true,
       dash: true,
       camera: true,
+      gaze: true,
       dummies: true,
     },
   };
@@ -109,5 +124,12 @@ export function resetWorld(world: World): void {
   resetDash(world);
   resetCameraIntent(world);
   resetTurnInPlace(world);
+  const g = world.gaze;
+  g.active = false;
+  g.mainId = 0;
+  g.mainYaw = 0;
+  g.centroidYaw = 0;
+  g.threatCount = 0;
+  g.threat = 0;
   world.events.length = 0;
 }

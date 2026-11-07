@@ -563,6 +563,39 @@ export type CameraThreatConfig = {
   framingBias: number;
 };
 
+/**
+ * v9s.3 · 注视 / 威胁评估配置（Core 侧，确定性）。
+ * 威胁加权口径与相机（CameraThreatConfig）完全一致：近度 × 行为模式倍率
+ * （+ 挥砍 active 帧 attackBoost），便于「包围圈」与「威胁注视」同源。
+ * 普通注视只动头（不改身体）；威胁注视在「主动瞄准 + 范围内有威胁」时让
+ * 身体趋向威胁加权中心、头看主威胁，威胁全超出 recoveryDist 交还身体控制。
+ */
+export type GazeConfig = {
+  enabled: boolean;
+  /** 普通注视：头相对身体最大偏转（度），超过则头平滑转回看移动方向 */
+  headLookLimitDeg: number;
+  /** 普通注视感知半径（米）：范围内有可注视目标（锁定/最近假人）才转头看 */
+  headGazeRange: number;
+  /** 威胁注视进入半径（米）：瞄准中且范围内有加权威胁即触发 */
+  threatRange: number;
+  /** 解除半径（米，> threatRange）：威胁全部超出此距离才交还身体控制（滞回） */
+  recoveryDist: number;
+  /** 参与加权中心的高权威胁数量（主威胁 + 最近 N-1） */
+  maxThreats: number;
+  /** 身体朝威胁中心转向速率（1/s） */
+  bodyTurnRate: number;
+  /** 进入威胁注视的最小归一化威胁阈值（0..1），低于不进入 */
+  enterThreshold: number;
+  /** 各假人行为模式基础威胁倍率（复用相机口径） */
+  modeWeight: Record<DummyMode, number>;
+  /** 假人挥砍 active 帧额外加权 */
+  attackBoost: number;
+  /** 近度归一化近距（米）：<= 此距离近度权重为 1 */
+  nearDistance: number;
+  /** 威胁归一化饱和常数：threat = sum / (sum + saturation) */
+  saturation: number;
+};
+
 export type CameraIntent = {
   /** 距离倍率：<1 推进、>1 拉远 */
   distanceScale: number;
@@ -578,6 +611,22 @@ export type CameraIntent = {
   /** 威胁加权质心（世界 XZ），供调试可视化 */
   centroidX: number;
   centroidZ: number;
+};
+
+/** v9s.3 · 注视 / 威胁运行时状态（plain data，随快照回放）。 */
+export type GazeState = {
+  /** 是否处于威胁注视（主动瞄准 + 范围内有威胁） */
+  active: boolean;
+  /** 主威胁假人 id（0 = 无） */
+  mainId: number;
+  /** 主威胁朝向（弧度，玩家指向主威胁）；头看向此处 */
+  mainYaw: number;
+  /** 加权中心朝向（弧度，主威胁 + 最近 N-1 高权威胁）；身体趋向此处 */
+  centroidYaw: number;
+  /** 参与评估的威胁数（威胁范围内、加权 > 0） */
+  threatCount: number;
+  /** 归一化威胁强度 0..1（sum / (sum + saturation)） */
+  threat: number;
 };
 
 /* ---------------- 测试假人契约 ---------------- */
@@ -778,6 +827,8 @@ export type CoreConfig = {
   separation: SeparationConfig;
   dash: DashConfig;
   camera: CameraThreatConfig;
+  /** v9s.3：注视 / 威胁评估（普通注视只动头、威胁注视身体朝威胁中心） */
+  gaze: GazeConfig;
   dummies: DummyConfig;
 };
 
@@ -1389,6 +1440,8 @@ export type ModuleFlags = {
   separation: boolean;
   dash: boolean;
   camera: boolean;
+  /** v9s.3：注视 / 威胁评估模块独立开关，关闭后完全冻结（便于 A/B 对照） */
+  gaze: boolean;
   dummies: boolean;
 };
 
@@ -1417,6 +1470,8 @@ export type World = {
   dash: DashState;
   /** 智能相机构图意图（Core 算出的确定性目标值），表现层做指数平滑后消费 */
   camera: CameraIntent;
+  /** v9s.3：注视 / 威胁评估状态（plain data，随快照回放） */
+  gaze: GazeState;
   /** v9a：玩家派生招运行时状态（与每个假人的 link 同构） */
   playerLink: LinkState;
   /** 测试假人，四种 AI 行为，纯状态数据 */
