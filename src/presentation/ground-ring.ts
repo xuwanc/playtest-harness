@@ -112,7 +112,6 @@ export type GroundRingOptions = {
 };
 
 export function createGroundRing(opt: GroundRingOptions): GroundRing {
-  const geo = buildGroundRingGeometry(opt.radius, opt.thickness, opt.arcRad, opt.edgeFade);
   const mat = new THREE.MeshBasicMaterial({
     color: opt.color,
     transparent: true,
@@ -122,21 +121,28 @@ export function createGroundRing(opt: GroundRingOptions): GroundRing {
     vertexColors: true,
     toneMapped: false,
   });
-  const mesh = new THREE.Mesh(geo, mat);
+  // 预生成默认弧 + 3/4 环两套几何：选中切换只换指针，零运行时缓冲上传
+  // （v9s.5 的教训：切换假人状态时同步上传纹理 / 几何会在鸿蒙上卡 1~2 帧）。
+  const geoCache = new Map<number, THREE.BufferGeometry>();
+  const build = (arcRad: number): THREE.BufferGeometry => {
+    const key = Math.round(arcRad * 1000);
+    const hit = geoCache.get(key);
+    if (hit) return hit;
+    const geo = buildGroundRingGeometry(opt.radius, opt.thickness, arcRad, opt.edgeFade);
+    geoCache.set(key, geo);
+    return geo;
+  };
+  const mesh = new THREE.Mesh(build(opt.arcRad), mat);
   mesh.position.y = opt.y;
   mesh.renderOrder = opt.renderOrder ?? 4;
 
-  let current = geo;
   let arc = opt.arcRad;
 
   return {
     mesh,
     update(arcRad, opacity, scale, color, yawRad): void {
-      // 弧长变化才重建：选中切换是低频事件（几次 / 分钟），几何只有 ~1KB
       if (Math.abs(arcRad - arc) > 0.01) {
-        current.dispose();
-        current = buildGroundRingGeometry(opt.radius, opt.thickness, arcRad, opt.edgeFade);
-        mesh.geometry = current;
+        mesh.geometry = build(arcRad);
         arc = arcRad;
       }
       mat.opacity = opacity;
@@ -149,7 +155,8 @@ export function createGroundRing(opt: GroundRingOptions): GroundRing {
       return arc;
     },
     dispose(): void {
-      current.dispose();
+      for (const geo of geoCache.values()) geo.dispose();
+      geoCache.clear();
       mat.dispose();
     },
   };
