@@ -61,11 +61,12 @@ export type VoxelRig = {
   /** 下盘相对身体的连续偏航（v8b），供验收「引导/后退时跨朝向不跳变」。 */
   hipYaw(): number;
   /** v9n：停步收相进度（-1 = 未接管）与本帧双腿姿态，供浏览器验收过渡是否平滑。
-   *  v9o 追加 chestYaw / speed；v9q 追加 gaitSpeed（= velocity + 击退冲量，步态实际驱动）。 */
+   *  v9o 追加 chestYaw / speed；v9q 追加 gaitSpeed（= velocity + 击退冲量，步态实际驱动）；
+   *  v9r 追加 stopDip（骨盆惯性下沉量，验收「骨盆跟着沉、脚不跟着沉」）。 */
   gaitDebug(): {
     stopT: number; hipYaw: number; chestYaw: number; speed: number; gaitSpeed: number;
-    /** v9p：停步惯性脉冲的前脚前伸量（rad）/ 身体前移量（m），未接管时为 0 */
-    stopStep: number; stopShift: number;
+    /** v9p：停步惯性脉冲的前脚前伸量（rad）/ 身体前移量（m）/ 骨盆下沉量（m），未接管时为 0 */
+    stopStep: number; stopShift: number; stopDip: number;
     legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
@@ -452,9 +453,10 @@ export function createVoxelRig(
   /** 进入攻击那一帧锁定的 Core gaitPhase，避免 lunge 位移造成双重相位推进 */
   let attackPhaseBase = 0;
   let wasAttacking = false;
-  /** 本帧停步惯性脉冲：前脚额外前伸量 / 身体前移量（诊断用） */
+  /** 本帧停步惯性脉冲：前脚额外前伸量 / 身体前移量 / 骨盆下沉量（诊断用） */
   let lastStopStep = 0;
   let lastStopShift = 0;
+  let lastStopDip = 0;
   /** v9q：本帧步态实际驱动速度（velocity + 击退冲量），供验收「被击退时下盘是否跟着动」 */
   let lastGaitSpeed = 0;
 
@@ -973,6 +975,7 @@ export function createVoxelRig(
       // t→1 脉冲归零，与 solveStopGait 的淡出一起平滑接回 idle，不残留姿态。
       let stopBodyX = 0;
       let stopBodyZ = 0;
+      let stopBodyDip = 0;
       let stopChest = 0;
       if (inStop) {
         // v9q：方向按骨盆(bodyYaw)局部轴投影，而不是 gait(bodyYaw+hipYaw) 局部 ——
@@ -990,12 +993,15 @@ export function createVoxelRig(
         }
         stopBodyZ = si.bodyShift * si.fwdN;
         stopBodyX = si.bodyShift * si.rightN;
+        stopBodyDip = si.bodyDip;
         stopChest = si.chestPitch;
         lastStopStep = si.leadPitch;
         lastStopShift = si.bodyShift;
+        lastStopDip = si.bodyDip;
       } else {
         lastStopStep = 0;
         lastStopShift = 0;
+        lastStopDip = 0;
       }
       lastLegs = {
         lp: gait.legL.pitchX, lr: gait.legL.rollZ,
@@ -1043,6 +1049,10 @@ export function createVoxelRig(
       // 受击后坐 / 落地缓冲 / 攻击跨步 / 惯性下沉都会改写这些值，末尾的 IK 层
       // 会把差值吸收进髋 / 膝角，让脚仍踩在步态决定的落点上。
       const ikBase = captureIKBase(pelvis, lower);
+      // v9r：IK 权重提前算好，1.1 的停步下沉与 1.5 的惯性下沉共用同一判据
+      const ikW = ikConfig.enabled && c.grounded
+        ? clamp(ikConfig.weight, 0, 1) * (attacking ? clamp(ikConfig.attackScale, 0, 1) : 1)
+        : 0;
 
       // 1.1) v9q：停步惯性的骨盆位移放在 IK 基准**之后**。旧版写在步态层（基准之前），
       // 锚点会把「已被惯性推走的骨盆」当成落点，于是脚跟着骨盆一起往前滑。
@@ -1053,6 +1063,12 @@ export function createVoxelRig(
       pelvis.position.z += stopBodyZ;
       lower.position.x -= stopBodyX;
       lower.position.z -= stopBodyZ;
+      // v9r：骨盆跟着上半身一起轻微下沉。写在 IK 基准之后 —— applyFootIK 会临时把
+      // pelvis/lower 恢复成 base（未下沉）取脚锚点，相当于自带一根「不跟随下沉的
+      // IK 辅助基准」，无需真的增加辅助骨骼。IK 开启时反解屈膝把脚拉回锚点，
+      // 关闭时给下盘等量反向补偿；两种情况脚都不跟着骨盆沉下去。
+      pelvis.position.y -= stopBodyDip;
+      lower.position.y += stopBodyDip * (1 - clamp(ikW, 0, 1));
 
       // 1.5) v8g 惯性分层：盆骨带一点倾斜 + 小幅重心平移 + 移动时略微下沉。
       // 旧版只把惯性倾到 upper，盆骨完全不动，像「上身自己往前折」。现在同一份惯性
@@ -1070,9 +1086,6 @@ export function createVoxelRig(
       pelvis.position.z += inertia.pelvisZ;
       pelvis.position.y -= inertia.crouch;
       // IK 关闭时把下沉量补偿回下盘，脚不穿地；IK 开启时由锚定层吸收（腿自然屈膝）。
-      const ikW = ikConfig.enabled && c.grounded
-        ? clamp(ikConfig.weight, 0, 1) * (attacking ? clamp(ikConfig.attackScale, 0, 1) : 1)
-        : 0;
       lower.position.y += inertia.crouch * (1 - clamp(ikW, 0, 1));
 
       // 2) 战斗姿态覆盖（只在攻击 / 蓄力 / 停顿期间生效）
@@ -1216,7 +1229,7 @@ export function createVoxelRig(
         stopT, hipYaw, chestYaw,
         speed: prevSpeed,   // update 末尾已刷新为本帧速度，供线上验收低速巡航
         gaitSpeed: lastGaitSpeed,
-        stopStep: lastStopStep, stopShift: lastStopShift,
+        stopStep: lastStopStep, stopShift: lastStopShift, stopDip: lastStopDip,
         legLPitch: lastLegs.lp, legLRoll: lastLegs.lr,
         legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,
       };

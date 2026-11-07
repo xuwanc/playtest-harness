@@ -334,7 +334,8 @@ export function chestYawFromHip(hipYaw: number, scale: number, maxDeg: number): 
  *
  * 这里叠加一个两端值 / 导数都为 0 的脉冲（0 → 1 → 0，C¹）：
  *   - 领先腿（停步相位里更靠前的那条）额外前伸并抬膝，跟随腿轻微后蹬；
- *   - 身体沿停步瞬间的移动方向微前移，上身同步前倾；
+ *   - 身体沿停步瞬间的移动方向微前移，上身同步前倾，骨盆跟着一起轻微下沉
+ *     （v9r：急停时重心压低，不再只有上半身自己往下折）；
  *   - t→1 时脉冲归零，与 solveStopGait 的淡出一起平滑接回 idle，不残留姿态。
  * 全部是表现层增量，不改 Core 的 position / velocity，也不进快照。
  * 所有幅度由 GaitViewConfig 外置，拉 0 即精确回到 v9o 行为。
@@ -349,6 +350,10 @@ export type StopInertia = {
   leadKnee: number;
   /** 身体沿停步方向微前移（m） */
   bodyShift: number;
+  /** v9r：骨盆跟随上半身一起轻微下沉（m）。骨架里写在 IK 基准之后 —— 锚点取的是
+   *  「骨盆还没沉下去」时的脚位，等于自带一根不跟随下沉的 IK 辅助基准，
+   *  无需额外辅助骨骼；IK 开启时反解屈膝吸收，关闭时给下盘等量反向补偿。 */
+  bodyDip: number;
   /** 上身随惯性前倾（rad） */
   chestPitch: number;
   /** 停步相位里更靠前的是不是左腿 */
@@ -406,6 +411,7 @@ export function solveStopInertia(
     trailPitch: Math.max(0, cfg.stopTrailPitch) * env,
     leadKnee: Math.max(0, cfg.stopStepKnee) * env,
     bodyShift: Math.max(0, cfg.stopBodyShift) * env,
+    bodyDip: Math.max(0, cfg.stopBodyDip) * env,
     chestPitch: Math.max(0, cfg.stopChestPitch) * env,
     leadLeft, fwdN, rightN, env,
   };

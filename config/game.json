@@ -583,6 +583,7 @@
       "stopTrailPitch": 0,
       "stopStepKnee": 0.2,
       "stopBodyShift": 0.07,
+      "stopBodyDip": 0.03,
       "stopChestPitch": 0.01,
       "stopPeakRatio": 0.48,
       "knockGaitScale": 1

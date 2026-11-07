@@ -874,6 +874,9 @@ export type GaitViewConfig = {
   stopStepKnee: number;
   /** 身体沿停步瞬间的移动方向微前移（m） */
   stopBodyShift: number;
+  /** v9r：停步时骨盆跟随上半身一起轻微下沉（m）。写在 IK 基准之后，
+   *  脚锚点取「未下沉」时的落点，故脚不跟着沉；IK 反解屈膝吸收，0 = 关闭。 */
+  stopBodyDip: number;
   /** 上身随惯性前倾（rad） */
   stopChestPitch: number;
   /** 惯性脉冲峰值位置 0.05..0.95（两端值与导数均为 0，与收相淡出无缝衔接） */

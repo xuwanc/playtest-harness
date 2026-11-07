@@ -10,7 +10,7 @@ import { createDebugPanel } from './presentation/debug-panel';
 import type { DebugState } from './presentation/debug-panel';
 import { createMotionDebug } from './presentation/motion-debug';
 import { createHud } from './presentation/hud';
-import { createOverlayFold } from './presentation/overlay-fold';
+import { createPanelRow } from './presentation/overlay-fold';
 import { createSceneView } from './presentation/three-scene';
 import { createTelemetryPanel } from './presentation/telemetry-panel';
 
@@ -53,8 +53,8 @@ export function startApp(): void {
   const view = createSceneView(container, world, VIEW_CONFIG);
   const clock = createClock(world);
   const hud = createHud(hudEl);
-  // v9c：状态读数 / 操作说明默认收起，开始操作自动收回
-  const fold = createOverlayFold(hudEl, document.getElementById('hint'));
+  // v9r：状态 / 手感 / 调试收成一排胶囊，默认全部收起；操作画布自动收回状态与手感
+  const fold = createPanelRow(hudEl);
   // v9e：左下角版本徽标（构建期注入，重新构建才会变）—— 一眼确认线上跑的是哪一版
   const badge = document.getElementById('version-badge');
   if (badge) badge.textContent = `${__APP_VERSION__} · ${__BUILD_TIME__} · 诊断`;
@@ -77,9 +77,13 @@ export function startApp(): void {
   });
   const diagPanel = createTelemetryPanel(recorder, badge);
 
-  // v9q：手感调试面板 = 速度随时间曲线 + 方向罗盘（v9k 的罗盘嵌入其中，不再单独居中）。
-  // 纯观测层，只读 World 与 InputFrame；默认收起，点「手感」胶囊或按 V 展开。
-  const motionDebug = createMotionDebug({ deadZone: () => VIEW_CONFIG.joystick.deadZone });
+  // v9r：手感调试面板 = 实际位移速度曲线 + 方向罗盘；胶囊与容器由统一胶囊行提供，
+  // 纯观测层只读 World / InputFrame；默认收起，点「手感」胶囊或按 V 展开。
+  const motionDebug = createMotionDebug({
+    deadZone: () => VIEW_CONFIG.joystick.deadZone,
+    container: document.getElementById('motiondbg') ?? undefined,
+    toggle: document.getElementById('motiondbg-toggle') ?? undefined,
+  });
   // 切后台回来时不要把它当成「单帧 300ms」的掉帧异常
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) recorder.suspend(800);
@@ -132,6 +136,9 @@ export function startApp(): void {
     onToggleColliders: (v) => view.setCollidersVisible(v),
     onToggleGrid: (v) => view.setGridVisible(v),
   });
+
+  // v9r：把两个后创建的面板控制钩子交给胶囊行，显隐 / 文案只有这一份状态源
+  fold.register({ motion: motionDebug, debug: panel.gui });
 
   window.addEventListener('resize', () => view.resize());
 

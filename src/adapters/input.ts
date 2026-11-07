@@ -138,13 +138,13 @@ const WHEEL_PAGE_PX = 400;
 const MIN_KEY_STEP = 1.0001;
 
 /**
- * UI 区域（按钮本体 + 按钮容器间隙 + 顶部武器条 / HUD / 提示 / 调试面板）
+ * UI 区域（按钮本体 + 按钮容器间隙 + 顶部武器条 / 胶囊行 / 面板栈）
  * 一律不启动隐形摇杆，也不产生 tap。
  * 认容器而不只认按钮本体，是为了避免按在按钮之间的缝隙时把那根手指当成摇杆原点。
  */
 function isUiTarget(t: EventTarget | null): boolean {
   return t instanceof Element
-    && t.closest('[data-ui-button], [data-ui-region], #debug-panel, #hud, #weapon-bar, #hint') !== null;
+    && t.closest('[data-ui-button], [data-ui-region], #panel-row, #panel-stack, #hud, #weapon-bar') !== null;
 }
 
 /**

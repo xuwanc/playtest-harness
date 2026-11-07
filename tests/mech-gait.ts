@@ -25,12 +25,13 @@ export const MECH_GAIT: GaitViewConfig = {
   stopTrailPitch: 0.09,
   stopStepKnee: 0.14,
   stopBodyShift: 0.075,
+  stopBodyDip: 0.05,
   stopChestPitch: 0.1,
   stopPeakRatio: 0.34,
   knockGaitScale: 1,
 };
 
-/** v9q 用户敲定的 11 项默认参数，防止后续误改。 */
+/** v9q 用户敲定的 11 项默认参数 + v9r 新增的骨盆下沉量，防止后续误改。 */
 export const DEFAULT_GAIT_EXPECT = {
   stopBlendSec: 0.56,
   stopEnterRatio: 0.17,
@@ -41,6 +42,7 @@ export const DEFAULT_GAIT_EXPECT = {
   stopTrailPitch: 0,
   stopStepKnee: 0.2,
   stopBodyShift: 0.07,
+  stopBodyDip: 0.03,
   stopChestPitch: 0.01,
   stopPeakRatio: 0.48,
 } as const;

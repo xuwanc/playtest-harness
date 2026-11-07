@@ -378,6 +378,7 @@ export function createDummyRig(
       // ---- v9p 停步惯性（与主角同构）：最后一步踩出去 + 身体微前移，再收回待机 ----
       let stopBodyX = 0;
       let stopBodyZ = 0;
+      let stopBodyDip = 0;
       let stopChest = 0;
       if (inStop) {
         // v9q：方向按骨盆(bodyYaw)局部轴投影，避免侧移停步时前移方向歪掉一个 sideYaw
@@ -394,6 +395,7 @@ export function createDummyRig(
         }
         stopBodyZ = si.bodyShift * si.fwdN;
         stopBodyX = si.bodyShift * si.rightN;
+        stopBodyDip = si.bodyDip;
         stopChest = si.chestPitch;
       }
 
@@ -426,6 +428,11 @@ export function createDummyRig(
       pelvis.position.z += stopBodyZ;
       lower.position.x -= stopBodyX;
       lower.position.z -= stopBodyZ;
+      // v9r：与主角同构 —— 骨盆跟随下沉写在 IK 基准之后，锚点取未下沉的脚位，
+      // IK 开启时屈膝吸收、关闭时下盘等量反向补偿，脚不跟着沉。
+      const ikWStop = ikConfig.enabled ? clamp(ikConfig.weight, 0, 1) : 0;
+      pelvis.position.y -= stopBodyDip;
+      lower.position.y += stopBodyDip * (1 - ikWStop);
       if (leanCfg) {
         const dt = Math.max(1 / 240, Math.min(frameDt, 0.1));
         const fx = Math.sin(s.bodyYaw);

@@ -22,21 +22,42 @@ html, body {
   height: 100%;
 }
 
-/* HUD + 提示共用一个纵向容器：提示永远在 HUD 下方，绝对 top 不再需要 */
-#overlay-left {
+/* v9r：一排胶囊 + 下方互斥展开的面板栈（状态 / 手感 / 调试）。
+   容器本身指针穿透，只有胶囊和展开的面板内部接收点击，不吞摇杆起点。 */
+#panel-row {
   position: fixed;
   top: 10px;
   left: 12px;
-  z-index: 10;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100vw - 24px);
+  pointer-events: none;
+}
+
+#panel-stack {
+  position: fixed;
+  top: 42px;
+  left: 12px;
+  z-index: 20;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
   max-width: calc(100vw - 24px);
-  /* v9c：容器本身指针穿透，只有胶囊 / 展开的说明接收点击，
-     否则展开 HUD 后左上角整块会吞掉摇杆起点 */
+  max-height: calc(100vh - 60px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   pointer-events: none;
 }
+
+/* 三个面板默认全部收起成胶囊；同一时刻只展开一个（由胶囊行互斥控制） */
+#panel-stack > .panel { display: none; pointer-events: auto; }
+#panel-stack > .panel.is-open { display: block; }
+/* HUD 是纯文本、罗盘是纯观测，都不需要吃指针 */
+#panel-stack > #hud,
+#panel-stack > #motiondbg { pointer-events: none; }
 
 #hud {
   max-width: 100%;
@@ -64,13 +85,7 @@ html, body {
   text-overflow: ellipsis;
 }
 
-#fold-row {
-  display: flex;
-  gap: 6px;
-  pointer-events: none;
-}
-
-/* 折叠胶囊：唯一可点的两小块，其余状态文字仍不拦指针（不挡操作） */
+/* 折叠胶囊：一排里唯一可点的小块，其余状态文字仍不拦指针（不挡操作） */
 .fold-pill {
   pointer-events: auto;
   padding: 3px 9px;
@@ -130,25 +145,6 @@ html, body {
   border-color: rgba(130, 205, 255, 0.85);
   background: rgba(60, 130, 185, 0.72);
   color: #fff;
-}
-
-/* 提示在纵向容器里紧跟 HUD 下方，不再用绝对 top；横竖屏都不会压住 HUD */
-#hint {
-  max-width: min(360px, 76vw);
-  /* v9c：展开态限高可滚动，不再一条长文案铺满屏幕 */
-  max-height: 40vh;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  padding: 6px 8px;
-  border-left: 2px solid rgba(120, 160, 200, 0.35);
-  border-radius: 4px;
-  background: rgba(10, 14, 20, 0.5);
-  text-align: left;
-  font-size: 10px;
-  line-height: 1.6;
-  color: rgba(200, 215, 230, 0.66);
-  pointer-events: auto;
-  touch-action: pan-y;
 }
 
 /* v9e：左下角半透明版本徽标 —— 随时能确认线上跑的是哪一版（不吃指针，不影响摇杆） */
@@ -233,20 +229,16 @@ html, body {
   background: rgba(80, 60, 120, 0.45);
 }
 
-/* 调试面板放进固定容器并限制高度：展开后内部滚动，绝不覆盖右下角操作按钮 */
+/* v9r：调试面板不再自己 fixed 到右侧，收进左上角的面板栈；展开后内部滚动 */
 #debug-panel {
-  position: fixed;
-  top: 10px;
-  right: 10px;
-  z-index: 30;
-  max-height: calc(100vh - 170px);
+  max-height: calc(100vh - 120px);
   overflow-y: auto;
   border-radius: 6px;
 }
 
-#debug-panel .lil-gui.root {
-  width: 250px;
-}
+#debug-panel .lil-gui.root { width: 250px; }
+/* 胶囊行接管开关：隐藏 lil-gui 自带标题栏，避免两个开关并存 */
+#debug-panel .lil-gui.root > .title { display: none; }
 
 .lil-gui {
   --background-color: rgba(16, 21, 28, 0.92);
@@ -263,7 +255,6 @@ html, body {
   #pad-left, #pad-right { gap: 8px; bottom: 16px; }
   #pad-left { left: 10px; }
   #pad-right { right: 10px; }
-  #hint { font-size: 8px; max-width: 82vw; }
 }
 
 /* ---- v9b：竖屏操作簇 —— 冲 / 跳 与 技2 / 攻击 收拢到屏幕右侧、垂直居中 ----
@@ -301,21 +292,19 @@ html, body {
     right: calc(14px + env(safe-area-inset-right, 0px));
     bottom: calc(18px + env(safe-area-inset-bottom, 0px));
   }
-  /* 顶部整行让给武器条；HUD 用短版并下移，收起的调试面板再放到 HUD 下方 */
-  #overlay-left { top: 58px; }
-  /* v9d：竖屏调试面板从「右侧中部」移到左上（HUD 下方），宽度收窄，
-     右缘不越过 x≈226，与右侧居中的操作簇（x≥242）完全分开 */
-  #debug-panel {
-    top: 96px;
+  /* 顶部整行让给武器条；胶囊行下移，展开的面板再放到胶囊行下方 */
+  #panel-row { top: 58px; }
+  /* 宽度锁在左侧空带（右缘不越过 x≈226），与右侧居中的操作簇完全分开 */
+  #panel-stack {
+    top: 92px;
     left: 8px;
-    right: auto;
-    max-width: min(220px, 56vw);
-    max-height: calc(100vh - 250px);
+    max-width: min(220px, 60vw);
+    max-height: calc(100vh - 190px);
   }
+  #debug-panel { max-width: min(220px, 56vw); max-height: calc(100vh - 250px); }
   #debug-panel .lil-gui.root { width: min(220px, 56vw); }
   /* 竖屏窄屏：HUD 允许自动换行，宽度锁在视口内，不再横向溢出 */
-  #hud { font-size: 8px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
-  #hint { font-size: 8px; max-width: 94vw; color: rgba(210, 226, 240, 0.72); }
+  #hud { font-size: 8px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; max-width: 100%; }
 }
 
 /* 竖屏窄屏：按钮走小屏档（攻击 72 / 技2 52 / 冲跳 54），列高变矮，重算居中与水平偏移 */
@@ -552,38 +541,17 @@ html, body {
 }
 
 /* ---- v9q 手感调试面板：速度曲线 + 收纳方向罗盘 -----------------------------
-   默认收起只留胶囊；整块指针穿透（只有胶囊可点），不抢摇杆起点 / 按钮。 */
+   v9r：不再自己 fixed 居中，收进左上方面板栈；开关胶囊归 #panel-row 统一管。
+   整块指针穿透（面板内无可点元素），不抢摇杆起点 / 按钮。 */
 #motiondbg {
-  position: fixed;
-  left: 50%;
-  bottom: calc(96px + env(safe-area-inset-bottom, 0px));
-  z-index: 15;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  transform: translateX(-50%);
-  pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
+  max-width: 100%;
 }
-
-#motiondbg-toggle {
-  pointer-events: auto;
-  padding: 1px 8px;
-  border: 1px solid rgba(120, 160, 200, 0.28);
-  border-radius: 999px;
-  background: rgba(10, 14, 20, 0.5);
-  color: rgba(196, 216, 234, 0.78);
-  font-family: inherit;
-  font-size: 9px;
-  line-height: 1.5;
-  letter-spacing: 0.4px;
-  cursor: pointer;
-  touch-action: none;
-  opacity: 0.85;
-}
-#motiondbg-toggle:active { background: rgba(60, 120, 170, 0.55); color: #fff; }
 
 #motiondbg-body {
   display: flex;
@@ -595,7 +563,7 @@ html, body {
   border-radius: 8px;
   background: rgba(8, 12, 17, 0.78);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  max-width: calc(100vw - 16px);
+  max-width: 100%;
 }
 #motiondbg.is-off #motiondbg-body { display: none; }
 
@@ -610,6 +578,7 @@ html, body {
 #motiondbg-graph {
   display: block;
   width: 240px;
+  max-width: 100%;
   height: 92px;
   border-radius: 4px;
 }
@@ -636,11 +605,8 @@ html, body {
 #dirdbg.is-embedded #dirdbg-canvas { width: 108px; height: 108px; }
 
 @media (max-height: 460px) {
-  #motiondbg {
-    left: calc(12px + env(safe-area-inset-left, 0px));
-    bottom: calc(26px + env(safe-area-inset-bottom, 0px));
-    transform: none;
-    align-items: flex-start;
-  }
+  /* 矮横屏：胶囊行贴顶、面板栈紧随其后，尽量少占垂直空间 */
+  #panel-row { top: 6px; }
+  #panel-stack { top: 30px; max-height: calc(100vh - 40px); }
   #dirdbg.is-embedded #dirdbg-canvas { width: 84px; height: 84px; }
 }
