@@ -533,7 +533,7 @@
       },
       "knockbackDecay": 9,
       "dummyReach": 1.8,
-      "noDamageToPlayer": true,
+      "noDamageToPlayer": false,
       "dummyKnockback": 0.18,
       "hitstop": {
         "light": 0.045,
@@ -750,7 +750,8 @@
         "wander": 0.45,
         "follow": 0.8,
         "keep-distance": 0.7,
-        "attack": 1.5
+        "attack": 1.5,
+        "spar": 1.2
       },
       "attackBoost": 0.6,
       "saturation": 2.6,
@@ -793,7 +794,8 @@
         "wander": 0.45,
         "follow": 0.8,
         "keep-distance": 0.7,
-        "attack": 1.5
+        "attack": 1.5,
+        "spar": 1.2
       },
       "attackBoost": 0.6,
       "nearDistance": 1.5,
@@ -850,7 +852,21 @@
       "attackInterval": 1.6,
       "attackWindup": 0.34,
       "attackActive": 0.18,
-      "attackRecovery": 0.4
+      "attackRecovery": 0.4,
+      "fighters": {
+        "weapons": ["sword-shield", "dual-swords", "greatsword"],
+        "spawn": [
+          { "x": -3.6, "z": 3.8 },
+          { "x": 3.9, "z": 3.6 },
+          { "x": 0.2, "z": 5.9 }
+        ],
+        "initialModes": ["spar", "spar", "spar"],
+        "moveSpeed": 2.1,
+        "attackInterval": 3.4,
+        "attackRangeScale": 0.9,
+        "knockbackScale": 0.6,
+        "leashRadius": 7
+      }
     }
   },
   "scene": {
@@ -2036,7 +2052,12 @@
         "#b58fe0",
         "#e26d6d"
       ],
-      "attackArcColor": "#ff6b5e"
+      "attackArcColor": "#ff6b5e",
+      "fighterColors": [
+        { "body": "#c85a4a", "limb": "#8d3a30", "head": "#f0c9a0" },
+        { "body": "#c9a03c", "limb": "#8a6b22", "head": "#f0d6a0" },
+        { "body": "#7d6ec4", "limb": "#4f4488", "head": "#e6d2b0" }
+      ]
     },
     "balance": {
       "enabled": true,

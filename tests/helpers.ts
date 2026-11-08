@@ -53,6 +53,9 @@ const FIXTURE_CORE_PATCH = {
     spawn: [{ x: -6, z: 5 }, { x: -2, z: 5 }, { x: 2, z: 5 }, { x: 6, z: 5 }],
     initialModes: ['wander', 'follow', 'keep-distance', 'attack'] as AppConfig['core']['dummies']['initialModes'],
     leashRadius: 0,
+    // v9s.38：陪练角色是线上配置的一部分；单元测试继续用「4 个普通假人」的冻结夹具，
+    // 否则 id / 位置 / 威胁计数都会被多出来的三个单位改掉。陪练另有专项用例。
+    fighters: undefined,
   },
 };
 

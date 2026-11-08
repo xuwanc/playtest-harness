@@ -33,3 +33,6 @@ coverage/
 # Python 缓存
 __pycache__/
 *.pyc
+
+# 本轮验收截图（本地证据，不入库；历史 preview-*.png 例外，已长期跟踪）
+shots*/

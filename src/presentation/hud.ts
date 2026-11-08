@@ -38,6 +38,8 @@ const MODE_LABELS: Record<DummyMode, string> = {
   follow: '跟随',
   'keep-distance': '保持',
   attack: '攻击',
+  // v9s.38：持械陪练的默认行为 —— 保持「刀能砍到」的距离踱步 + 低频进攻
+  spar: '陪练',
 };
 
 /** 纯文本状态面板，用来「看见」Core 的状态；不绘制摇杆 UI。 */

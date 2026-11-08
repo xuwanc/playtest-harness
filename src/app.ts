@@ -148,6 +148,22 @@ export function startApp(): void {
     onToggleGrid: (v) => view.setGridVisible(v),
     onToggleLab: (v) => view.setLabVisible(v),
     onToggleLabLabels: (v) => view.setLabLabelsVisible(v),
+    // v9s.38：把三个持械陪练一次切到同一行为（调试混战强度时不用逐个点）
+    setFighterMode: (mode) => {
+      for (const d of world.dummies) {
+        if (!d.weapon) continue;
+        d.mode = mode;
+        d.attackPhase = 'idle';
+        d.attackPhaseTimer = 0;
+        d.attackProgress = 0;
+        d.attackCooldown = 0;
+        if (d.combat) {
+          d.combat.phase = 'idle';
+          d.combat.attackProgress = 0;
+          d.combat.comboIndex = 0;
+        }
+      }
+    },
   });
 
   // v9s.15：测试工位 —— 点名字直接传送到该工位的落点，相机瞬移不滑行；
@@ -246,6 +262,8 @@ export function startApp(): void {
     yawDebug: () => view.yawDebug(),
     /** v9s.37：击地尘环读数（有没有真的生成 / 当前几圈 / 缩放与透明度） */
     slamDebug: () => view.slamDebug(),
+    /** v9s.38：特效层级读数（地块是否不透明 / 关键层的 renderOrder） */
+    fxDebug: () => view.fxDebug(),
     /** v9s.34：A/B 开关（验收「插值开 / 关」的画面差别，不用改 config 重启） */
     setRenderInterp: (on: boolean) => {
       renderInterp = !!on;

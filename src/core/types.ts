@@ -1163,13 +1163,50 @@ export type GazeState = {
 
 /* ---------------- 测试假人契约 ---------------- */
 
-/** 四种测试行为 + 待机（点击循环里的「关闭」态）。 */
-export type DummyMode = 'idle' | 'wander' | 'follow' | 'keep-distance' | 'attack';
+/**
+ * 测试行为 + 待机（点击循环里的「关闭」态）+ 陪练（v9s.38）。
+ *
+ * `spar` = 持械陪练角色的默认行为：保持「刚好在刀能砍到」的距离左右游走，
+ * 攻击间隔比普通假人长（攻击欲望低），用来在混战里观察被围攻时的判读与手感。
+ */
+export type DummyMode = 'idle' | 'wander' | 'follow' | 'keep-distance' | 'attack' | 'spar';
 
-/** 点击假人的循环顺序：四种行为依次轮转，idle 作为暂停态放在末尾。 */
+/** 点击普通假人的循环顺序：四种行为依次轮转，idle 作为暂停态放在末尾。 */
 export const DUMMY_MODES: DummyMode[] = ['wander', 'follow', 'keep-distance', 'attack', 'idle'];
 
+/** v9s.38：点击持械陪练的循环顺序 —— 从 spar 开始，其余与普通假人一致（末尾回到 spar）。 */
+export const FIGHTER_MODES: DummyMode[] = [
+  'spar', 'wander', 'follow', 'keep-distance', 'attack', 'idle',
+];
+
 export type DummySpawn = { x: number; z: number };
+
+/**
+ * v9s.38 · 持械陪练角色配置（混战调试用）。
+ *
+ * 三个「和主角一样」的 AI：同一副骨架、同一套武器与挥击剪辑，只是不含玩家的输入 /
+ * 冲刺 / 技能。它们被追加在普通假人之后（id 连续），因此点击轮转、脚下威胁环、
+ * 受击 / 击退、渲染插值全部复用假人那套机制，不需要第二份实现。
+ *
+ * 攻击欲望由 `attackInterval` 控制：普通假人 1.6s 一击，陪练 3.4s 一击，
+ * 且起手距离按「武器 reach × attackRangeScale」收窄 —— 挥不到不出手。
+ */
+export type DummyFighterConfig = {
+  /** 每个角色一件武器（剑盾 / 双刀 / 大剑），与 `spawn` 一一对应 */
+  weapons: WeaponId[];
+  spawn: DummySpawn[];
+  /** 初始行为，缺省 `spar` */
+  initialModes?: DummyMode[];
+  moveSpeed: number;
+  /** 攻击间隔（秒）：越大越懒 */
+  attackInterval: number;
+  /** 起手距离 = `hits.reach[weapon] × 本值` */
+  attackRangeScale: number;
+  /** 打到玩家时的击退比例（0 = 完全不推人，保留 `hits.dummyKnockback` 的基准） */
+  knockbackScale: number;
+  /** 牵引半径（米）：陪练要比普通假人跟得远一点，才测得到「被追着打」 */
+  leashRadius: number;
+};
 
 export type DummyConfig = {
   count: number;
@@ -1201,6 +1238,8 @@ export type DummyConfig = {
    * 让每个测试工位只留自己的假人，不会追着玩家跑遍全场。
    */
   leashRadius: number;
+  /** v9s.38：持械陪练角色（追加在 `count` 之后，id 连续；缺省 = 没有陪练） */
+  fighters?: DummyFighterConfig;
 };
 
 export type DummyAttackPhase = 'idle' | 'windup' | 'active' | 'recovery';
@@ -1237,6 +1276,16 @@ export type DummyState = {
   hurt: HurtState;
   /** v9a：与主角完全同构的派生招运行时状态（对称机制，当前 AI 不主动起手） */
   link: LinkState;
+  /**
+   * v9s.38：持械陪练的武器（与主角同一套挂点 / 剪辑）；null = 普通假人。
+   * 一旦有值，表现层就用主角的体素骨架渲染，并读 `combat` 驱动挥击。
+   */
+  weapon: WeaponId | null;
+  /**
+   * v9s.38：持械陪练的战斗时间轴（阶段 / 进度 / 武器时序），供 `voxel-rig` 直接驱动。
+   * 普通假人为 null —— 它们仍走 `dummy-rig` 的简化挥砍。
+   */
+  combat: CombatState | null;
 };
 
 export type DummyViewConfig = {
@@ -1244,6 +1293,11 @@ export type DummyViewConfig = {
   colors: string[];
   /** 挥砍攻击弧颜色 */
   attackArcColor: string;
+  /**
+   * v9s.38：持械陪练的身体配色（与主角同骨架，只换 body / limb / head 三色，
+   * 便于一眼区分「哪个是玩家、哪个是 AI」）。缺省沿用主角配色。
+   */
+  fighterColors?: Array<{ body: string; limb: string; head: string }>;
 };
 
 /**

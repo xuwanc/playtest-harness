@@ -1,14 +1,17 @@
 import { overlapsAny, resolveHorizontal, supportHeight } from './collision';
+import { initialCombatState } from './combat';
 import { initialHurt } from './hits';
 import { initialLinkState, resetLinkEntity } from './links';
 import { nextRandom } from './random';
-import { DUMMY_MODES } from './types';
+import { DUMMY_MODES, FIGHTER_MODES, WEAPON_ORDER } from './types';
 import type {
+  CombatState,
   DummyConfig,
   DummyMode,
   DummyState,
   EventType,
   Intents,
+  WeaponId,
   World,
 } from './types';
 
@@ -46,39 +49,63 @@ export function createDummies(cfg: DummyConfig): DummyState[] {
   for (let i = 0; i < cfg.count; i++) {
     const home = cfg.spawn[i] ?? { x: 0, z: 0 };
     const mode = cfg.initialModes[i] ?? 'idle';
-    list.push({
-      id: i + 1,
-      mode,
-      initialMode: mode,
-      homeX: home.x,
-      homeZ: home.z,
-      position: { x: home.x, y: 0, z: home.z },
-      velocity: { x: 0, y: 0, z: 0 },
-      facing: 0,
-      bodyYaw: 0,
-      headYaw: 0,
-      gaitPhase: 0,
-      stride: 1,
-      distance: 0,
-      targetX: home.x,
-      targetZ: home.z,
-      wanderTimer: 0,
-      attackCooldown: 0,
-      attackPhase: 'idle',
-      attackPhaseTimer: 0,
-      attackProgress: 0,
-      attackId: 0,
-      hurt: initialHurt(),
-      link: initialLinkState(), // v9a：与主角完全同构的派生招状态
-    });
+    list.push(makeDummy(i + 1, mode, home.x, home.z, null));
+  }
+  // v9s.38：持械陪练追加在后面（id 连续）。它们不是另一套实体 —— 就是带武器的假人，
+  // 所以点击轮转 / 威胁环 / 受击 / 击退 / 插值全部沿用同一份机制。
+  const f = cfg.fighters;
+  if (f) {
+    for (let i = 0; i < f.weapons.length; i++) {
+      const home = f.spawn[i] ?? { x: 0, z: 0 };
+      const mode = f.initialModes?.[i] ?? 'spar';
+      // 错开首次出手：三个陪练同时挥刀会读成「被集火」，也遮住了各自的动作
+      const cd = f.attackInterval * (0.25 + 0.22 * i);
+      list.push(makeDummy(list.length + 1, mode, home.x, home.z, f.weapons[i], cd));
+    }
   }
   return list;
 }
 
-/** 点击一次往后轮转一种行为：游走 → 跟随 → 保持距离 → 攻击 → 待机 → 游走。 */
-export function cycleDummyMode(mode: DummyMode): DummyMode {
-  const i = DUMMY_MODES.indexOf(mode);
-  return DUMMY_MODES[(i + 1) % DUMMY_MODES.length];
+function makeDummy(
+  id: number, mode: DummyMode, x: number, z: number, weapon: WeaponId | null,
+  attackCooldown = 0,
+): DummyState {
+  return {
+    id,
+    mode,
+    initialMode: mode,
+    homeX: x,
+    homeZ: z,
+    position: { x, y: 0, z },
+    velocity: { x: 0, y: 0, z: 0 },
+    facing: 0,
+    bodyYaw: 0,
+    headYaw: 0,
+    gaitPhase: 0,
+    stride: 1,
+    distance: 0,
+    targetX: x,
+    targetZ: z,
+    wanderTimer: 0,
+    attackCooldown,
+    attackPhase: 'idle',
+    attackPhaseTimer: 0,
+    attackProgress: 0,
+    attackId: 0,
+    hurt: initialHurt(),
+    link: initialLinkState(), // v9a：与主角完全同构的派生招状态
+    weapon,
+    // 武器槽只用于初始化 weapon 字段，真正驱动挥击的是下面每帧同步的 phase / progress
+    combat: weapon ? { ...initialCombatState(WEAPON_ORDER.indexOf(weapon) + 1), weapon } : null,
+  };
+}
+
+/** 点击一次往后轮转一种行为：普通假人 游走→跟随→保持→攻击→待机→游走；
+ *  v9s.38 持械陪练额外把 `spar`（陪练）接在待机之后，循环起点就是 spar。 */
+export function cycleDummyMode(mode: DummyMode, armed = false): DummyMode {
+  const list = armed ? FIGHTER_MODES : DUMMY_MODES;
+  const i = list.indexOf(mode);
+  return list[(i + 1) % list.length];
 }
 
 /**
@@ -123,6 +150,24 @@ export function resetDummies(world: World): void {
     h.knockX = 0;
     h.knockZ = 0;
     resetLinkEntity(s.link);
+    // v9s.38：持械陪练复位时把挥击时间轴一并归零，否则会带着「挥到一半」的姿态回工位
+    if (s.combat) {
+      const c = s.combat;
+      c.phase = 'idle';
+      c.comboIndex = 0;
+      c.phaseTimer = 0;
+      c.attackProgress = 0;
+      c.attackFacing = 0;
+      c.charging = false;
+      c.charge = 0;
+      c.hitstop = 0;
+      c.warp = 1;
+      c.warpPhase = 0;
+      c.warpDebt = 0;
+      c.warpTimer = 0;
+      c.hitIds.length = 0;
+      c.timings = { windup: 0, active: 0, recovery: 0, settle: 0, lunge: 0 };
+    }
   }
   world.dummyAttackCount = 0;
 }
@@ -136,10 +181,46 @@ function pickWanderTarget(world: World, s: DummyState, cfg: DummyConfig): void {
   s.wanderTimer = cfg.wanderInterval * (0.6 + nextRandom(world) * 0.8);
 }
 
-function attackDuration(s: DummyState, cfg: DummyConfig): number {
-  if (s.attackPhase === 'windup') return cfg.attackWindup;
-  if (s.attackPhase === 'active') return cfg.attackActive;
-  if (s.attackPhase === 'recovery') return cfg.attackRecovery;
+/**
+ * v9s.38：本假人的挥砍时序。
+ * 普通假人用 `dummies.attackWindup/Active/Recovery`；持械陪练直接用**它手里那把武器**
+ * 的时序（`combat.weapons[weapon]`）—— 这样 AI 的出招收招节奏与主角同名武器一致，
+ * 混战时「看起来是同一套动作」。表现层的挥击剪辑也吃同一份 `timings`。
+ */
+function attackTiming(
+  world: World, s: DummyState, cfg: DummyConfig,
+): { windup: number; active: number; recovery: number } {
+  if (s.weapon) {
+    const p = world.config.combat.weapons[s.weapon];
+    if (p) return { windup: p.windup, active: p.active, recovery: p.recovery };
+  }
+  return { windup: cfg.attackWindup, active: cfg.attackActive, recovery: cfg.attackRecovery };
+}
+
+/** 持械陪练的攻击距离 = 武器 reach × attackRangeScale；普通假人用固定值。 */
+function attackRangeFor(world: World, s: DummyState, cfg: DummyConfig): number {
+  if (!s.weapon) return cfg.attackRange;
+  const reach = world.config.hits.reach[s.weapon] ?? cfg.attackRange;
+  const scale = cfg.fighters?.attackRangeScale ?? 0.9;
+  return Math.max(0.4, reach * scale);
+}
+
+/** 攻击间隔：持械陪练更懒（默认 3.4s vs 普通假人 1.6s）。 */
+function attackIntervalFor(s: DummyState, cfg: DummyConfig): number {
+  return s.weapon && cfg.fighters ? cfg.fighters.attackInterval : cfg.attackInterval;
+}
+
+/** 牵引半径：陪练允许离 home 更远一点，否则玩家一跑开就测不到混战。 */
+function leashFor(s: DummyState, cfg: DummyConfig): number {
+  if (s.weapon && cfg.fighters) return Math.max(cfg.leashRadius, cfg.fighters.leashRadius);
+  return cfg.leashRadius;
+}
+
+function attackDuration(s: DummyState, cfg: DummyConfig, w: World): number {
+  const t = attackTiming(w, s, cfg);
+  if (s.attackPhase === 'windup') return t.windup;
+  if (s.attackPhase === 'active') return t.active;
+  if (s.attackPhase === 'recovery') return t.recovery;
   return 0;
 }
 
@@ -147,12 +228,13 @@ function attackDuration(s: DummyState, cfg: DummyConfig): number {
 function advanceAttack(world: World, s: DummyState, dt: number, cfg: DummyConfig): void {
   if (s.attackPhase === 'idle') {
     s.attackProgress = 0;
+    syncFighterCombat(world, s, cfg);
     return;
   }
   s.attackPhaseTimer += dt;
   let guard = 0;
   while (s.attackPhase !== 'idle' && guard++ < 4) {
-    const dur = Math.max(attackDuration(s, cfg), EPS);
+    const dur = Math.max(attackDuration(s, cfg, world), EPS);
     if (s.attackPhaseTimer < dur) break;
     s.attackPhaseTimer -= dur;
     if (s.attackPhase === 'windup') {
@@ -164,14 +246,41 @@ function advanceAttack(world: World, s: DummyState, dt: number, cfg: DummyConfig
       s.attackPhaseTimer = 0;
     }
   }
-  const total = cfg.attackWindup + cfg.attackActive + cfg.attackRecovery;
+  const t = attackTiming(world, s, cfg);
+  const total = t.windup + t.active + t.recovery;
   let elapsed = 0;
   if (s.attackPhase === 'windup') elapsed = s.attackPhaseTimer;
-  else if (s.attackPhase === 'active') elapsed = cfg.attackWindup + s.attackPhaseTimer;
+  else if (s.attackPhase === 'active') elapsed = t.windup + s.attackPhaseTimer;
   else if (s.attackPhase === 'recovery') {
-    elapsed = cfg.attackWindup + cfg.attackActive + s.attackPhaseTimer;
+    elapsed = t.windup + t.active + s.attackPhaseTimer;
   }
   s.attackProgress = s.attackPhase === 'idle' || total <= 0 ? 0 : Math.min(1, elapsed / total);
+  syncFighterCombat(world, s, cfg);
+}
+
+/**
+ * v9s.38：把假人的挥砍状态抄进它自己的 `CombatState`（持械陪练专属）。
+ * `voxel-rig` 只认 `CombatState`（phase / attackProgress / timings / weapon），
+ * 这一层胶水让「AI 的三段状态机」与「主角的战斗状态」共用同一个动画入口，
+ * 不需要在表现层再写一套挥击姿势。
+ */
+function syncFighterCombat(world: World, s: DummyState, cfg: DummyConfig): void {
+  const c = s.combat;
+  if (!c) return;
+  const t = attackTiming(world, s, cfg);
+  c.weapon = s.weapon ?? c.weapon;
+  c.phase = s.attackPhase;
+  c.comboIndex = s.attackPhase === 'idle' ? 0 : 1;
+  c.phaseTimer = s.attackPhaseTimer;
+  c.attackProgress = s.attackProgress;
+  c.attackFacing = s.facing;
+  c.timings = { windup: t.windup, active: t.active, recovery: t.recovery, settle: 0, lunge: 0 };
+  // AI 不参与卡肉 / 连击缓冲：这些字段保持中性，避免表现层读到上一帧的残留
+  c.hitstop = 0;
+  c.warp = 1;
+  c.warpPhase = 0;
+  c.charging = false;
+  c.charge = 0;
 }
 
 /** 计算本帧期望 movement 方向与朝向（全部是相对玩家 / home 的纯数值）。 */
@@ -223,9 +332,32 @@ function desiredDirection(
     }
   } else if (s.mode === 'attack') {
     // 挥砍过程中站定，不追击
-    if (dist > cfg.attackRange && s.attackPhase === 'idle') {
+    if (dist > attackRangeFor(world, s, cfg) && s.attackPhase === 'idle') {
       x = nx;
       z = nz;
+    }
+  } else if (s.mode === 'spar') {
+    // v9s.38 陪练：**站在「刀砍不到」的地方**踱步，冷却好了才压上砍一刀，砍完退回。
+    //  - standoff = 起手距离 × 1.7：剑盾约 2.4m、大剑约 3.0m，读起来是「保持距离」；
+    //  - 冷却期间只在死区外做径向修正，死区内沿切线游走（时间正弦，不存状态）；
+    //  - 冷却结束且还没进范围 → 主动压上，进入范围就出手，出手后 cooldown 重置又退回。
+    // 三条叠起来才是「攻击欲望低」：大部分时间在走位，而不是贴着人连打。
+    const range = attackRangeFor(world, s, cfg);
+    const standoff = range * 1.7;
+    const strafe = Math.sin(world.time * 0.55 + s.id * 1.9) * 0.55;
+    const wantsAttack = s.attackPhase === 'idle' && s.attackCooldown <= 0;
+    if (wantsAttack && dist > range) {
+      x = nx;
+      z = nz;
+    } else if (dist > standoff + 0.35) {
+      x = nx;
+      z = nz;
+    } else if (dist < standoff - 0.45) {
+      x = -nx;
+      z = -nz;
+    } else {
+      x = -nz * strafe;
+      z = nx * strafe;
     }
   }
 
@@ -240,11 +372,12 @@ function desiredDirection(
   // 边界处按 over 线性混合（over=1 时完全回家），不会在「追 / 回」之间来回抖；
   // leashRadius = 0 精确回到旧行为（可自由追遍全场）。
   if (cfg.leashRadius > EPS && s.mode !== 'wander' && s.mode !== 'idle') {
+    const leash = leashFor(s, cfg);
     const hx = s.position.x - s.homeX;
     const hz = s.position.z - s.homeZ;
     const hd = Math.hypot(hx, hz);
-    if (hd > cfg.leashRadius) {
-      const over = Math.min(1, (hd - cfg.leashRadius) / Math.max(cfg.leashRadius * 0.5, 0.5));
+    if (hd > leash) {
+      const over = Math.min(1, (hd - leash) / Math.max(leash * 0.5, 0.5));
       const bx = -hx / hd;
       const bz = -hz / hd;
       x = x * (1 - over) + bx * over;
@@ -263,15 +396,17 @@ function updateOne(world: World, dt: number, s: DummyState, cfg: DummyConfig): v
   s.wanderTimer -= dt;
   s.attackCooldown = Math.max(0, s.attackCooldown - dt);
 
-  // 攻击起手：只在攻击模式、冷却结束、未处于受击僵直、玩家进入范围时触发，且不写玩家任何状态
-  if (s.mode === 'attack' && s.attackPhase === 'idle' && s.attackCooldown <= 0 && s.hurt.timer <= 0) {
+  // 攻击起手：只在攻击 / 陪练模式、冷却结束、未处于受击僵直、玩家进入范围时触发，
+  // 且不写玩家任何状态。v9s.38：持械陪练用自己武器的 reach 与更长的间隔（攻击欲望低）。
+  if ((s.mode === 'attack' || s.mode === 'spar')
+      && s.attackPhase === 'idle' && s.attackCooldown <= 0 && s.hurt.timer <= 0) {
     const p = world.character.position;
     const dist = Math.hypot(p.x - s.position.x, p.z - s.position.z);
-    if (dist <= cfg.attackRange + EPS) {
+    if (dist <= attackRangeFor(world, s, cfg) + EPS) {
       s.attackPhase = 'windup';
       s.attackPhaseTimer = 0;
       s.attackId += 1;
-      s.attackCooldown = cfg.attackInterval;
+      s.attackCooldown = attackIntervalFor(s, cfg);
       world.dummyAttackCount += 1;
       emitDummy(world, 'dummy-attack', s);
     }
@@ -288,8 +423,10 @@ function updateOne(world: World, dt: number, s: DummyState, cfg: DummyConfig): v
   if ((d.x > 0 && s.position.x >= bounds.maxX - EPS) || (d.x < 0 && s.position.x <= bounds.minX + EPS)) d.x = 0;
   if ((d.z > 0 && s.position.z >= bounds.maxZ - EPS) || (d.z < 0 && s.position.z <= bounds.minZ + EPS)) d.z = 0;
   const k = 1 - Math.exp(-Math.max(cfg.acceleration, EPS) * dt);
-  s.velocity.x += (d.x * cfg.moveSpeed - s.velocity.x) * k;
-  s.velocity.z += (d.z * cfg.moveSpeed - s.velocity.z) * k;
+  // v9s.38：陪练稍微慢一点（默认 2.1 vs 假人 2.6）—— 追不上玩家，混战才有喘息
+  const moveSpeed = s.weapon && cfg.fighters ? cfg.fighters.moveSpeed : cfg.moveSpeed;
+  s.velocity.x += (d.x * moveSpeed - s.velocity.x) * k;
+  s.velocity.z += (d.z * moveSpeed - s.velocity.z) * k;
   s.facing = d.facing;
 
   // 身体 / 头部平滑转身：身体慢、头快，头先于身体到位（v7b#9）。朝向只影响观感，不进碰撞 / 命中。
@@ -375,7 +512,7 @@ export function dummiesUpdate(world: World, dt: number, intents: Intents): void 
   // 1) 点击轮转当前假人的行为；同时清掉该假人的行为临时状态
   if (intents.dummyClickId >= 1 && intents.dummyClickId <= world.dummies.length) {
     const s = world.dummies[intents.dummyClickId - 1];
-    s.mode = cycleDummyMode(s.mode);
+    s.mode = cycleDummyMode(s.mode, !!s.weapon);
     s.targetX = s.position.x;
     s.targetZ = s.position.z;
     s.wanderTimer = 0;
@@ -383,6 +520,11 @@ export function dummiesUpdate(world: World, dt: number, intents: Intents): void 
     s.attackPhase = 'idle';
     s.attackPhaseTimer = 0;
     s.attackProgress = 0;
+    if (s.combat) {
+      s.combat.phase = 'idle';
+      s.combat.attackProgress = 0;
+      s.combat.comboIndex = 0;
+    }
     emitDummy(world, 'dummy-mode', s);
   }
 

@@ -3,7 +3,7 @@ import type { Box, GridMeta, PathRequest, PathResult, Pathfinder } from './types
 /**
  * 寻路模块契约 —— 本期只定义接口，不实现算法。
  *
- * 后续接入步骤（对应 README 的扩展点）：
+ * 后续接入步骤（对应 `docs/systems/known-limits.md` 的扩展点）：
  *  1. 实现 Pathfinder：基于 World.boxes + World.gridMeta 做 A* / NavMesh 查询。
  *  2. 新增 core/modules/pathfinding.ts，在 step() 中按 modules.pathfinding 开关调用。
  *  3. 输入层增加「点击地面 → PathRequest」，把结果转成逐帧 Intents 喂给 movement。

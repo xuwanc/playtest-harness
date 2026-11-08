@@ -1,19 +1,21 @@
 import * as THREE from 'three';
 import type { GroundBasis } from '../adapters/input';
-import type { BodyTypeConfig, Box, StationSpec, ViewConfig, World } from '../core';
+import type { BodyTypeConfig, Box, DummyState, StationSpec, ViewConfig, World } from '../core';
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
+import { createFighterRig } from './fighter-rig';
 import { createLabLayer } from './lab-scene';
 import {
   areaOpen, createArcMeter, createAreaRing, createGroundRing, dummyWindupWarning, fadeTowards,
   ringGroundHeight,
   groundRingRadius, linkLandingPreview, playerMeterSource, playerRingVisual, threatRingColor,
 } from './ground-ring';
-import { dummyThreatLevel, isHostileDummy } from '../core';
+import { dummyThreatLevel, groundHeightAt, isHostileDummy } from '../core';
 import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
 import { createVoxelRig } from './voxel-rig';
 import { createYawSmoother } from './yaw-smooth';
 import { createWeaponTrail } from './weapon-trail';
+import { FX_ORDER, setFxOrder } from './fx-layer';
 import type { HurtPose } from './hurt-pose';
 
 export type SceneView = {
@@ -43,6 +45,16 @@ export type SceneView = {
   };
   /** v9s.35：朝向平滑读数（target = 插值后的 bodyYaw，shown = 实际渲染的根节点 yaw） */
   yawDebug(): { target: number; shown: number; tauMs: number };
+  /**
+   * v9s.38：特效层级读数（发布自检用）。
+   * `boxOpaque` = 地块是否走不透明通道（旧版透明地面会盖掉刀光）；
+   * `orders` = 关键特效实际写入的 renderOrder，用来确认「贴地层 < 身体层」确实生效。
+   */
+  fxDebug(): {
+    boxOpaque: boolean;
+    boxCount: number;
+    orders: { ring: number; groundFx: number; trail: number; slash: number; projectile: number };
+  };
   /** v9n：停步收相 / 侧移偏转 / 双腿姿态的实时读数（纯观测）；v9o 追加胸偏转与速度，
    *  v9p 追加停步惯性的前脚前伸量与身体前移量，v9q 追加含击退冲量的步态速度，
    *  v9r 追加骨盆惯性下沉量。 */
@@ -195,6 +207,10 @@ export function createSceneView(
   scene.add(sun);
 
   // ---- 碰撞白盒 ----
+  // v9s.38：地块默认**不透明**。旧版给每一块都设了 `transparent: true`（即使 opacity=1），
+  // Three.js 于是把它们全塞进透明列表按距离排序 —— 32m 的地面盒中心可能比刀光更靠近相机，
+  // 于是「后画地面」把刀光 / 斩击弧整片盖掉，表现为「某些地块上看不见特效」。
+  // 只有开「碰撞盒线框」调试时才临时切回透明（见 setCollidersVisible）。
   const materials: THREE.MeshLambertMaterial[] = [];
   const boxGroup = new THREE.Group();
   for (const b of world.boxes) {
@@ -205,7 +221,7 @@ export function createSceneView(
     if (b.kind === 'step') {
       color = new THREE.Color(color).offsetHSL(0, 0, b.maxY * 0.09).getStyle();
     }
-    const mat = new THREE.MeshLambertMaterial({ color, transparent: true, opacity: 1 });
+    const mat = new THREE.MeshLambertMaterial({ color, transparent: false, opacity: 1 });
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), mat);
     mesh.position.set((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2, (b.minZ + b.maxZ) / 2);
     mesh.castShadow = b.kind !== 'ground';
@@ -247,6 +263,8 @@ export function createSceneView(
   let voxel = buildRig(view.bodyTypes?.[bodyTypeId]);
   // v9s.22：挥击拖尾挂在场景根节点（世界坐标采样，不随角色层级变换）
   const playerTrail = createWeaponTrail(view.weaponTrail);
+  // v9s.38：刀光归到统一层级（weapon-trail 组件内部的默认值不再参与排序判断）
+  setFxOrder(playerTrail.object, FX_ORDER.trail);
   scene.add(playerTrail.object);
   const playerRoot = new THREE.Group();
   // 翻滚枢轴放在身体中心高度：若直接绕脚底原点旋转，前滚到 90° 以后头部会插进地面。
@@ -266,14 +284,51 @@ export function createSceneView(
   const yawSmoother = createYawSmoother();
   let yawTarget = 0;
 
-  // ---- 测试假人 ----
-  const dummyRigs = world.dummies.map((s, i) => {
+  // ---- 测试假人 / 持械陪练 ----
+  // v9s.38：带武器的假人用主角的 `voxel-rig` 渲染（同骨架 / 同武器 / 同挥击剪辑），
+  // 其余仍用简化的 `dummy-rig`。两者在这里统一成同一个接口，后面的
+  // 更新 / 插箭 / 销毁 / 拾取都不用分叉。
+  type AnyDummyRig = {
+    group: THREE.Group;
+    update(s: DummyState, frameDt: number, coreTime?: number): void;
+    boneAtWorld(x: number, y: number, z: number): { node: THREE.Object3D; point: THREE.Vector3 } | null;
+    dispose(): void;
+  };
+  const fighterMoveSpeed = world.config.dummies.fighters?.moveSpeed ?? world.config.dummies.moveSpeed;
+  const dummyRigs: AnyDummyRig[] = world.dummies.map((s, i) => {
     const palette = view.dummies.colors;
     const tint = palette[i % palette.length] ?? '#cccccc';
-    const rig = createDummyRig(
-      view.voxel, view.colors, tint, s.id, view.dummies, world.config.dummies.moveSpeed,
-      view.gait, view.hurt, view.lean, view.ik,
-    );
+    let rig: AnyDummyRig;
+    if (s.weapon) {
+      const fc = view.dummies.fighterColors;
+      const override = fc && fc.length > 0 ? fc[(i - world.config.dummies.count) % fc.length] : undefined;
+      rig = createFighterRig({
+        voxel: view.voxel,
+        colors: override ? { ...view.colors, ...override } : view.colors,
+        moveSpeed: fighterMoveSpeed,
+        orientation: view.orientation,
+        gait: view.gait,
+        mount: view.weaponMount,
+        lean: view.lean,
+        hurt: view.hurt,
+        animation: view.animation,
+        ik: view.ik,
+        links: view.links,
+        wrist: view.weaponWrist,
+        balance: view.balance,
+      });
+    } else {
+      const d = createDummyRig(
+        view.voxel, view.colors, tint, s.id, view.dummies, world.config.dummies.moveSpeed,
+        view.gait, view.hurt, view.lean, view.ik,
+      );
+      rig = {
+        group: d.group,
+        update: (st, dt) => d.update(st, dt),
+        boneAtWorld: (x, y, z) => d.boneAtWorld(x, y, z),
+        dispose: () => d.dispose(),
+      };
+    }
     // 所有子节点都带上 id，射线命中身体、标签或攻击弧都能识别
     rig.group.traverse((obj) => { obj.userData.dummyId = s.id; });
     scene.add(rig.group);
@@ -295,6 +350,13 @@ export function createSceneView(
 
   // 环的贴地高度：只在落地帧刷新，跳跃时留在最后落脚的地面
   let ringGroundY = 0;
+  /**
+   * v9s.38：贴地特效的落地高度。
+   * 旧版把电环 / 冲锋落点的 y 写死成 0.042 / 0.045 —— 站上 0.2~1.2m 的台阶或高台后，
+   * 整个特效埋在地块里，看起来就是「某些地块上没有特效」。现在按真实地形取高度。
+   */
+  const groundFxY = (x: number, z: number, fromY: number): number =>
+    groundHeightAt(world.boxes, x, z, fromY + 0.55, 0);
   const playerRing = createGroundRing({
     radius: playerRadius,
     thickness: ringThickness,
@@ -303,7 +365,7 @@ export function createSceneView(
     color: ringCfg.playerColor,
     opacity: ringCfg.playerOpacity,
     y: 0.028,
-    renderOrder: 6,
+    renderOrder: FX_ORDER.ring,
   });
   playerRing.mesh.name = 'player-ground-ring';
   scene.add(playerRing.mesh);
@@ -317,7 +379,7 @@ export function createSceneView(
       color: ringCfg.neutralColor,
       opacity: ringCfg.opacity,
       y: 0.022,
-      renderOrder: 5,
+      renderOrder: FX_ORDER.ring,
     });
     ring.mesh.name = `dummy-ground-ring-${s.id}`;
     scene.add(ring.mesh);
@@ -336,7 +398,7 @@ export function createSceneView(
       opacity: 0,
       profile: 'glow',
       y: 0.019,
-      renderOrder: 4,
+      renderOrder: FX_ORDER.ringHalo,
     });
     halo.mesh.name = `dummy-ground-halo-${s.id}`;
     scene.add(halo.mesh);
@@ -355,7 +417,7 @@ export function createSceneView(
     edgeFade: 0.06,
     color: ringCfg.meterColorCharge,
     y: 0.03,
-    renderOrder: 8,
+    renderOrder: FX_ORDER.ringMeter,
   });
   playerMeter.mesh.name = 'player-ground-meter';
   scene.add(playerMeter.mesh);
@@ -369,7 +431,7 @@ export function createSceneView(
       edgeFade: 0.02,
       color: ringCfg.warnColor,
       y: 0.031,
-      renderOrder: 9,
+      renderOrder: FX_ORDER.ringWarn,
     });
     m.mesh.name = `dummy-ground-warn-${s.id}`;
     scene.add(m.mesh);
@@ -378,7 +440,7 @@ export function createSceneView(
   // 冲锋落点预览（玩家派生招 windup 阶段）
   // 落点圈用玩家色系：红色会被读成「敌人的危险范围」，而这是「我自己要冲到这里」
   const landingPreview = createAreaRing({
-    color: ringCfg.playerColor, y: 0.042, renderOrder: 3,
+    color: ringCfg.playerColor, y: 0.042, renderOrder: FX_ORDER.groundArea,
   });
   landingPreview.group.name = 'player-landing-preview';
   scene.add(landingPreview.group);
@@ -472,7 +534,9 @@ export function createSceneView(
   const slash = new THREE.Mesh(slashGeo, slashMat);
   const slashGlow = new THREE.Mesh(slashGeo, slashGlowMat);
   slashGlow.scale.setScalar(1.09);
-  slashGlow.renderOrder = 4;
+  // 弧本体 + 外发光各自一层：本体先画、光晕后画，光晕才不会被自己盖住
+  setFxOrder(slashGroup, FX_ORDER.slash);
+  slashGlow.renderOrder = FX_ORDER.slash + 1;
   slashGroup.add(slash, slashGlow);
   slashTilt.add(slashGroup);
 
@@ -527,9 +591,15 @@ export function createSceneView(
     finB.rotation.z = Math.PI / 2;
     const glow = new THREE.Sprite(glowMat);
     glow.scale.setScalar(pfx.arrowGlowSize);
-    glow.renderOrder = 6;
+    glow.renderOrder = FX_ORDER.projectileGlow;
     const trail = new THREE.Mesh(arrowTrailGeo, trailMat);
-    trail.renderOrder = 5;
+    trail.renderOrder = FX_ORDER.projectileTrail;
+    // v9s.38：箭杆 / 箭头 / 尾羽原来用默认 0 —— 和贴地环、地面盘混在一起排序，
+    // 箭会被后画的贴地环盖掉一截。现在整组归到 `projectile` 层。
+    shaft.renderOrder = FX_ORDER.projectile;
+    tip.renderOrder = FX_ORDER.projectile;
+    finA.renderOrder = FX_ORDER.projectile;
+    finB.renderOrder = FX_ORDER.projectile;
     group.add(shaft, tip, finA, finB, glow, trail);
     group.visible = false;
     scene.add(group);
@@ -566,9 +636,10 @@ export function createSceneView(
     core.scale.copy(boltShape);
     const glow = new THREE.Sprite(boltGlowMat);
     glow.scale.setScalar(pfx.boltGlowScale);
-    glow.renderOrder = 6;
+    glow.renderOrder = FX_ORDER.projectileGlow;
     const trail = new THREE.Mesh(boltTrailGeo, boltTrailMat);
-    trail.renderOrder = 5;
+    trail.renderOrder = FX_ORDER.projectileTrail;
+    core.renderOrder = FX_ORDER.projectile;
     group.add(core, glow, trail);
     group.visible = false;
     scene.add(group);
@@ -579,7 +650,7 @@ export function createSceneView(
   // 玩家一眼能读出「这块地危险、还有多久」，而不是只看到一个光圈。
   const shockRings = Array.from({ length: 6 }, () => {
     const area = createAreaRing({
-      color: '#9ad0ff', edgeWidthRatio: 0.038, y: 0.045, renderOrder: 2,
+      color: '#9ad0ff', edgeWidthRatio: 0.038, y: 0.045, renderOrder: FX_ORDER.groundArea,
     });
     area.group.visible = false;
     scene.add(area.group);
@@ -598,6 +669,7 @@ export function createSceneView(
     });
     const mesh = new THREE.Mesh(dashRingGeo, mat);
     mesh.rotation.x = -Math.PI / 2;
+    mesh.renderOrder = FX_ORDER.groundFx;
     mesh.visible = false;
     scene.add(mesh);
     return { mesh, mat, life: 0, base: 1 };
@@ -605,7 +677,7 @@ export function createSceneView(
   function spawnDashRing(x: number, z: number, y: number, color: string, scale: number): void {
     const r = dashRings.find((e) => e.life <= 0) ?? dashRings[0];
     r.mat.color.set(color);
-    r.mesh.position.set(x, y + 0.04, z);
+    r.mesh.position.set(x, groundFxY(x, z, y) + 0.04, z);
     r.base = scale;
     r.mesh.scale.setScalar(scale * 0.6);
     r.mesh.visible = true;
@@ -624,13 +696,14 @@ export function createSceneView(
     });
     const mesh = new THREE.Mesh(linkRingGeo, mat);
     mesh.rotation.x = -Math.PI / 2;
+    mesh.renderOrder = FX_ORDER.groundFx;
     mesh.visible = false;
     scene.add(mesh);
     return { mesh, mat, life: 0, base: 1 };
   });
   function spawnLinkRing(x: number, z: number, y: number, scale: number): void {
     const r = linkRings.find((e) => e.life <= 0) ?? linkRings[0];
-    r.mesh.position.set(x, y + 0.05, z);
+    r.mesh.position.set(x, groundFxY(x, z, y) + 0.05, z);
     r.base = scale;
     r.mesh.scale.setScalar(scale * 0.55);
     r.mesh.visible = true;
@@ -652,6 +725,7 @@ export function createSceneView(
     });
     const mesh = new THREE.Mesh(slamRingGeo, mat);
     mesh.rotation.x = -Math.PI / 2;
+    mesh.renderOrder = FX_ORDER.groundFx + 1;
     mesh.visible = false;
     scene.add(mesh);
     return { mesh, mat, life: 0, base: 1, delay: 0 };
@@ -659,7 +733,7 @@ export function createSceneView(
   function spawnSlamRing(x: number, z: number, y: number, radius: number, delay: number): void {
     const r = slamRings.find((e) => e.life <= 0) ?? slamRings[0];
     r.mat.color.set(slamFx.color);
-    r.mesh.position.set(x, y + 0.035, z);
+    r.mesh.position.set(x, groundFxY(x, z, y) + 0.035, z);
     r.base = radius;
     r.mesh.scale.setScalar(radius * 0.35);
     r.mesh.visible = true;
@@ -754,6 +828,20 @@ export function createSceneView(
     },
     yawDebug() {
       return { target: yawTarget, shown: yawSmoother.value, tauMs: view.renderInterp?.yawSmoothMs ?? 0 };
+    },
+    fxDebug() {
+      return {
+        // 任意一块「非调试线框」状态的地块都应该是 opaque；只要有一块透明就说明排序问题回来了
+        boxOpaque: materials.every((m) => !m.transparent),
+        boxCount: materials.length,
+        orders: {
+          ring: playerRing.mesh.renderOrder,
+          groundFx: slamRings[0]?.mesh.renderOrder ?? -1,
+          trail: playerTrail.object.renderOrder,
+          slash: slashGroup.renderOrder,
+          projectile: arrowVisuals[0]?.group.children[0]?.renderOrder ?? -1,
+        },
+      };
     },
     renderPose() {
       return {
@@ -856,7 +944,7 @@ export function createSceneView(
 
       if (animDt > 0) {
         for (let i = 0; i < dummyRigs.length; i++) {
-          if (w.dummies[i]) dummyRigs[i].update(w.dummies[i], animDt);
+          if (w.dummies[i]) dummyRigs[i].update(w.dummies[i], animDt, w.time);
         }
       }
 
@@ -914,7 +1002,8 @@ export function createSceneView(
         landMove?.hit.radius ?? 0.9,
       );
       landingPreview.set(
-        landing.x, landing.z, 0.042, landing.radius,
+        landing.x, landing.z, groundFxY(landing.x, landing.z, c.position.y) + 0.042,
+        landing.radius,
         landing.active ? ringCfg.landingOpacity : 0, w.time,
       );
 
@@ -1097,7 +1186,7 @@ export function createSceneView(
         // 从放置点（角色中心）向外展开：easeOutCubic，同时淡入，不是凭空出现一个满半径大圈
         const open = areaOpen(Math.max(0, ring.duration - ring.life), ringCfg.areaExpandSec);
         e.set(
-          ring.x, ring.z, 0.045,
+          ring.x, ring.z, groundFxY(ring.x, ring.z, c.position.y) + 0.045,
           ring.radius * open.scale,
           ringCfg.areaOpacity * (0.35 + 0.65 * t) * open.alpha,
           w.time,
@@ -1174,6 +1263,10 @@ export function createSceneView(
       for (const m of materials) {
         m.opacity = v ? 0.3 : 1;
         m.wireframe = v;
+        // v9s.38：不透明 ↔ 透明的切换必须一起改，否则线框模式看不见墙后的东西；
+        // transparent 变化需要重编译着色器（needsUpdate），只在切换时发生一次。
+        m.transparent = v;
+        m.depthWrite = !v;
         m.needsUpdate = true;
       }
     },

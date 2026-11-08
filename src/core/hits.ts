@@ -414,25 +414,33 @@ export function scanLinkHits(world: World, dt: number): void {
 /** 假人挥砍在 active 帧命中玩家：走同一个 applyHit（对称），受测试开关约束。 */
 function dummyHits(world: World): void {
   const cfg = world.config.hits;
+  const fighters = world.config.dummies.fighters;
   const p = world.character.position;
   for (const e of world.events) {
     if (e.type !== 'dummy-hit') continue;
     const s = world.dummies[e.value - 1];
     if (!s) continue;
+    // v9s.38：持械陪练用「它手里那把武器」的 reach / 击退，普通假人仍用 dummyReach。
+    // 这样大剑陪练隔着 2m 也能砍到、双刀必须贴身，混战的距离判断才是真的。
+    const reach = s.weapon ? (cfg.reach[s.weapon] ?? cfg.dummyReach) : cfg.dummyReach;
     const dx = p.x - s.position.x;
     const dz = p.z - s.position.z;
     const dist = Math.hypot(dx, dz);
-    if (dist > cfg.dummyReach) continue;
+    if (dist > reach) continue;
     const nx = dist > EPS ? dx / dist : 0;
     const nz = dist > EPS ? dz / dist : 1;
+    const kbBase = s.weapon
+      ? Math.max(cfg.knockback[s.weapon] ?? 0, cfg.dummyKnockback)
+      : cfg.dummyKnockback;
+    const kb = kbBase * (s.weapon ? (fighters?.knockbackScale ?? 1) : 1);
     // 长期「无伤害契约」默认由 noDamageToPlayer 保证：只写受击动画，不推玩家位置 / 速度。
     // 关掉开关后按与假人完全相同的公式施加击退（dummyKnockback），机制本身是对称的。
     applyHit(world, { kind: 'player' }, {
-      type: 'light',
-      duration: hurtDuration(world, 'light'),
+      type: s.weapon === 'greatsword' ? 'knock' : 'light',
+      duration: hurtDuration(world, s.weapon === 'greatsword' ? 'knock' : 'light'),
       dirX: nx,
       dirZ: nz,
-      knockback: cfg.dummyKnockback,
+      knockback: kb,
       sourceId: s.id,
     });
   }

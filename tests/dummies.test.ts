@@ -100,6 +100,9 @@ describe('测试假人：四种 AI 行为', () => {
     // 隔离该模块以守住无伤害 / 无位移的旧契约；新行为由 v9s-feel.test.ts 单独覆盖。
     w.modules.turnInPlace = false;
     w.modules.gaze = false;   // v9s.5：被攻击时玩家会进入威胁注视（改写朝向），隔离以守住「假人不写玩家状态」契约
+    // v9s.38：玩家受击击退已默认打开；本用例守的是「AI 自身不写玩家状态」这条旧契约，
+    // 与「被打会不会后退」无关，因此显式打开测试限制（命中只写受击动画）。
+    w.config.hits.noDamageToPlayer = true;
     const playerBefore = JSON.stringify(w.character);
     let attacks = 0;
     for (let i = 0; i < 600; i++) {

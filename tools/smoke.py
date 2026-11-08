@@ -124,7 +124,16 @@ def main() -> int:
                 yaws = [r["yaw"] for r in rows[1:]]
                 dels = [abs(yaws[i] - yaws[i - 1]) for i in range(1, len(yaws))]
                 zero = sum(1 for d in dels if d < 1e-6)
-                check("慢放转身无「画面不动」帧", zero <= max(1, len(dels) * 0.02), f"{zero}/{len(dels)} 帧不动")
+                # v9s.38：判据从「零增量帧总数」改成「**最长连续**零增量帧」。
+                # 孤立的 1~2 帧重复是采样抖动（页内 rAF 与渲染节拍偶发重合；
+                # 软件渲染下 24 帧样本里实测出现过连续 2 帧），0.25× 慢放下 2 帧 = 8ms，
+                # 肉眼无感。真正的卡顿（v9s.34 那个 bug）是 35+/60 的**连续**重复帧。
+                run = best = 0
+                for d in dels:
+                    run = run + 1 if d < 1e-6 else 0
+                    best = max(best, run)
+                check("慢放转身无「画面不动」卡顿（最长连续 ≤ 2 帧）", best <= 2,
+                      f"最长连续 {best} 帧 / 共 {zero} 帧（{len(dels)} 帧样本）")
 
                 # ---- v9s.36：卡肉必须发生在「刀挥到人」之后 ----
                 page.evaluate("() => { window.__harness.debug.timeScale = 1; }")
@@ -170,6 +179,36 @@ def main() -> int:
                 }""")
                 check("击地尘环生成（半径 / 透明度正常）", ring["ok"],
                       f"spawns={ring['spawns']} scale={ring['scale']:.2f} opacity={ring['op']:.2f}")
+
+
+                # ---- v9s.38：特效层级（地块不透明 + 贴地层排在身体层之前） ----
+                fx = page.evaluate("() => window.__harness.fxDebug()")
+                o = fx["orders"]
+                check("地块走不透明通道（透明地面会盖掉刀光）", fx["boxOpaque"] and fx["boxCount"] > 0,
+                      f"boxOpaque={fx['boxOpaque']} count={fx['boxCount']}")
+                check("特效层级单调：贴地环 < 贴地冲击 < 刀光 < 斩击弧 < 弹道",
+                      o["ring"] < o["groundFx"] < o["trail"] < o["slash"] < o["projectile"],
+                      f"ring={o['ring']} groundFx={o['groundFx']} trail={o['trail']} "
+                      f"slash={o['slash']} proj={o['projectile']}")
+
+                # ---- v9s.38：三个持械陪练在场，且保持距离而不是贴脸 ----
+                crowd = page.evaluate(
+                    "() => {"
+                    "  const h = window.__harness, w = h.world;"
+                    "  const f = w.dummies.filter((d) => d.weapon);"
+                    "  const p = w.character.position;"
+                    "  return { n: f.length,"
+                    "    weapons: f.map((d) => d.weapon),"
+                    "    minDist: Math.min(...f.map((d) => Math.hypot(d.position.x - p.x, d.position.z - p.z))),"
+                    "    knockDefault: !w.config.hits.noDamageToPlayer };"
+                    "}"
+                )
+                check("三个持械陪练（剑盾 / 双刀 / 大剑）",
+                      crowd["n"] == 3 and set(crowd["weapons"]) == {"sword-shield", "dual-swords", "greatsword"},
+                      str(crowd["weapons"]))
+                check("陪练与玩家保持距离（> 1.2m，不贴脸）", crowd["minDist"] > 1.2,
+                      f"最近 {crowd['minDist']:.2f}m")
+                check("玩家受击击退默认打开", crowd["knockDefault"], "")
 
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
                       f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}",

@@ -35,6 +35,37 @@ export function supportHeight(
 }
 
 /**
+ * v9s.38：某点「脚下的地面高度」（表现层贴地特效用）。
+ *
+ * 与 `supportHeight` 的区别：这里不关心能不能站上去，只回答「这个 XZ 上，
+ * 从 refY 往下看的最高实体表面在哪」—— 被踩在 0.8m 高台上的角色脚下是 0.8，
+ * 站在台子旁边（refY≈0）时台面 0.8 高于参考面，会被忽略，仍然是地面 0。
+ *
+ * 之前贴地特效（电环 / 冲锋落点 / 冲击尘环）把 y 写死成 0.04，站在台阶或高台上
+ * 就整个埋进地块里看不见 —— 这就是「某些地块上看不见特效」的直接原因之一。
+ *
+ * @param refY     参考高度：高于 `refY + tol` 的盒子视为「头顶上的东西」，不算地面
+ * @param fallback 没有命中任何盒子时返回的高度（默认 0 = 世界地面）
+ */
+export function groundHeightAt(
+  boxes: Box[],
+  x: number,
+  z: number,
+  refY: number,
+  fallback = 0,
+  tol = 0.05,
+): number {
+  let best = Number.NEGATIVE_INFINITY;
+  for (const b of boxes) {
+    if (b.maxY > refY + tol) continue;
+    if (x < b.minX || x > b.maxX) continue;
+    if (z < b.minZ || z > b.maxZ) continue;
+    if (b.maxY > best) best = b.maxY;
+  }
+  return best === Number.NEGATIVE_INFINITY ? fallback : best;
+}
+
+/**
  * 水平碰撞解算：把角色圆柱（用 XZ 圆近似）从重叠的白盒中推出。
  * 顶面低于 脚高 + stepHeight 的盒子视为可踩台阶，跳过不挡；
  * 底面高于 头顶 的盒子（过梁）视为头顶空间，跳过不挡。

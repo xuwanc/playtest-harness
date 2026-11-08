@@ -13,7 +13,7 @@
  *     展开 / 收起只由胶囊点击与 V 快捷键控制；面板栈指针穿透，不挡操作区。
  *
  * 操作说明（旧 #hint）已移除：手机有屏幕按钮、按钮带 aria-label，完整按键表与
- * 版本说明在 README；那块默认收起、8s 自动收回的 9000 字 changelog 判定为不必要。
+ * 版本说明在 README 与 `docs/state/CURRENT.md`；那块默认收起、8s 自动收回的 9000 字 changelog 判定为不必要。
  */
 
 export type PanelKey = 'lab' | 'hud' | 'motion' | 'debug';

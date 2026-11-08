@@ -350,11 +350,13 @@ describe('v9a 派生招 · 扫掠命中与对称机制', () => {
     expect(w.hitCount).toBe(0);
   });
 
-  it('默认测试限制：假人打玩家只写受击动画，不推玩家', () => {
+  it('测试限制打开时：假人打玩家只写受击动画，不推玩家', () => {
     const w = makeWorld();
     place(w, 0, 0);
     freezeDummies(w);
     put(w.dummies[0], 0, 0.5);
+    // v9s.38：默认已改为「玩家会被击退」；这里显式打开限制，守的是开关本身有效。
+    w.config.hits.noDamageToPlayer = true;
     w.events.push({ type: 'dummy-hit', tick: w.tick, x: 0, y: 0, z: 0.5, value: 1 });
     hitsUpdate(w, w.config.fixedDt);
     expect(w.config.hits.noDamageToPlayer).toBe(true);

@@ -204,6 +204,9 @@ describe('v9s.25 弓箭不再前顶', () => {
   it('原地连射：角色位置不前进，攻击中也不写位移', () => {
     const w = makeWorld();
     w.modules.targeting = false;
+    // v9s.38：玩家受击击退默认打开 —— 本用例量的是「弓箭本身不带位移」，
+    // 关掉受击击退，避免 attack 模式的假人走过来把玩家推离原点污染读数。
+    w.config.hits.noDamageToPlayer = true;
     w.config.combat.bow.maxChargeTime = 0.1;
     step(w, w.config.fixedDt, intent({ weaponSlot: 5 }));
     // 先站稳
