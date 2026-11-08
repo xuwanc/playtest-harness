@@ -546,6 +546,12 @@ export type HitsConfig = {
     heavy: number;
     knock: number;
   };
+  /**
+   * v9s.33 · 卡肉分武器档位（乘在 hitstop 表上）。
+   * 同一记「重击」，双手大剑读起来比双剑沉得多：大剑 1.3 / 剑盾 1.0 / 法杖 1.1 /
+   * 双剑 0.85 / 弓 0.9。缺省 1 = 使用全局表（旧配置零影响）。
+   */
+  hitstopByWeapon?: Partial<Record<WeaponId, number>>;
 };
 
 /* ---------------- 技能契约（法杖：引导飞弹 / 电环，v7c #12） ---------------- */
@@ -1512,6 +1518,28 @@ export type AttackPoseViewConfig = {
   gaitWeight: number;
   /** 进出攻击姿态的指数平滑速率（1/s），帧率无关 */
   blendRate: number;
+  /**
+   * v9s.33 · 攻击期间「移动中」把下半身交还真实步态。
+   *
+   * 背景：Core 在攻击全程允许 30% 移速（`attackMoveScale` / `settleMoveScale`），
+   * 但下半身仍停在攻击跨步姿态上 —— 脚被足部 IK 钉住、身体以 1 m/s 平移，
+   * 读起来就是「收招后下盘在冰面上滑一段」。
+   *
+   * 这里按「实际速度」把腿部姿态淡回真实步态：`speed` 以下不接管、`full` 以上满接管，
+   * 各阶段再乘一个上限（active 阶段不接管，让位给 lunge 的跨步）。
+   */
+  moveTakeover?: {
+    /** 速度低于该值视为原地攻击，不接管 */
+    speed: number;
+    /** 速度达到该值视为正常移动，接管比例到 1 */
+    full: number;
+    /** windup 阶段接管上限（蓄势仍要保留跨步姿态，别全交出去） */
+    windup: number;
+    /** recovery 阶段接管上限 */
+    recovery: number;
+    /** settle 阶段接管上限 */
+    settle: number;
+  };
 };
 
 /**
@@ -1595,6 +1623,28 @@ export type LandingViewConfig = {
   anticipationDuration: number;
 };
 
+/**
+ * v9s.33 · 脊柱分段（腰 / 胸 / 颈）。
+ *
+ * 旧骨架只有一整段 `upper`（绕腰旋转），大幅挥击时所有扭转都堆在腰上，
+ * 瘦高体型读起来像一根棍在转。开启后把同一份「躯干总角」按权重分配到两段：
+ * 腰段（upper）与胸段（新增 chest 节点，肩 / 头挂在它下面），世界朝向不变。
+ *
+ * 颈段只做**俯仰稳定**：上半身前倾 / 后仰时，颈部反向吃掉一小部分，
+ * 让头保持更直立。扭转不交给颈段 —— 那属于 gaze（headYaw）的职责。
+ */
+export type SpineViewConfig = {
+  enabled: boolean;
+  /** 腰段占比 0..1（与 chest 归一化后使用） */
+  waist: number;
+  /** 胸段占比 0..1 */
+  chest: number;
+  /** 颈段俯仰补偿 0..1：头相对躯干反向旋转的比例 */
+  neck: number;
+  /** 胸段枢轴高度（相对躯干高度 0..1）；越大，弯折点越靠上 */
+  chestPivot: number;
+};
+
 export type ProgramAnimViewConfig = {
   attack: AttackPoseViewConfig;
   /** v8d：攻击跨步的等效驱动与姿态幅度（两条下半身路径共用） */
@@ -1608,6 +1658,8 @@ export type ProgramAnimViewConfig = {
   swing?: SwingPoseViewConfig;
   /** v9s.32：各武器的待机 / 移动上半身姿态（纯表现，可整体关闭） */
   stance?: Record<string, StanceViewConfig>;
+  /** v9s.33：脊柱分段（缺省 / enabled=false 时保持单段 upper，逐帧与旧版一致） */
+  spine?: SpineViewConfig;
 };
 
 /**
@@ -2148,8 +2200,31 @@ export type ViewConfig = {
   weaponTrail: TrailViewConfig;
   /** v9s.22：命中定格（纯表现，只冻角色姿态，不冻 Core） */
   hitstop: HitstopViewConfig;
+  /** v9s.33：动态平衡量化 / 自动配重（纯表现，只读骨架，不写 Core） */
+  balance?: BalanceViewConfig;
   colors: ColorConfig;
   dummies: DummyViewConfig;
+};
+
+/**
+ * v9s.33 · 动态平衡量化。
+ *
+ * 把角色当质点组算 COM / 捕获点（XCoM），再投影到两脚支撑矩形上打分。
+ * `autoCounter` 打开时，出界方向那一侧的手臂会按闭式解外展「配重」，
+ * 幅度受 `maxCounterDeg` 限制 —— 只是补几度，不改动画数据。
+ */
+export type BalanceViewConfig = {
+  enabled: boolean;
+  /** 反应时间（秒）：越大，XCoM 把身体动量外推得越远（越保守） */
+  reactionTime: number;
+  /** 重力加速度，默认 9.81 */
+  gravity: number;
+  /** 质心偏出时是否自动修正（挪骨盆 / 重心） */
+  autoCounter: boolean;
+  /** 重心修正上限（米，身体局部 X）；越小越保守 */
+  maxShift: number;
+  /** 修正的平滑速率（1/s） */
+  counterRate: number;
 };
 
 /**

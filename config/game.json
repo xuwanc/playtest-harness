@@ -321,6 +321,13 @@
         "light": 0.045,
         "heavy": 0.07,
         "knock": 0.1
+      },
+      "hitstopByWeapon": {
+        "sword-shield": 1.0,
+        "dual-swords": 0.85,
+        "greatsword": 1.3,
+        "staff": 1.1,
+        "bow": 0.9
       }
     },
     "separation": {
@@ -957,7 +964,14 @@
       "attack": {
         "lowerBodyWeight": 0,
         "gaitWeight": 1,
-        "blendRate": 14
+        "blendRate": 14,
+        "moveTakeover": {
+          "speed": 0.35,
+          "full": 1.2,
+          "windup": 0.55,
+          "recovery": 1.0,
+          "settle": 1.0
+        }
       },
       "stride": {
         "cycles": 1,
@@ -1591,6 +1605,13 @@
           "torsoYaw": -0.08,
           "blend": 0.22
         }
+      },
+      "spine": {
+        "enabled": true,
+        "waist": 0.58,
+        "chest": 0.42,
+        "neck": 0.16,
+        "chestPivot": 0.42
       }
     },
     "weaponMount": {
@@ -1786,6 +1807,14 @@
         "#e26d6d"
       ],
       "attackArcColor": "#ff6b5e"
+    },
+    "balance": {
+      "enabled": true,
+      "reactionTime": 0.18,
+      "gravity": 9.81,
+      "autoCounter": true,
+      "maxShift": 0.045,
+      "counterRate": 8
     }
   }
 }

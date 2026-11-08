@@ -96,7 +96,9 @@ describe('v9s.32 持械待机姿态', () => {
     const rig = mkRig();
     w.combat.weapon = 'sword-shield';
     for (let i = 0; i < 60; i++) rig.update(w.character, w.combat, w.playerHurt, 1 / 60);
-    const idleYaw = rig.group.getObjectByName('upper')!.rotation.y;
+    // v9s.33：躯干总偏航（腰段 + 胸段）
+    const idleYaw = rig.group.getObjectByName('upper')!.rotation.y
+      + (rig.group.getObjectByName('chest')?.rotation.y ?? 0);
     const stanceYaw = rig.stanceDebug().torsoYaw;
     expect(stanceYaw).toBeGreaterThan(0);
     expect(idleYaw).toBeGreaterThanOrEqual(stanceYaw - 1e-6);
@@ -106,7 +108,8 @@ describe('v9s.32 持械待机姿态', () => {
     w.combat.comboIndex = 1;
     w.combat.attackProgress = 0.5;
     for (let i = 0; i < 20; i++) rig.update(w.character, w.combat, w.playerHurt, 1 / 60);
-    const attackYaw = rig.group.getObjectByName('upper')!.rotation.y;
+    const attackYaw = rig.group.getObjectByName('upper')!.rotation.y
+      + (rig.group.getObjectByName('chest')?.rotation.y ?? 0);
     expect(Math.abs(attackYaw - (idleYaw + stanceYaw))).toBeGreaterThan(0.02);
     rig.dispose();
   });

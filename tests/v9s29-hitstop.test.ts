@@ -85,9 +85,11 @@ describe('v9s.29 命中卡肉', () => {
     // 上限守一下：超过 0.2s 会把连击节奏拖断
     expect(cfg.knock).toBeLessThan(0.2);
 
+    // v9s.33：卡肉加了「分武器档位」系数，断言要乘上当前武器的系数
     const gs = soloDummy(1.6, 'greatsword');
     expect(hitOnce(gs)).toBe(true);
-    expect(gs.combat.hitstop).toBeCloseTo(cfg.knock, 6);
+    const scale = gs.config.hits.hitstopByWeapon?.greatsword ?? 1;
+    expect(gs.combat.hitstop).toBeCloseTo(cfg.knock * scale, 6);
   });
 
   it('同帧多目标不叠加：取最大值，不会变成慢动作', () => {

@@ -5,7 +5,7 @@ import { createDummyRig } from '../src/presentation/dummy-rig';
 import { stopBlendGate, chestYawFromHip } from '../src/presentation/gait';
 import type { VoxelRig } from '../src/presentation/voxel-rig';
 import { makeQuietWorld, makeWorld, intent, run } from './helpers';
-import { rigNodes } from './rig-nodes';
+import { rigNodes, torsoYawOf } from './rig-nodes';
 import { MECH_GAIT } from './mech-gait';
 import type { AppConfig } from '../src/core';
 
@@ -207,7 +207,8 @@ describe('v9o 主角：胸随下盘适当偏转，头仍朝目标', () => {
       rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt, false);
       const n = rigNodes(rig);
       const low = n.lower.rotation.y as number;
-      const up = n.upper.rotation.y as number;
+      // v9s.33：upper 现在只承担腰段，躯干总偏航 = upper + chest
+      const up = torsoYawOf(rig);
       if (Math.abs(low) > 0.05) {
         saw = true;
         expect(Math.sign(up)).toBe(Math.sign(low));          // 同向，不是反着拧
@@ -267,10 +268,10 @@ describe('v9o 主角：胸随下盘适当偏转，头仍朝目标', () => {
       run(w, 1, aim);
       rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt, false);
       const n = rigNodes(rig);
-      if (Math.abs(n.upper.rotation.y as number) > 0.05) saw = true;
+      if (Math.abs(torsoYawOf(rig)) > 0.05) saw = true;
       // root=bodyYaw（由 three-scene 设置）+ upper + headPivot 应等于目标 headYaw
       const worldHead = w.character.bodyYaw
-        + (n.upper.rotation.y as number) + (head!.rotation.y as number);
+        + torsoYawOf(rig) + (head!.rotation.y as number);
       expect(Math.abs(angleDelta(worldHead, w.character.headYaw))).toBeLessThan(1e-6);
     }
     expect(saw).toBe(true);

@@ -33,6 +33,15 @@ export type CameraRig = {
   addShake(amount: number): void;
   /** v9s.31：当前震动能量 0..1（纯观测，供 diagnostics / 自动化验收） */
   shakeLevel(): number;
+  /**
+   * v9s.33：方向性微推。命中瞬间把相机沿「玩家 → 受击者」方向推几厘米，
+   * 和全向震动分开：震动表达「多沉」，微推表达「从哪边打过来的」。
+   */
+  addKick(dirX: number, dirZ: number, amount: number): void;
+  /** 微推能量 0..1（观测用） */
+  kickLevel(): number;
+  /** 累计触发的微推次数（自验用：确认命中上升沿确实调到了 addKick） */
+  kickCount(): number;
 };
 
 const NEUTRAL: CameraIntent = {
@@ -66,6 +75,11 @@ export function createCameraRig(
   /** v9s.29 命中震动：能量 0..1 + 相位（纯表现，不进 Core / 快照） */
   let shake = 0;
   let shakePhase = 0;
+  /** v9s.33 方向性微推：单位方向 × 幅度（米），能量指数衰减 */
+  let kickX = 0;
+  let kickZ = 0;
+  let kickE = 0;
+  let kickCount = 0;
 
   function computeOffset(): void {
     const pitch = ((cfg.pitchDeg + smart.pitchDelta) * Math.PI) / 180;
@@ -125,6 +139,13 @@ export function createCameraRig(
       } else {
         shake = 0;
       }
+      if (kickE > 1e-3) {
+        camera.position.x += kickX * kickE;
+        camera.position.z += kickZ * kickE;
+        kickE *= Math.exp(-13 * dt);
+      } else {
+        kickE = 0;
+      }
       camera.updateMatrixWorld();
     },
     snap(x, y, z): void {
@@ -159,6 +180,21 @@ export function createCameraRig(
     },
     shakeLevel(): number {
       return shake;
+    },
+    addKick(dirX, dirZ, amount) {
+      if (!Number.isFinite(dirX) || !Number.isFinite(dirZ) || !(amount > 0)) return;
+      const len = Math.hypot(dirX, dirZ);
+      if (len < 1e-4) return;
+      kickX = (dirX / len) * amount;
+      kickZ = (dirZ / len) * amount;
+      kickE = 1;
+      kickCount++;
+    },
+    kickLevel(): number {
+      return kickE;
+    },
+    kickCount(): number {
+      return kickCount;
     },
     setZoom(next): void {
       zoomTarget = Number.isFinite(next) && next > 0 ? next : 1;

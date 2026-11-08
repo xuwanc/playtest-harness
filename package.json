@@ -1,7 +1,7 @@
 {
   "name": "playtest-harness",
   "private": true,
-  "version": "0.9.52",
+  "version": "0.9.53",
   "type": "module",
   "description": "可移植核心的 3D 玩法实验台：碰撞白盒场景 + 体素角色 + 2.5D 平滑跟随相机 + 隐形摇杆",
   "scripts": {
@@ -9,6 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
+    "test:affected": "node scripts/test-affected.mjs",
+    "test:affected:list": "node scripts/test-affected.mjs --list",
     "test:watch": "vitest",
     "check:boundary": "node scripts/check-boundary.mjs",
     "verify:portable": "vitest run tests/portable.test.ts && node scripts/check-boundary.mjs",

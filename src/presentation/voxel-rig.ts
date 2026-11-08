@@ -3,6 +3,7 @@ import { wrapAngle } from '../core';
 import type {
   CharacterState, ColorConfig, CombatState, GaitViewConfig, HurtState, HurtViewConfig,
   IKViewConfig, LeanViewConfig, LinkState, LinkViewConfig, OrientationViewConfig,
+  BalanceViewConfig,
   ProgramAnimViewConfig, StanceViewConfig, SwingPoseViewConfig, TurnInPlaceState, VoxelConfig, WeaponId,
   WeaponMountConfig,
   WeaponWristViewConfig,
@@ -16,10 +17,12 @@ import {
 import type { GaitInput } from './gait';
 import {
   attackBlendStep, attackGaitDrive, attackStridePose, landingImpactScale,
-  poseWeights, pulseValue, scaleGaitPose,
+  mixLowerGait, poseWeights, pulseValue, scaleGaitPose,
 } from './program-anim';
 import type { GaitDrive } from './program-anim';
 import { emptyHurtPose, solveHurtPose } from './hurt-pose';
+import { solveBalance } from './balance';
+import type { BalancePoint, BalanceResult } from './balance';
 import type { HurtPose } from './hurt-pose';
 import { solveInertiaPose } from './inertia';
 import { applyFootIK, captureIKBase, EMPTY_IK_DIAGNOSTICS } from './rig-ik';
@@ -132,6 +135,12 @@ export type VoxelRig = {
   hipYaw(): number;  /** v9n：停步收相进度（-1 = 未接管）与本帧双腿姿态，供浏览器验收过渡是否平滑。
    *  v9o 追加 chestYaw / speed；v9q 追加 gaitSpeed（= velocity + 击退冲量，步态实际驱动）；
    *  v9r 追加 stopDip（骨盆惯性下沉量，验收「骨盆跟着沉、脚不跟着沉」）。 */
+  /** v9s.33：动态平衡读数（COM / 捕获点 / 支撑余量 / 综合分）；未开启时为 null */
+  balanceDebug(): (BalanceResult & { shift?: number; latDeficit?: number }) | null;
+  /** v9s.33：脊柱分段读数（腰 / 胸 / 颈）；未开启时为 null */
+  spineDebug(): {
+    enabled: boolean; waistYaw: number; chestYaw: number; totalYaw: number; neckPitch: number;
+  } | null;
   gaitDebug(): {
     stopT: number; hipYaw: number; chestYaw: number; speed: number; gaitSpeed: number;
     /** v9p：停步惯性脉冲的前脚前伸量（rad）/ 身体前移量（m）/ 骨盆下沉量（m），未接管时为 0 */
@@ -139,6 +148,8 @@ export type VoxelRig = {
     /** v9s：停步偏差淡出系数（1=未消化，0=已归零）/ 原地转身踏步脉冲强度 */
     stopYawFade: number; turnStep: number;
     legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
+    /** v9s.33：腿部被真实步态接管的比例（0 = 攻击姿态，1 = 完全真实步态） */
+    legTakeover: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
    *  供验收「腿摆动方向」：投影基准必须与腿所在坐标系一致，否则非正前方时方向被歪。 */
@@ -354,6 +365,8 @@ export function createVoxelRig(
   linkCfg?: LinkViewConfig,
   /** v9s.24：腕部滞后。省略时整层关闭 = 与 v9s.23 逐帧一致（单测 / A/B 用）。 */
   wristCfg?: WeaponWristViewConfig,
+  /** v9s.33：动态平衡量化 / 自动配重。省略 = 关闭，读数恒为空（单测 A/B 用）。 */
+  balanceCfg?: BalanceViewConfig,
 ): VoxelRig {
   const ikConfig: IKViewConfig = ikCfg ?? {
     enabled: false, weight: 0, attackScale: 1, maxCorrectionDeg: 70,
@@ -408,9 +421,44 @@ export function createVoxelRig(
   const bodyH = v.bodyHeight;
   const bodyW = v.bodyWidth;
 
-  const torso = makeBox(bodyW, bodyH, 0.28, colors.body);
-  torso.position.y = bodyH / 2;                 // 相对骨盆
-  upper.add(torso);
+  // ---- v9s.33 脊柱分段 ----
+  // 开启时：upper 只承担「腰段」，新增 chest 节点承担「胸段」，肩 / 头挂在 chest 下。
+  // 同一份躯干总角按权重拆到两段（见 update() 末尾的 splitSpine），世界朝向不变，
+  // 但弯折点从腰移到胸腔 → 大幅挥击不再是「一根棍整体转」。
+  // 关闭时 chest 保持单位变换、躯干仍是单块，逐帧与旧版一致。
+  const spineCfg = animCfg.spine;
+  const spineOn = !!spineCfg?.enabled;
+  const chestPivotY = spineOn
+    ? clamp(spineCfg!.chestPivot ?? 0.42, 0.15, 0.85) * bodyH
+    : 0;
+  const chest = group();
+  chest.name = 'chest';
+  chest.position.y = chestPivotY;
+  upper.add(chest);
+  const torsoRoot = spineOn ? chest : upper;
+
+  let torso: THREE.Mesh;
+  let chestMesh: THREE.Mesh | null = null;
+  let abdomenH = bodyH;
+  let chestH = 0;
+  if (spineOn) {
+    abdomenH = Math.max(0.05, chestPivotY);
+    chestH = Math.max(0.05, bodyH - chestPivotY);
+    torso = makeBox(bodyW, abdomenH, 0.28, colors.body);
+    torso.name = 'torsoLower';
+    torso.position.y = abdomenH / 2;
+    upper.add(torso);
+    // 胸块略宽 8mm：两块的侧面不共面，避免 z-fighting；读起来也像胸甲。
+    chestMesh = makeBox(bodyW + 0.008, chestH, 0.288, colors.body);
+    chestMesh.name = 'torsoUpper';
+    chestMesh.position.y = chestH / 2;
+    chest.add(chestMesh);
+  } else {
+    torso = makeBox(bodyW, bodyH, 0.28, colors.body);
+    torso.name = 'torso';
+    torso.position.y = bodyH / 2;                 // 相对骨盆
+    upper.add(torso);
+  }
 
   // 头部独立枢轴：绕脖子旋转，实现「头先于身体转向目标方向」
   const headPivot = group();
@@ -420,8 +468,8 @@ export function createVoxelRig(
   headPivot.rotation.order = 'YXZ';
   // 头部枢轴 = 躯干高度（配置值按标准体型写的 0.4）。瘦高体型躯干只有 0.24，
   // 直接沿用会让头飘在躯干上方 16cm，所以按 bodyHeight 夹一下。
-  headPivot.position.y = Math.min(ori.headPivotHeight, bodyH);
-  upper.add(headPivot);
+  headPivot.position.y = Math.min(ori.headPivotHeight, bodyH) - chestPivotY;
+  torsoRoot.add(headPivot);
 
   const head = makeBox(H, H, H, colors.head);
   head.position.y = H / 2;
@@ -488,8 +536,10 @@ export function createVoxelRig(
     // 这是双持两把剑「向两侧展开」的必要条件。
     // 副作用：双手 IK 的目标点必须先把 yaw 逆旋转掉，见 applySecondaryGrip 的 probeAt。
     shoulder.rotation.order = 'YXZ';
-    shoulder.position.set(sx * (bodyW / 2 + t / 2), bodyH - 0.04, 0); // 相对骨盆
-    upper.add(shoulder);
+    // 相对父节点：不开启脊柱分段时父节点就是 upper（y 相对骨盆）；
+    // 开启后父节点是 chest（枢轴在 chestPivotY），要减掉这段高度。
+    shoulder.position.set(sx * (bodyW / 2 + t / 2), bodyH - 0.04 - chestPivotY, 0);
+    torsoRoot.add(shoulder);
 
     const upperArm = makeBox(t, armLen / 2, t, colors.limb);
     upperArm.position.y = -armLen / 4;
@@ -764,6 +814,27 @@ export function createVoxelRig(
   let attackLegWeight = 0;
   /** 本帧步态对下盘的权重（诊断用） */
   let lastGaitScale = 1;
+  /**
+   * v9s.33：本帧「真实步态接管腿部」的平滑权重 0..1。
+   * 攻击期间玩家仍能移动（30% 移速），但腿停在攻击跨步姿态 → 脚被 IK 钉住、
+   * 身体平移，读作下盘滑行。按速度淡入真实步态即可，见 update() 里的说明。
+   */
+  let legTakeoverSm = 0;
+  /** v9s.33：本帧平衡读数（null = 未开启 / 无骨架） */
+  let lastBalance: BalanceResult | null = null;
+  /**
+   * v9s.33：自动重心偏移（米，身体局部 X）。一帧延迟的反馈回路：
+   * 本帧末尾量出质心偏向哪边，下一帧把骨盆往回收一点。
+   *
+   * 为什么不是「加大另一侧手臂配重」：实测手臂外展 40° 只能把质心拉回 ~2mm
+   * （臂 5kg / 体重 70kg，力臂 0.42m），几乎量不出来；而骨盆带着整个上半身
+   * 平移 1cm 就是实打实的 1cm 质心位移。真人被推时也是先「撤胯 / 压重心」，
+   * 手臂只是跟着甩 —— 这里按物理上真正有效的那一层来做。
+   */
+  let balanceShift = 0;
+  let lastLatDeficit = 0;
+  let balanceBodyX = NaN;
+  let balanceBodyZ = NaN;
   /** 本帧喂给 solveGait 的四个等效驱动量（诊断用） */
   let lastDrive: GaitDrive = { speed: 0, phase: 0, localForward: 0, localRight: 0 };
   /** v9n：本帧实际写入双腿的姿态（诊断用） */
@@ -944,8 +1015,15 @@ export function createVoxelRig(
       leg.lowerMesh.position.y = (-leg.segLen / 2) * s.leg;
       leg.tip.position.y = -leg.segLen * s.leg;
     }
+    // v9s.33：躯干可能是「腰块 + 胸块」两块，各自按自己的基准高度缩放，
+    // 叠放顺序不能错（胸块要跟着腰块一起抬）。
     torso.scale.set(s.girthTorso, s.torso, s.girthTorso);
-    torso.position.y = (bodyH / 2) * s.torso;
+    torso.position.y = (abdomenH / 2) * s.torso;
+    if (chestMesh) {
+      chestMesh.scale.set(s.girthTorso, s.torso, s.girthTorso);
+      chestMesh.position.y = (chestH / 2) * s.torso;
+      chest.position.y = abdomenH * s.torso;
+    }
   }
 
   /**
@@ -990,7 +1068,9 @@ export function createVoxelRig(
     const sy2 = Math.sin(yawComp);
     const probeAt = (gy: number): { t: { x: number; y: number; z: number }; dist: number } => {
       const world = mountR.localToWorld(new THREE.Vector3(0, gy, 0));
-      const local = upper.worldToLocal(world);
+      // v9s.33：肩挂在 chest 下（脊柱分段）时，目标向量必须换算到 chest 局部空间；
+      // 用 upper 会把胸段的额外旋转算错，导致副手离柄 0.39m。
+      const local = (spineOn ? chest : upper).worldToLocal(world);
       const dx = local.x - sx;
       const dy = local.y - sy;
       const dz = local.z - sz;
@@ -1092,11 +1172,11 @@ export function createVoxelRig(
       wristTwist = 0;
       armR.wrist.rotation.set(0, 0, 0);
       prevArmPitch = armR.root.rotation.x;
-      prevTorsoYaw = upper.rotation.y;
+      prevTorsoYaw = torsoYaw();
       return;
     }
     const pitch = armR.root.rotation.x;
-    const yaw = upper.rotation.y;
+    const yaw = torsoYaw();
     /**
      * 换段那一帧必须重新对齐基准：`attackProgress` 从 1 跳回 0，手臂角度是**瞬变**的，
      * 拿它差分会得到几十 rad/s 的假角速度，腕部会「啪」地甩一下（实测单帧 10°）。
@@ -1366,7 +1446,8 @@ export function createVoxelRig(
    */
   function applyShoulderPose(attacking: boolean, weapon: WeaponId): void {
     const baseX = bodyW / 2 + t / 2;
-    const baseY = bodyH - 0.04;
+    // 肩点相对**父节点**：脊柱分段后父节点是 chest（枢轴在 chestPivotY），要减掉这段。
+    const baseY = bodyH - 0.04 - chestPivotY;
     if (!swingCfg.enabled) {
       armL.root.position.set(-baseX, baseY, 0);
       armR.root.position.set(baseX, baseY, 0);
@@ -1482,6 +1563,140 @@ export function createVoxelRig(
     // 走最短弧时 2π 与 0 差 0，淡出对朝向零影响；半圈被打断才真的回正。
     root.rotation.y = b.rootY + wrapAngle(root.rotation.y - b.rootY) * k;
     lastRootTurn = root.rotation.y;
+  }
+
+  /**
+   * v9s.33 · 把「躯干总角」拆到腰 / 胸两段。
+   *
+   * 所有姿态层（步态、攻击、受击、惯性、持械偏移、朝向补偿）都只写 `upper`，
+   * 这里在**最后一刻**按权重拆开：世界朝向不变（绕同一竖直轴的旋转可加），
+   * 但弯折点从腰移到了胸腔。因此不需要改任何一条动画数据 —— 这正是
+   * 「现有动画数据能适配有腰胸颈骨骼的模型」的原因：数据描述的是总角，不是某根骨。
+   *
+   * 颈段只吃俯仰：头相对躯干反向转 `neck × 总俯仰`，身体压下去时视线仍然平。
+   * 扭转留给 gaze（headYaw），两套来源不打架。
+   */
+  function splitSpine(): void {
+    if (!spineOn) return;
+    const cfg = spineCfg!;
+    const w = Math.max(0, cfg.waist ?? 1);
+    const c = Math.max(0, cfg.chest ?? 0);
+    const sum = w + c;
+    const kw = sum > 1e-6 ? w / sum : 1;
+    const kc = sum > 1e-6 ? c / sum : 0;
+    const tx = upper.rotation.x;
+    const ty = upper.rotation.y;
+    const tz = upper.rotation.z;
+    upper.rotation.set(tx * kw, ty * kw, tz * kw);
+    chest.rotation.set(tx * kc, ty * kc, tz * kc);
+    const neck = clamp(cfg.neck ?? 0, 0, 1);
+    if (neck > 0) headPivot.rotation.x -= tx * neck;
+  }
+
+  /** 本帧躯干「总」偏航：脊柱拆分后 upper 只剩腰段，读总角必须把胸段加回来。 */
+  function torsoYaw(): number {
+    return upper.rotation.y + (spineOn ? chest.rotation.y : 0);
+  }
+
+  /**
+   * v9s.33 · 平衡读数 + 自动配重（每帧末尾，所有姿态层与 IK 都写完之后）。
+   *
+   * 质点模型（质量按体素比例分配，总量不需要归一化）：
+   *   头 0.08 / 胸 0.24 / 腹 0.14 / 骨盆 0.12 / 每臂 0.05 / 每腿 0.15 / 武器 0.04~0.09
+   *
+   * 支撑面取「着地脚」的脚掌包围盒并集；双脚离地时标记 grounded=false，
+   * 分数不参与验收（空中没有支撑面，谈平衡没有意义）。
+   *
+   * 自动修正只处理**侧向**：把骨盆带着上半身往质心偏的方向挪回几毫米。
+   * 前后方向不修正 —— 那要靠跨步（Core 的 lunge / 步态），挪胯拉不回来。
+   */
+  function updateBalance(c: CharacterState, dt: number): void {
+    if (!balanceCfg?.enabled) {
+      lastBalance = null;
+      balanceShift = 0;
+      return;
+    }
+    root.updateWorldMatrix(true, true);
+    const tmp = new THREE.Vector3();
+    const points: BalancePoint[] = [];
+    const add = (obj: THREE.Object3D, mass: number, dy = 0): void => {
+      obj.getWorldPosition(tmp);
+      points.push({ x: tmp.x, y: tmp.y + dy, z: tmp.z, mass });
+    };
+    const H = v.headSize;
+    add(headPivot, 0.08, H / 2);
+    add(torso, 0.14);
+    add(chestMesh ?? chest, spineOn ? 0.24 : 0.24);
+    add(pelvis, 0.12);
+    add(armL.hand, 0.05);
+    add(armR.hand, 0.05);
+    add(legL.joint, 0.15);
+    add(legR.joint, 0.15);
+    const blade = currentWeapon ? readBlade(parts[currentWeapon].right) : null;
+    if (blade) {
+      points.push({
+        x: (blade.base.x + blade.tip.x) / 2,
+        y: (blade.base.y + blade.tip.y) / 2,
+        z: (blade.base.z + blade.tip.z) / 2,
+        mass: currentWeapon === 'greatsword' ? 0.09 : 0.04,
+      });
+    }
+
+    // 支撑面：只算着地脚；脚掌按当前体型尺寸扩展
+    const footHalfX = Math.max(0.05, (v.limbThickness * 1.15) / 2 + 0.015);
+    const footHalfZ = Math.max(0.06, (v.limbThickness * 1.7) / 2 + 0.02);
+    let minX = Infinity; let maxX = -Infinity;
+    let minZ = Infinity; let maxZ = -Infinity;
+    let groundedFeet = 0;
+    for (const leg of [legL, legR]) {
+      leg.tip.getWorldPosition(tmp);
+      // 支撑面始终取**双脚**（含抬起的脚的地面投影）：
+      // 走路本来就是单脚支撑 + 另一只脚马上落地，若只算着地脚，支撑框会在一帧内
+      // 从两脚宽缩成一只脚，余量读数在 -1 和 +1 之间乱跳，配重会跟着抽。
+      // 平衡关心的是「质心会不会掉出两脚之间」，这正是人走路时的约束。
+      if (tmp.y <= 0.13) groundedFeet += 1;
+      minX = Math.min(minX, tmp.x - footHalfX);
+      maxX = Math.max(maxX, tmp.x + footHalfX);
+      minZ = Math.min(minZ, tmp.z - footHalfZ);
+      maxZ = Math.max(maxZ, tmp.z + footHalfZ);
+    }
+    if (!Number.isFinite(minX) || groundedFeet === 0) {
+      minX = maxX = minZ = maxZ = 0; // 双脚离地：退化支撑面 → grounded=false
+    }
+
+    // 用位置差分取实际速度（含 lunge / 击退 / 闪现），velocity 不含 impulse
+    let vx = 0; let vz = 0;
+    if (Number.isFinite(balanceBodyX) && dt > 1e-5) {
+      vx = clamp((c.position.x - balanceBodyX) / dt, -20, 20);
+      vz = clamp((c.position.z - balanceBodyZ) / dt, -20, 20);
+    }
+    balanceBodyX = c.position.x;
+    balanceBodyZ = c.position.z;
+
+    const res = solveBalance(points, { minX, maxX, minZ, maxZ }, vx, vz, balanceCfg);
+    lastBalance = res;
+
+    // ---- 自动配重（只处理侧向）----
+    if (!balanceCfg.autoCounter) { balanceShift = 0; return; }
+    const rightX = Math.cos(c.bodyYaw);
+    const rightZ = -Math.sin(c.bodyYaw);
+    const dx = res.xcomX - res.centerX;
+    const dz = res.xcomZ - res.centerZ;
+    const lateral = dx * rightX + dz * rightZ;       // + = 质心偏向身体右侧
+    // 从 45% 半宽就开始轻微配重（不是等到真的踩到边缘才动）：
+    // 手臂能贡献的质心位移只有几毫米，早一点、小一点，才不会在边缘突然一抽。
+    // 从 45% 半宽就开始轻微修正（不是等到真的踩到边缘才动）。
+    const latDeficit = Math.abs(lateral) - 0.45 * res.halfX;
+    lastLatDeficit = latDeficit;
+    let target = 0;
+    if (latDeficit > 0.002 && res.grounded) {
+      // 上半身约占体重 60%，平移骨盆 x 米 ≈ 质心移动 0.6x 米；
+      // 再乘 0.7 留一点余量，避免「修正过头」反向震荡。
+      const gain = 0.7 / 0.6;
+      target = -Math.sign(lateral) * Math.min(Math.max(0.005, balanceCfg.maxShift ?? 0.045), (latDeficit + 0.002) * gain);
+    }
+    const rate = Math.max(0.1, balanceCfg.counterRate);
+    balanceShift += (target - balanceShift) * (1 - Math.exp(-rate * dt));
   }
 
   function applyCombatPose(combat: CombatState, dt: number): void {
@@ -1689,6 +1904,8 @@ export function createVoxelRig(
       upper.position.x = 0;
       upper.position.y = 0;
       upper.position.z = 0;
+      // v9s.33：胸段同样每帧复位（splitSpine 用 += 写会逐帧累积）
+      chest.rotation.set(0, 0, 0);
       lower.position.x = 0;
       lower.position.y = 0;
       lower.position.z = 0;
@@ -1974,11 +2191,49 @@ export function createVoxelRig(
       };
       // 攻击期间按 gaitScale 平滑淡出步态（gaitWeight=0 时淡出到静止基准）；腿、骨盆、摆臂
       // 共用同一系数，保证上下半身同步，不会只淡出一半而出现错位。
-      const gaitPose = inStop
+      let gaitPose = inStop
         ? solveStopGait(gaitInput, gaitCfg, {
             progress: stopT, phase0: stopPhase0, phaseEnd: stopPhaseEnd,
           })
         : solveGait(gaitInput, gaitCfg);
+
+      // ---- v9s.33 移动接管：收招期间腿要真的迈步 ----
+      // Core 在攻击全程保留 30% 自主移速，但攻击等效驱动在 progress≈1 时相位是冻结的，
+      // 腿停在收势姿态上；足部 IK 又把两只脚钉在地面 → 身体以 1.2 m/s 平移、脚不动，
+      // 玩家读到的就是「攻击结束后下盘滑一段」。
+      // 这里按**实际速度**把腿部姿态淡回真实步态（相位、步幅都来自 Core 的真实位移，
+      // 与身体位移严格配套）。active 阶段不接管 —— 那一段的位移由 lunge 决定，
+      // 交给合成跨步更自然；windup 只允许部分接管，保留蓄势的跨步姿态。
+      const takeover = animCfg.attack.moveTakeover;
+      if (takeover && !inStop) {
+        const cap = combat.phase === 'windup' ? takeover.windup
+          : combat.phase === 'recovery' ? takeover.recovery
+            : combat.phase === 'settle' ? takeover.settle
+              : 0; // active / idle：不接管
+        const span = Math.max(0.05, takeover.full - takeover.speed);
+        const ramp = clamp((realDrive.speed - takeover.speed) / span, 0, 1);
+        const target = clamp(cap, 0, 1) * ramp;
+        const rate = target > legTakeoverSm ? 10 : 6;
+        legTakeoverSm = clamp(legTakeoverSm + (target - legTakeoverSm) * (1 - Math.exp(-rate * dt)), 0, 1);
+      } else if (inStop) {
+        legTakeoverSm = 0;
+      } else {
+        legTakeoverSm = clamp(legTakeoverSm * Math.exp(-8 * dt), 0, 1);
+      }
+      if (legTakeoverSm > 0.001 && !inStop) {
+        const realPose = solveGait({
+          phase: realDrive.phase,
+          speed: realDrive.speed,
+          moveSpeed,
+          localForward: realDrive.localForward,
+          localRight: realDrive.localRight,
+          legLength: v.legLength,
+          stride: realDrive.stride ?? 0,
+          grounded: c.grounded,
+        }, gaitCfg);
+        gaitPose = mixLowerGait(gaitPose, realPose, legTakeoverSm);
+      }
+
       const gait = scaleGaitPose(gaitPose, weights.gaitScale);
 
       // ---- v9s · 原地转身踏步 ----
@@ -2247,6 +2502,12 @@ export function createVoxelRig(
       //   否则 IK 会用旧肩点解算，握点差一个肩位移。
       applyShoulderPose(attacking, combat.weapon);
 
+      // 2.88) v9s.33 自动重心修正：把骨盆（带着整个上半身）往质心偏的那一侧挪回几毫米。
+      //   只处理侧向（前后要靠跨步）；幅度上限 4.5cm，且随 `autoCounter` 关闭。
+      if (balanceCfg?.enabled && balanceCfg.autoCounter && Math.abs(balanceShift) > 1e-4) {
+        pelvis.position.x += balanceShift;
+      }
+
       // 2.9) v9s.22 四肢 squash & stretch：放在所有姿态层之后、朝向与 IK 之前。
       //  形变只影响骨骼长度与粗细，不写 position / rotation，所以不会和受击、跨步、
       //  落地缓冲打架；足部 IK 在下一步读 footTip 世界坐标，读到的是形变后的脚位。
@@ -2293,6 +2554,10 @@ export function createVoxelRig(
       headPivot.rotation.x = -clamp(c.headPitch ?? 0, -0.7, 0.7);
       upper.rotation.x += -clamp(c.bodyPitch ?? 0, -0.4, 0.4);
 
+      // v9s.33：躯干总角在此刻已经写完（步态 / 受击 / 惯性 / 持械 / 朝向）。
+      // 拆分必须早于腕部与剑身反解 —— 它们读的是「躯干实际朝到哪」。
+      splitSpine();
+
       // 3.4) v9s.24 腕部滞后：放在朝向 / 胸偏转之后 —— 它读的就是「躯干已经转到哪」，
       //      早一步读会漏掉 chestYaw，横向甩动就只在攻击时才有、走路时没有。
       //      又在副手握持之前 —— 握持 IK 取的是柄的世界坐标，腕部一摆，柄就动了。
@@ -2334,6 +2599,9 @@ export function createVoxelRig(
         grounded: c.grounded,
         attacking,
       });
+
+      // 5) v9s.33：平衡读数放在最后 —— 质点位置要读 IK 之后的真实脚位 / 手位。
+      updateBalance(c, dt);
     },
     lean(): { forward: number; side: number } {
       return { forward: leanForward, side: leanSide };
@@ -2433,6 +2701,21 @@ export function createVoxelRig(
     hipYaw(): number {
       return hipYaw;
     },
+    spineDebug() {
+      if (!spineOn) return null;
+      return {
+        enabled: true,
+        waistYaw: upper.rotation.y,
+        chestYaw: chest.rotation.y,
+        totalYaw: upper.rotation.y + chest.rotation.y,
+        neckPitch: headPivot.rotation.x,
+      };
+    },
+    balanceDebug() {
+      return lastBalance
+        ? { ...lastBalance, shift: balanceShift, latDeficit: lastLatDeficit }
+        : null;
+    },
     gaitDebug() {
       return {
         stopT, hipYaw, chestYaw,
@@ -2441,6 +2724,8 @@ export function createVoxelRig(
         stopStep: lastStopStep, stopShift: lastStopShift, stopDip: lastStopDip,
         /** v9s：停步偏差淡出系数（1=未消化，0=已归零）/ 原地转身踏步脉冲 */
         stopYawFade: lastStopYawFade, turnStep: lastTurnStep,
+        /** v9s.33：腿部被真实步态接管的比例（0 = 攻击姿态，1 = 完全真实步态） */
+        legTakeover: legTakeoverSm,
         legLPitch: lastLegs.lp, legLRoll: lastLegs.lr,
         legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,
       };

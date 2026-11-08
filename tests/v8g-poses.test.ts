@@ -129,10 +129,12 @@ describe('v8g #4 惯性倾斜带盆骨偏移 + 移动略微下沉', () => {
       const f = rig.lean().forward;
       if (f > 0.02) {
         saw = true;
+        // v9s.33：脊柱分段后 upper 只承担腰段，躯干总前倾要把胸段加回来
+        const torsoPitch = (n.upper.rotation.x as number) + (n.chest?.rotation.x ?? 0);
         expect(n.pelvis.rotation.x as number).toBeGreaterThan(0);
-        expect(n.upper.rotation.x as number).toBeGreaterThan(0);
+        expect(torsoPitch).toBeGreaterThan(0);
         expect(Math.abs(n.pelvis.rotation.x as number))
-          .toBeLessThan(Math.abs(n.upper.rotation.x as number) * 0.6);
+          .toBeLessThan(Math.abs(torsoPitch) * 0.6);
         expect(Math.abs(n.pelvis.rotation.x as number)).toBeLessThan(0.1);
       }
     }

@@ -232,6 +232,10 @@ export function startApp(): void {
     swingDebug: () => view.swingDebug(),
     // v9s.32：持械待机姿态（权重 / 双臂偏移 / 躯干扭转 / 刀身仰角）
     stanceDebug: () => view.stanceDebug(),
+    // v9s.33：动态平衡读数（COM / 捕获点 / 支撑余量 / 综合分）
+    balanceDebug: () => view.balanceDebug(),
+    // v9s.33：脊柱分段读数（腰 / 胸 / 颈）
+    spineDebug: () => view.spineDebug(),
     // v9s.32：挥空时刀光增亮的读数（证明「不震屏也有反馈」）
     trailDebug: () => view.trailDebug(),
     // v9s.26：刃身两端世界坐标（验收横扫仰角，避免被斜俯视截图误导）

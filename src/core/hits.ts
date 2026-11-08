@@ -83,7 +83,11 @@ export function applyHit(world: World, target: HitTarget, spec: HitSpec): void {
   // v9s.29 卡肉：命中瞬间按住攻击方的时间轴（见 CombatState.hitstop）。
   // 取「最大值」而不是累加：同一帧多目标命中 / 连段多段命中不会把冻结叠成慢动作。
   const table = world.config.hits.hitstop;
-  const stop = table && spec.type !== 'none' ? (table[spec.type] ?? 0) : 0;
+  // v9s.33：分武器档位 —— 同一记「重击」，大剑停得更久（乘性系数，缺省 1）
+  const scale = world.config.hits.hitstopByWeapon?.[world.combat.weapon] ?? 1;
+  const stop = table && spec.type !== 'none'
+    ? (table[spec.type] ?? 0) * Math.max(0, scale)
+    : 0;
   if (stop > 0 && world.combat.hitstop < stop) {
     world.combat.hitstop = stop;
     emit(world, 'hitstop', stop, s.position);

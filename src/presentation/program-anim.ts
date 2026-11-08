@@ -225,6 +225,40 @@ export function poseWeights(
 }
 
 /**
+ * v9s.33：只混合「下盘」两套步态（腿 + 骨盆），保留 a 的摆臂 / 侧倾 / 诊断量。
+ *
+ * 用途：攻击期间玩家仍在移动时，把攻击跨步姿态按速度比例换成真实步态。
+ * 不能直接插值相位（两套相位基准不同，会扫过整圈），但腿部**姿态**插值是安全的：
+ * 两端都是同一条 C¹ 曲线上的点，凸组合仍连续。
+ */
+export function mixLowerGait(a: GaitPose, b: GaitPose, k: number): GaitPose {
+  const t = clamp01(k);
+  if (t <= 0) return a;
+  if (t >= 1) return { ...a, ...b, armL: a.armL, armR: a.armR, strafe: a.strafe, backward: a.backward };
+  const mix = (x: number, y: number): number => x + (y - x) * t;
+  return {
+    legL: {
+      pitchX: mix(a.legL.pitchX, b.legL.pitchX),
+      rollZ: mix(a.legL.rollZ, b.legL.rollZ),
+      kneeX: mix(a.legL.kneeX, b.legL.kneeX),
+    },
+    legR: {
+      pitchX: mix(a.legR.pitchX, b.legR.pitchX),
+      rollZ: mix(a.legR.rollZ, b.legR.rollZ),
+      kneeX: mix(a.legR.kneeX, b.legR.kneeX),
+    },
+    pelvisX: mix(a.pelvisX, b.pelvisX),
+    pelvisY: mix(a.pelvisY, b.pelvisY),
+    pelvisRoll: mix(a.pelvisRoll, b.pelvisRoll),
+    sideLean: a.sideLean,
+    armL: a.armL,
+    armR: a.armR,
+    strafe: a.strafe,
+    backward: a.backward,
+  };
+}
+
+/**
  * 按 gaitScale 缩放整套步态姿态（腿、骨盆、摆臂、侧倾）。
  * strafe / backward 是诊断权重而非姿态量，保持原值供 HUD / 验收读取。
  */

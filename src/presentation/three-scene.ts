@@ -37,6 +37,10 @@ export type SceneView = {
   /** v9n：停步收相 / 侧移偏转 / 双腿姿态的实时读数（纯观测）；v9o 追加胸偏转与速度，
    *  v9p 追加停步惯性的前脚前伸量与身体前移量，v9q 追加含击退冲量的步态速度，
    *  v9r 追加骨盆惯性下沉量。 */
+  /** v9s.33：动态平衡读数（COM / 捕获点 / 支撑余量） */
+  balanceDebug(): import('./balance').BalanceResult | null;
+  /** v9s.33：脊柱分段读数（腰 / 胸 / 颈） */
+  spineDebug(): { enabled: boolean; waistYaw: number; chestYaw: number; totalYaw: number; neckPitch: number } | null;
   gaitDebug(): {
     stopT: number; hipYaw: number; chestYaw: number; speed: number; gaitSpeed: number;
     stopStep: number; stopShift: number; stopDip: number;
@@ -80,6 +84,8 @@ export type SceneView = {
       zoom: number;
       /** v9s.31：镜头震动能量 0..1（关键帧事件 / 命中共用），用于验收 notify 是否真的被消费 */
       shake: number;
+      /** v9s.33：方向性微推能量 0..1（命中方向） */
+      kick: number;
     };
   };
   /** v9s.15：整层测试工位标识（地面盘 + 标牌）显隐，纯表现开关 */
@@ -221,7 +227,7 @@ export function createSceneView(
     bt?.colors ? { ...view.colors, ...bt.colors } : view.colors,
     world.config.moveSpeed, view.orientation, view.gait,
     view.weaponMount, view.lean, view.hurt, view.animation, view.ik, view.links,
-    view.weaponWrist,
+    view.weaponWrist, view.balance,
   );
   let bodyTypeId = 'standard';
   let voxel = buildRig(view.bodyTypes?.[bodyTypeId]);
@@ -656,6 +662,12 @@ export function createSceneView(
   let wasHitstop = false;
 
   return {
+    balanceDebug() {
+      return voxel.balanceDebug();
+    },
+    spineDebug() {
+      return voxel.spineDebug();
+    },
     gaitDebug() {
       return voxel.gaitDebug();
     },
@@ -698,8 +710,21 @@ export function createSceneView(
       const stopping = view.hitstop.enabled && w.combat.hitstop > 0;
       const frozen = stopping;
       if (stopping && !wasHitstop) {
-        // 上升沿：按武器给一记震动。大剑最重，其余收敛 —— 「停 + 震」同帧出现才有重量。
-        cam.addShake(w.combat.weapon === 'greatsword' ? 0.85 : 0.5);
+        // 上升沿：震动 + 方向性微推。
+        // v9s.33 分层：卡肉时长本身已按「受击类型 × 武器」分档（Core），
+        // 这里直接用时长反推震感 —— 停得越久，震得越重，两个通道天然同步。
+        const dur = Math.max(0, w.combat.hitstop);
+        const tier = Math.max(0, Math.min(1, dur / 0.1));   // 45ms ≈ 0.45、100ms = 1
+        cam.addShake(0.34 + tier * 0.48);
+        // 方向性微推：从玩家指向受击者。取本帧第一条 hit 事件（同一帧多目标时取首个）。
+        let hit: { x: number; z: number } | null = null;
+        for (let i = 0; i < w.events.length; i++) {
+          const e = w.events[i];
+          if (e.type === 'hit') { hit = e; break; }
+        }
+        if (hit) {
+          cam.addKick(hit.x - c.position.x, hit.z - c.position.z, 0.03 + tier * 0.05);
+        }
       }
       wasHitstop = stopping;
 
@@ -1113,6 +1138,10 @@ export function createSceneView(
         zoom: number;
         /** v9s.31：镜头震动能量 0..1（关键帧事件 / 命中共用） */
         shake: number;
+        /** v9s.33：方向性微推能量 0..1（命中方向） */
+        kick: number;
+        /** v9s.33：累计触发的微推次数（确认命中上升沿确实调到了 addKick） */
+        kickCount: number;
       };
     } {
       // v7c #10：斩击弧中心轴（盘面法线）恒为角色正前方（局部 +Z），再绕身体朝向
@@ -1150,6 +1179,8 @@ export function createSceneView(
           threatCount: world.camera.threatCount,
           ...cam.smart(),
           shake: cam.shakeLevel(),
+          kick: cam.kickLevel(),
+          kickCount: cam.kickCount(),
         },
       };
     },

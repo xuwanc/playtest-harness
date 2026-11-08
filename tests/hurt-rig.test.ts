@@ -80,12 +80,19 @@ describe('v8f 骨架层级：共享骨盆 + 上下半身分离', () => {
     const rig = makeRig();
     const n = rigNodes(rig);
     rig.group.updateMatrixWorld(true);
-    const torso = n.upper.children[0] as THREE.Object3D;
-    const wp = new THREE.Vector3();
-    torso.getWorldPosition(wp);
-    expect(wp.y).toBeCloseTo(
-      raw.view.voxel.legLength + raw.view.voxel.bodyHeight / 2, 9,
-    );
+    // v9s.33：脊柱分段后躯干拆成腰块 + 胸块，视觉中心 = 两块整体几何范围的中点。
+    const lower = (n.upper.getObjectByName('torsoLower') ?? n.upper.getObjectByName('torso')) as THREE.Mesh;
+    const upperMesh = n.upper.getObjectByName('torsoUpper') as THREE.Mesh | undefined;
+    const a = lower.getWorldPosition(new THREE.Vector3());
+    const la = (lower.geometry as THREE.BoxGeometry).parameters.height;
+    if (upperMesh) {
+      const b = upperMesh.getWorldPosition(new THREE.Vector3());
+      const lb = (upperMesh.geometry as THREE.BoxGeometry).parameters.height;
+      const center = ((a.y - la / 2) + (b.y + lb / 2)) / 2;
+      expect(center).toBeCloseTo(raw.view.voxel.legLength + raw.view.voxel.bodyHeight / 2, 6);
+    } else {
+      expect(a.y).toBeCloseTo(raw.view.voxel.legLength + raw.view.voxel.bodyHeight / 2, 9);
+    }
   });
 
   it('上半身倾斜绕腰而不是绕脚底：upper.rotation.x≠0 但 upper.position.y 恒 0', () => {
@@ -203,7 +210,10 @@ describe('v8f 分层受击：腿屈膝 / 屁股后坐 / 重心小幅偏离 / 上
     expect(n.upper.rotation.x).toBe(0);
     expect(n.kneeL.rotation.x).toBe(0);
     expect(n.lower.position.z).toBe(0);
-    const mesh = n.upper.children[0] as THREE.Mesh;
+    // v9s.33：upper 的第一个子节点是 chest 组，网格要按名字取
+    const mesh = (n.upper.getObjectByName('torsoUpper')
+      ?? n.upper.getObjectByName('torsoLower')
+      ?? n.upper.getObjectByName('torso')) as THREE.Mesh;
     expect((mesh.material as THREE.MeshLambertMaterial).emissive.r).toBe(0);
   });
 

@@ -12,6 +12,8 @@ export type RigNodes = {
   pelvis: any;
   lower: any;
   upper: any;
+  /** v9s.33：脊柱分段后的胸段（未开启脊柱分段时为 null） */
+  chest: any | null;
   hipL: any;
   hipR: any;
   kneeL: any;
@@ -36,9 +38,27 @@ export function rigNodes(rig: { group: any }): RigNodes {
     pelvis: byName('pelvis'),
     lower: byName('lower'),
     upper: byName('upper'),
+    chest: rig.group.getObjectByName('chest') ?? null,
     hipL,
     hipR,
     kneeL: childByName(hipL, 'knee'),
     kneeR: childByName(hipR, 'knee'),
   };
+}
+
+/**
+ * v9s.33：躯干**总**偏航。脊柱分段后 upper 只承担腰段，读「躯干朝到哪」必须加回 chest。
+ * 未开启分段时 chest 为 null，等价于旧的 upper.rotation.y。
+ */
+export function torsoYawOf(rig: { group: any }): number {
+  const upper = rig.group.getObjectByName('upper');
+  const chest = rig.group.getObjectByName('chest');
+  return (upper?.rotation.y ?? 0) + (chest?.rotation.y ?? 0);
+}
+
+/** 躯干总俯仰（同上）。 */
+export function torsoPitchOf(rig: { group: any }): number {
+  const upper = rig.group.getObjectByName('upper');
+  const chest = rig.group.getObjectByName('chest');
+  return (upper?.rotation.x ?? 0) + (chest?.rotation.x ?? 0);
 }

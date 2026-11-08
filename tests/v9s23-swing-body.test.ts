@@ -59,10 +59,14 @@ function swordRun(n: number, weapon: 'greatsword' | 'sword-shield' | 'dual-sword
     rig.update(w.character, w.combat, NONE, w.config.fixedDt, false, w.time);
     const d = rig.swingDebug();
     const upper = rig.group.getObjectByName('upper')!;
+    const chest = rig.group.getObjectByName('chest');
     frames.push({
       i, seg: d.seg, kind: d.kind, yaw: d.yaw, pitch: d.pitch, roll: d.roll,
       strike: d.strike,
-      upperY: upper.rotation.y, upperX: upper.rotation.x, upperZ: upper.rotation.z,
+      // v9s.33：躯干总角 = 腰段 + 胸段（脊柱分段后 upper 只是腰）
+      upperY: upper.rotation.y + (chest?.rotation.y ?? 0),
+      upperX: upper.rotation.x + (chest?.rotation.x ?? 0),
+      upperZ: upper.rotation.z + (chest?.rotation.z ?? 0),
       shoulderL: d.shoulderL, shoulderR: d.shoulderR,
       phase: w.combat.phase,
     });
@@ -198,7 +202,11 @@ describe('v9s.23 骨架落地：身体 / 肩部', () => {
   it('肩部（上臂根部）在挥击中被抬起 / 前送，idle 时精确回到基准', () => {
     const { rig, frames, w } = swordRun(160);
     const baseX = raw.view.voxel.bodyWidth / 2 + raw.view.voxel.limbThickness / 2;
-    const baseY = raw.view.voxel.bodyHeight - 0.04;
+    // v9s.33：肩点挂在 chest 下，局部 y 要减掉胸段枢轴高度
+    const chestPivotY = raw.view.animation.spine?.enabled
+      ? (raw.view.animation.spine.chestPivot ?? 0.42) * raw.view.voxel.bodyHeight
+      : 0;
+    const baseY = raw.view.voxel.bodyHeight - 0.04 - chestPivotY;
     const live = frames.filter((f) => f.strike > 0.3);
     const maxY = Math.max(...live.map((f) => Math.max(f.shoulderL.y, f.shoulderR.y)));
     const maxZ = Math.max(...live.map((f) => Math.max(f.shoulderL.z, f.shoulderR.z)));
