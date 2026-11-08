@@ -1,3 +1,12 @@
+/**
+ * 输入适配：DOM 事件（指针 / 键盘 / 滚轮 / 手势）→ `Intents`。
+ *
+ * 900 行里没有第二个职责 —— 全是「把某类设备翻译成同一套意图」。
+ * 按设备分段（摇杆 / 捏合 / 动作按钮 / 武器按钮 / 键盘 / 滚轮）是内部组织，
+ * 不是独立职责；拆成多个文件只会让共享的 `keys` / `edge` / `zoomScaleAccum` 到处传。
+ *
+ * 真正的算法已经抽走：`button-gesture.ts`（手势判定）、`pinch.ts`（捏合解算）。
+ */
 import type { CameraZoomViewConfig, Intents } from '../core';
 import { createGestureTracker, withWorldDirection } from './button-gesture';
 import type { ButtonGesture, GestureButton } from './button-gesture';

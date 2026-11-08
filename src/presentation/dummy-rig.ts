@@ -1,3 +1,13 @@
+/**
+ * 普通假人的简化 rig：构建 + 逐帧驱动。
+ *
+ * 与 `voxel-rig.ts` 是**平行实现**，不是复制粘贴：两者调用同一批解算器
+ * （gait / hurt-pose / inertia / rig-ik），差别只在骨架精度与「不需要武器 / 挥击」。
+ * 注释里的「与主角同构」说的是**调用顺序一致**，不是代码拷贝。
+ * 合并成一份需要给每个阶段加 `isDummy` 分支，反而更难读 —— 刻意保留两份。
+ *
+ * 带武器的陪练不走这里：它在 `fighter-rig.ts` 里复用主角的 `voxel-rig`（要同款挥击）。
+ */
 import * as THREE from 'three';
 import { wrapAngle } from '../core';
 import type {

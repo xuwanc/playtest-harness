@@ -12,6 +12,9 @@ import type { GroundRingViewConfig } from '../core';
  *  · 顶点色 RGBA（three 支持 itemSize=4 的顶点 alpha）让「角向两端渐变 + 径向软边」
  *    一次烘进几何，切弧长只是重建一次很小的 BufferGeometry；
  *  · 颜色随威胁变化只需改 material.color，透明度改 material.opacity，零额外开销。
+ *
+ * 拆分说明：本文件 15 个小函数（几何构建 / 环实例 / 配色 / 淡入淡出）同属一个视觉族，
+ * 单职责、强内聚，**不按行数拆**；拆开只会让「改一次配色要同时打开三个文件」。
  */
 
 export type GroundRing = {

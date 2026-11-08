@@ -1,3 +1,20 @@
+/**
+ * 场景装配与每帧渲染：Core 的 World → 画面。
+ *
+ * 1200 行里，初始化（白盒 / 灯 / 角色 / 指示环 / 刀光 / 箭）与 `render()`（600 行）
+ * 共用同一个闭包 —— 贴地高度、特效锚点、相机、rig 是逐帧互相引用的。
+ * **不按行数强拆**：它们不是并列职责，而是同一条渲染管线的相邻阶段。
+ *
+ * 已经独立出去的：
+ *   scene-burst-fx.ts  三类一次性贴地光环（池化 + 触发生命周期）
+ *   ground-ring.ts     脚下指示环的几何与配色
+ *   lab-scene.ts       工位标识
+ *   camera-rig.ts      相机数学（本文件只负责调用、震动与微推）
+ *   fx-layer.ts        特效层级编号
+ *
+ * 新增一类特效时：几何 + 生命周期自成一体就放 scene-burst-fx 或新建模块，
+ * 不要再把新的池化循环写进 render()。
+ */
 import * as THREE from 'three';
 import type { GroundBasis } from '../adapters/input';
 import type { BodyTypeConfig, Box, DummyState, StationSpec, ViewConfig, World } from '../core';
@@ -5,6 +22,7 @@ import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
 import { createFighterRig } from './fighter-rig';
 import { createLabLayer } from './lab-scene';
+import { createBurstFx } from './scene-burst-fx';
 import {
   areaOpen, createArcMeter, createAreaRing, createGroundRing, dummyWindupWarning, fadeTowards,
   ringGroundHeight,
@@ -657,98 +675,8 @@ export function createSceneView(
     return area;
   });
 
-  // ---- 冲刺 / 闪避一次性光环（世界坐标、池化复用，不随角色旋转） ----
-  // 用 dash.id 变化触发（而非 events）：step 每帧开头会清空事件队列，低帧率一帧多步时
-  // 只有最后一步的事件会留下；id 是持久状态，保证一次触发必定被表现层看到一次。
-  const dashFx = view.dash;
-  const dashRingGeo = new THREE.RingGeometry(dashFx.ringRadius - 0.06, dashFx.ringRadius, 28);
-  const dashRings = Array.from({ length: 6 }, () => {
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xffffff, transparent: true, opacity: 0,
-      side: THREE.DoubleSide, depthWrite: false,
-    });
-    const mesh = new THREE.Mesh(dashRingGeo, mat);
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.renderOrder = FX_ORDER.groundFx;
-    mesh.visible = false;
-    scene.add(mesh);
-    return { mesh, mat, life: 0, base: 1 };
-  });
-  function spawnDashRing(x: number, z: number, y: number, color: string, scale: number): void {
-    const r = dashRings.find((e) => e.life <= 0) ?? dashRings[0];
-    r.mat.color.set(color);
-    r.mesh.position.set(x, groundFxY(x, z, y) + 0.04, z);
-    r.base = scale;
-    r.mesh.scale.setScalar(scale * 0.6);
-    r.mesh.visible = true;
-    r.mat.opacity = 0.9;
-    r.life = dashFx.fxDuration;
-  }
-  // ---- v9a 派生招一次性光环（起手 / 命中各一圈，按持久 id 变化触发） ----
-  // 与 dash 特效同理：step 每帧开头清空事件队列，低帧率一帧多步时只有最后一步的事件
-  // 会留下，故用 world.playerLink.id / hitIds.length 这类持久状态，保证不漏触发。
-  const linkFx = view.links;
-  const linkRingGeo = new THREE.RingGeometry(linkFx.ringRadius - 0.07, linkFx.ringRadius, 28);
-  const linkRings = Array.from({ length: 5 }, () => {
-    const mat = new THREE.MeshBasicMaterial({
-      color: linkFx.chargeColor, transparent: true, opacity: 0,
-      side: THREE.DoubleSide, depthWrite: false,
-    });
-    const mesh = new THREE.Mesh(linkRingGeo, mat);
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.renderOrder = FX_ORDER.groundFx;
-    mesh.visible = false;
-    scene.add(mesh);
-    return { mesh, mat, life: 0, base: 1 };
-  });
-  function spawnLinkRing(x: number, z: number, y: number, scale: number): void {
-    const r = linkRings.find((e) => e.life <= 0) ?? linkRings[0];
-    r.mesh.position.set(x, groundFxY(x, z, y) + 0.05, z);
-    r.base = scale;
-    r.mesh.scale.setScalar(scale * 0.55);
-    r.mesh.visible = true;
-    r.mat.opacity = 0.85;
-    r.life = linkFx.fxDuration;
-  }
-  // ---- v9s.37 击地冲击（大剑第三击）：贴地扩散的尘环 ----
-  // 触发读 Core 的持久字段 `combat.slamAttackId`（不是事件队列）：
-  // 低帧率下一帧可能跑多步、事件只剩最后一步的，只有持久 id 能保证不漏。
-  const slamFx = view.groundSlam;
-  // 环带做厚（22% 半径宽）+ 加色混合：贴地环如果太细，会和角色脚下那圈「八向指示环」
-  // 叠在一起分不出来 —— 玩家要能一眼看出「这是砸出来的，不是 UI」。
-  const slamRingGeo = new THREE.RingGeometry(0.78, 1, 56);
-  const slamRings = Array.from({ length: 4 }, () => {
-    const mat = new THREE.MeshBasicMaterial({
-      color: slamFx.color, transparent: true, opacity: 0,
-      side: THREE.DoubleSide, depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const mesh = new THREE.Mesh(slamRingGeo, mat);
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.renderOrder = FX_ORDER.groundFx + 1;
-    mesh.visible = false;
-    scene.add(mesh);
-    return { mesh, mat, life: 0, base: 1, delay: 0 };
-  });
-  function spawnSlamRing(x: number, z: number, y: number, radius: number, delay: number): void {
-    const r = slamRings.find((e) => e.life <= 0) ?? slamRings[0];
-    r.mat.color.set(slamFx.color);
-    r.mesh.position.set(x, groundFxY(x, z, y) + 0.035, z);
-    r.base = radius;
-    r.mesh.scale.setScalar(radius * 0.35);
-    r.mesh.visible = true;
-    r.mat.opacity = 0;
-    r.life = slamFx.duration;
-    r.delay = delay;
-  }
-  let lastSlamId = world.combat.slamAttackId;
-  let slamSpawns = 0;
-
-  let lastLinkId = world.playerLink.id;
-  let lastLinkHits = world.playerLink.hitIds.length;
-
-  let lastDashId = world.dash.id;
-  let lastDashKind = 'none';
+  // ---- 一次性贴地光环（冲刺 / 派生招 / 击地）：池化、触发与生命周期都在 scene-burst-fx ----
+  const burstFx = createBurstFx(scene, view, world, groundFxY);
 
 
   // ---- 2.5D 相机（叠加 Core 的智能构图意图） ----
@@ -818,13 +746,7 @@ export function createSceneView(
       return voxel.bladesWorld();
     },
     slamDebug() {
-      return {
-        spawns: slamSpawns,
-        lastId: lastSlamId,
-        live: slamRings.filter((r) => r.life > 0).map((r) => ({
-          life: r.life, scale: r.mesh.scale.x, opacity: r.mat.opacity, visible: r.mesh.visible,
-        })),
-      };
+      return burstFx.slamDebug();
     },
     yawDebug() {
       return { target: yawTarget, shown: yawSmoother.value, tauMs: view.renderInterp?.yawSmoothMs ?? 0 };
@@ -836,7 +758,7 @@ export function createSceneView(
         boxCount: materials.length,
         orders: {
           ring: playerRing.mesh.renderOrder,
-          groundFx: slamRings[0]?.mesh.renderOrder ?? -1,
+          groundFx: burstFx.groundOrder(),
           trail: playerTrail.object.renderOrder,
           slash: slashGroup.renderOrder,
           projectile: arrowVisuals[0]?.group.children[0]?.renderOrder ?? -1,
@@ -1079,76 +1001,9 @@ export function createSceneView(
       fxAnchor.position.set(c.position.x, c.position.y, c.position.z);
       fxAnchor.rotation.y = cb.phase !== 'idle' ? cb.attackFacing : c.bodyYaw;
 
-      // 冲刺 / 闪避：翻滚在起点放一圈尘环；闪现在起点 + 落点各放一圈（落点更大更亮）
-      if (w.dash.id !== lastDashId) {
-        lastDashId = w.dash.id;
-        const d = w.dash;
-        lastDashKind = d.kind;
-        if (d.kind === 'blink') {
-          spawnDashRing(d.fromX, d.fromZ, c.position.y, dashFx.blinkColor, 0.9);
-          spawnDashRing(d.toX, d.toZ, c.position.y, dashFx.blinkColor, 1.35);
-        } else {
-          spawnDashRing(d.fromX, d.fromZ, c.position.y, dashFx.rollColor, 1.1);
-        }
-      }
-      for (const r of dashRings) {
-        if (r.life <= 0) continue;
-        r.life -= frameDt;
-        const t = Math.max(0, r.life / dashFx.fxDuration);
-        r.mat.opacity = 0.9 * t;
-        r.mesh.scale.setScalar(r.base * (0.6 + (1 - t) * 1.2));
-        if (r.life <= 0) r.mesh.visible = false;
-      }
-
-      // v9s.37：大剑第三击落地 —— 尘环 + 一次比普通命中更重的镜头下压。
-      // 半径取 Core 的判定半径：尘环边缘就是真实判定边界，玩家能「看着圈躲」。
-      if (w.combat.slamAttackId !== lastSlamId) {
-        lastSlamId = w.combat.slamAttackId;
-        slamSpawns += 1;
-        if (slamFx.enabled) {
-          const gs = w.config.combat.weapons[cb.weapon]?.groundSlam;
-          const rad = Math.max(0.6, gs?.radius ?? 2.2);
-          spawnSlamRing(c.position.x, c.position.z, c.position.y, rad, 0);
-          spawnSlamRing(c.position.x, c.position.z, c.position.y, rad * slamFx.outerScale, slamFx.delay);
-          cam.addShake(slamFx.shake);
-        }
-      }
-      for (const r of slamRings) {
-        if (r.life <= 0) continue;
-        if (r.delay > 0) {
-          r.delay -= frameDt;
-          continue;
-        }
-        r.life -= frameDt;
-        const t = Math.max(0, r.life / Math.max(slamFx.duration, 1e-6));
-        // 先快后慢：前 30% 冲出大半半径，之后缓下来收尾，读作「冲击」而不是「匀速放大」
-        const grow = 1 - Math.pow(t, 1.8);
-        r.mesh.scale.setScalar(r.base * (0.35 + 0.65 * grow));
-        r.mat.opacity = 0.85 * Math.pow(t, 1.3);
-        if (r.life <= 0) r.mesh.visible = false;
-      }
-
-      // v9a：盾击起手 / 命中各放一圈光环（纯观感，读 Core 持久状态）
-      const lk = w.playerLink;
-      if (lk.id !== lastLinkId) {
-        lastLinkId = lk.id;
-        lastLinkHits = lk.hitIds.length;
-        spawnLinkRing(c.position.x, c.position.z, c.position.y, 1.0);
-      }
-      if (lk.hitIds.length > lastLinkHits) {
-        lastLinkHits = lk.hitIds.length;
-        spawnLinkRing(c.position.x, c.position.z, c.position.y, 1.35);
-      } else if (lk.hitIds.length < lastLinkHits) {
-        lastLinkHits = lk.hitIds.length;
-      }
-      for (const r of linkRings) {
-        if (r.life <= 0) continue;
-        r.life -= frameDt;
-        const t = Math.max(0, r.life / Math.max(linkFx.fxDuration, 1e-6));
-        r.mat.opacity = 0.85 * t;
-        r.mesh.scale.setScalar(r.base * (0.55 + (1 - t) * 1.1));
-        if (r.life <= 0) r.mesh.visible = false;
-      }
+      // 一次性贴地光环（冲刺尘环 / 派生招 / 击地冲击）：触发读 Core 的持久 id，
+      // 池化与生命周期在 scene-burst-fx 内推进；shake 回调只用于击地那一下的镜头下压。
+      burstFx.update(w, frameDt, (amount) => cam.addShake(amount));
 
       // v9s.22：轻击不再画「斩击弧」—— 那是一个固定在身前的白色环，和真实刀轨
       // 没关系，反而会盖住贴刀身的拖尾。只有 comboIndex >= 3 的重击保留弧光，
@@ -1372,8 +1227,8 @@ export function createSceneView(
         },
         dash: {
           rollAngle: rollPivot.rotation.x,
-          activeRings: dashRings.filter((r) => r.life > 0).length,
-          lastKind: lastDashKind,
+          activeRings: burstFx.activeDash(),
+          lastKind: burstFx.dashKind(),
         },
         camera: {
           threat: world.camera.threat,
@@ -1417,11 +1272,7 @@ export function createSceneView(
       }
       glowTex.dispose();
       trailTex.dispose();
-      for (const r of dashRings) r.mat.dispose();
-      for (const r of slamRings) r.mat.dispose();
-      dashRingGeo.dispose();
-      for (const r of linkRings) r.mat.dispose();
-      linkRingGeo.dispose();
+      burstFx.dispose();
       boxGroup.traverse((obj) => {
         if (obj instanceof THREE.Mesh) obj.geometry.dispose();
       });
