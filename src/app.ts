@@ -244,6 +244,8 @@ export function startApp(): void {
     renderPose: () => view.renderPose(),
     /** v9s.35：朝向平滑读数（target = 插值后 bodyYaw，shown = 真正画出来的根节点 yaw） */
     yawDebug: () => view.yawDebug(),
+    /** v9s.37：击地尘环读数（有没有真的生成 / 当前几圈 / 缩放与透明度） */
+    slamDebug: () => view.slamDebug(),
     /** v9s.34：A/B 开关（验收「插值开 / 关」的画面差别，不用改 config 重启） */
     setRenderInterp: (on: boolean) => {
       renderInterp = !!on;

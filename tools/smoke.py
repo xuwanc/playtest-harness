@@ -156,6 +156,21 @@ def main() -> int:
                     check("卡肉发生在刃身挥出之后（progress ≥ 0.30）", hit_prog >= 0.30,
                           f"命中时 progress={hit_prog:.3f}")
 
+                # ---- v9s.37：击地尘环确实生成（判定 → 表现这一段通了） ----
+                ring = page.evaluate("""() => {
+                  const h = window.__harness;
+                  const before = h.slamDebug().spawns;
+                  h.world.combat.weapon = 'greatsword';
+                  h.world.combat.slamAttackId += 1;
+                  h.view.render(h.world, 1 / 60);
+                  const d = h.slamDebug();
+                  const live = d.live[0] ?? null;
+                  return { ok: d.spawns > before && !!live && live.opacity > 0.3 && live.scale > 0.5,
+                           spawns: d.spawns, scale: live ? live.scale : 0, op: live ? live.opacity : 0 };
+                }""")
+                check("击地尘环生成（半径 / 透明度正常）", ring["ok"],
+                      f"spawns={ring['spawns']} scale={ring['scale']:.2f} opacity={ring['op']:.2f}")
+
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
                       f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}",
                       " 命中 progress", f"{hit_prog:.3f}" if hit_prog is not None else "-")

@@ -173,6 +173,29 @@ export type WeaponProfile = {
    * 按晚了要等，节奏发黏。分武器配才是手感。
    */
   comboWindow?: number;
+  /**
+   * v9s.37 · 击地范围攻击（大剑第三击：砸地后向四周掀起冲击）。
+   *
+   * 刀身扫掠是「正面一条线」，砸地是「圆心一圈」：`u` 跨过 `slamU` 时以落点为圆心
+   * 结算一次圆形命中，把原本吃不到刀风的侧面 / 近距离目标也震到。
+   * 与刀身共用 `hitIds`（`onlyUnhit` 默认 true）—— 不重复掉血，只扩大覆盖。
+   */
+  groundSlam?: GroundSlamProfile;
+};
+
+export type GroundSlamProfile = {
+  /** active 内进度 u：刃身落地时刻（由 clip-lab 采样确定，别手写） */
+  slamU: number;
+  /** 冲击半径（米，不含假人半径） */
+  radius: number;
+  /** 击退距离（米）；缺省用 `hits.knockback[weapon]` */
+  knockback?: number;
+  /** 受击类型；缺省按武器默认（大剑 = knock） */
+  type?: HurtType;
+  /** 只打「刀身这一击还没命中」的目标（默认 true）：扩大覆盖，不叠伤害 */
+  onlyUnhit?: boolean;
+  /** 本次击地的卡肉倍数（乘在触发它的那次命中的 stop 上）；缺省 1.6 */
+  holdMul?: number;
 };
 
 export type HitSweepSegment = {
@@ -350,6 +373,22 @@ export type CombatState = {
    */
   hitIds: number[];
   timings: AttackTimings;
+  /**
+   * v9s.37 · 动画时间轴速率（1 = 正常，→0 = 近乎冻结）。
+   *
+   * 卡肉从「硬冻结」升级成「接触瓦片」：命中瞬间把 `phaseTimer` 的推进速度压到
+   * `hitstopWarp.holdRate`（5%），释放段再缓回 1，偿还段以 >1 补回欠下的时间。
+   * 读这个值的只有表现层（诊断 / 拖尾 / 特效），逻辑仍走 `phaseTimer`。
+   */
+  warp: number;
+  /** v9s.37 · 偿还期剩余「欠下的动画时间」（秒）；归零即退出偿还 */
+  warpDebt: number;
+  /** v9s.37 · 卡肉瓦片阶段：0 = 无，1 = 保持，2 = 释放，3 = 偿还 */
+  warpPhase: number;
+  /** v9s.37 · 释放 / 偿还子计时（秒） */
+  warpTimer: number;
+  /** v9s.37 · 已触发过击地冲击的攻击 id（0 = 尚未触发） */
+  slamAttackId: number;
 };
 
 /* ---------------- 派生招 / 动作链接契约（v9a Phase 1） ---------------- */
@@ -576,6 +615,35 @@ export type HitsConfig = {
    * 双剑 0.85 / 弓 0.9。缺省 1 = 使用全局表（旧配置零影响）。
    */
   hitstopByWeapon?: Partial<Record<WeaponId, number>>;
+  /**
+   * v9s.37 · 卡肉节奏（接触瓦片 + 偿还）。
+   *
+   * 硬冻结的代价是「这一刀变长了」，连击时会觉得发黏；实际动作游戏更常用的是
+   * **时间瓦片**：接触后把动画速率压到接近 0 保持几十毫秒（读作「砍进去了」），
+   * 再用一小段缓动回到 1，最后把欠下的时间在 recovery 里以 >1 的速率补回 ——
+   * 打感不变，但整段动作的总时长基本守恒，连击节奏不会被拖断。
+   * `enabled: false` 精确回到 v9s.36 的硬冻结（A/B 用）。
+   */
+  hitstopWarp?: HitstopWarpConfig;
+  /**
+   * v9s.37 · 连段衰减：第 1/2/3 段分别乘这里的系数。
+   *
+   * 战神那种「每一击都有卡肉」只有在单次很短时才成立；连段越往后越短，
+   * 三连收招才不会变成三段慢动作。缺省全 1（旧行为）。
+   */
+  hitstopComboFalloff?: number[];
+};
+
+export type HitstopWarpConfig = {
+  enabled: boolean;
+  /** 保持期的动画速率（0.05 ≈ 每帧只走 5% 的进度，画面仍在极缓慢移动） */
+  holdRate: number;
+  /** 释放段时长（秒）：从 holdRate 缓回 1 */
+  release: number;
+  /** 偿还段最大速率（1.5 = 用 1.5 倍速把欠的时间补回） */
+  payback: number;
+  /** 偿还只允许占用 recovery 的这个比例（0.6 = 六成），剩下的债务作废，避免收招抽搐 */
+  paybackBudget: number;
 };
 
 /* ---------------- 技能契约（法杖：引导飞弹 / 电环，v7c #12） ---------------- */
@@ -1830,6 +1898,26 @@ export type HitstopViewConfig = {
   duration: number;
 };
 
+/**
+ * v9s.37 · 击地冲击的表现层配置（纯观感，不改判定）。
+ *
+ * 判定在 Core（`WeaponProfile.groundSlam`），这里只管「砸下去地上要有反应」：
+ * 一圈贴地扩散的尘环 + 一次比普通命中更重的镜头下压。
+ */
+export type GroundSlamViewConfig = {
+  enabled: boolean;
+  /** 尘环颜色 */
+  color: string;
+  /** 单圈寿命（秒） */
+  duration: number;
+  /** 第二圈延迟（秒），错开一点才有「扩散」而不是「一起亮」 */
+  delay: number;
+  /** 外圈相对判定半径的倍数 */
+  outerScale: number;
+  /** 镜头震动强度（0~1.5） */
+  shake: number;
+};
+
 export type TrailViewConfig = {
   enabled: boolean;
   /** 最多采样点数（≈ 帧数），越大轨迹越长 */
@@ -2224,6 +2312,8 @@ export type ViewConfig = {
   weaponTrail: TrailViewConfig;
   /** v9s.22：命中定格（纯表现，只冻角色姿态，不冻 Core） */
   hitstop: HitstopViewConfig;
+  /** v9s.37 · 击地冲击（大剑第三击）的尘环 / 震动 */
+  groundSlam: GroundSlamViewConfig;
   /** v9s.33：动态平衡量化 / 自动配重（纯表现，只读骨架，不写 Core） */
   balance?: BalanceViewConfig;
   /**
@@ -2429,6 +2519,11 @@ export type EventType =
   | 'link-hit'
   /** v9s.29：命中卡肉开始，value = 冻结时长（秒）。表现层据此触发镜头震动 / 音效 */
   | 'hitstop'
+  /**
+   * v9s.37：击地冲击，`value` = 冲击半径（米）。
+   * 表现层据此生成地面尘环 / 强震；与 `hitstop` 一样是「一次性」事件。
+   */
+  | 'ground-slam'
   /**
    * v9s.31：关键帧事件（AnimNotify）。`name` 是事件名，`value` 是附带数值。
    *

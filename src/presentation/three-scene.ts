@@ -35,6 +35,12 @@ export type SceneView = {
   pickDummy(clientX: number, clientY: number): number;
   /** 世界坐标 → 屏幕像素坐标，供自动化验收精确定位假人。 */
   projectToScreen(x: number, y: number, z: number): { x: number; y: number };
+  /** v9s.37：击地尘环读数（spawns = 累计生成次数，live = 当前活跃环） */
+  slamDebug(): {
+    spawns: number;
+    lastId: number;
+    live: Array<{ life: number; scale: number; opacity: number; visible: boolean }>;
+  };
   /** v9s.35：朝向平滑读数（target = 插值后的 bodyYaw，shown = 实际渲染的根节点 yaw） */
   yawDebug(): { target: number; shown: number; tauMs: number };
   /** v9n：停步收相 / 侧移偏转 / 双腿姿态的实时读数（纯观测）；v9o 追加胸偏转与速度，
@@ -631,6 +637,39 @@ export function createSceneView(
     r.mat.opacity = 0.85;
     r.life = linkFx.fxDuration;
   }
+  // ---- v9s.37 击地冲击（大剑第三击）：贴地扩散的尘环 ----
+  // 触发读 Core 的持久字段 `combat.slamAttackId`（不是事件队列）：
+  // 低帧率下一帧可能跑多步、事件只剩最后一步的，只有持久 id 能保证不漏。
+  const slamFx = view.groundSlam;
+  // 环带做厚（22% 半径宽）+ 加色混合：贴地环如果太细，会和角色脚下那圈「八向指示环」
+  // 叠在一起分不出来 —— 玩家要能一眼看出「这是砸出来的，不是 UI」。
+  const slamRingGeo = new THREE.RingGeometry(0.78, 1, 56);
+  const slamRings = Array.from({ length: 4 }, () => {
+    const mat = new THREE.MeshBasicMaterial({
+      color: slamFx.color, transparent: true, opacity: 0,
+      side: THREE.DoubleSide, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mesh = new THREE.Mesh(slamRingGeo, mat);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.visible = false;
+    scene.add(mesh);
+    return { mesh, mat, life: 0, base: 1, delay: 0 };
+  });
+  function spawnSlamRing(x: number, z: number, y: number, radius: number, delay: number): void {
+    const r = slamRings.find((e) => e.life <= 0) ?? slamRings[0];
+    r.mat.color.set(slamFx.color);
+    r.mesh.position.set(x, y + 0.035, z);
+    r.base = radius;
+    r.mesh.scale.setScalar(radius * 0.35);
+    r.mesh.visible = true;
+    r.mat.opacity = 0;
+    r.life = slamFx.duration;
+    r.delay = delay;
+  }
+  let lastSlamId = world.combat.slamAttackId;
+  let slamSpawns = 0;
+
   let lastLinkId = world.playerLink.id;
   let lastLinkHits = world.playerLink.hitIds.length;
 
@@ -704,6 +743,15 @@ export function createSceneView(
     bladesWorld() {
       return voxel.bladesWorld();
     },
+    slamDebug() {
+      return {
+        spawns: slamSpawns,
+        lastId: lastSlamId,
+        live: slamRings.filter((r) => r.life > 0).map((r) => ({
+          life: r.life, scale: r.mesh.scale.x, opacity: r.mat.opacity, visible: r.mesh.visible,
+        })),
+      };
+    },
     yawDebug() {
       return { target: yawTarget, shown: yawSmoother.value, tauMs: view.renderInterp?.yawSmoothMs ?? 0 };
     },
@@ -733,7 +781,10 @@ export function createSceneView(
 
       // 卡肉完全由 Core 计时：这里只读状态，不再自建冻结时长（两边计时不一致会互相打架）。
       const stopping = view.hitstop.enabled && w.combat.hitstop > 0;
-      const frozen = stopping;
+      // v9s.37：卡肉不再是「冻住」，而是把动画时间轴压慢（Core 的 combat.warp）。
+      // 表现层跟着同一个速率走 —— 否则 Core 在 5% 慢放、画面却完全静止，两边会错开。
+      // 旧行为（warp.enabled=false）下 Core 的 warp 恒为 0，这里等价于原来的 frozen。
+      const animDt = frameDt * Math.max(0, Math.min(4, cb.warp ?? 1));
       if (stopping && !wasHitstop) {
         // 上升沿：震动 + 方向性微推。
         // v9s.33 分层：卡肉时长本身已按「受击类型 × 武器」分档（Core），
@@ -784,16 +835,16 @@ export function createSceneView(
       rollPivot.rotation.x = rolling ? rollT * Math.PI * 2 : 0;
       rollPivot.position.y = ROLL_PIVOT_Y - (rolling ? 0.2 * Math.sin(Math.PI * rollT) : 0);
       // coreTime 传 Core 的 world.time：落地缓冲脉冲因此与暂停 / 时间缩放 / 单步同步
-      if (!frozen) {
-        voxel.update(c, cb, w.playerHurt, frameDt, w.abilities.channeling, w.time, w.playerLink, w.turnInPlace);
+      if (animDt > 0) {
+        voxel.update(c, cb, w.playerHurt, animDt, w.abilities.channeling, w.time, w.playerLink, w.turnInPlace);
       }
 
       // v9s.22：挥击拖尾 —— 取本帧武器的刃根/刃尖世界坐标，只在攻击/冲刺期间记录。
       // 拖尾是「轨迹」而不是「姿势」，是打击感最直接的来源（对应 2D 的 smear frame）。
       playerTrail.update(
-        frozen ? 0 : frameDt,
-        frozen ? null : voxel.weaponBlade(),
-        !frozen && (
+        animDt,
+        animDt > 0 ? voxel.weaponBlade() : null,
+        animDt > 0 && (
           // v9s.23：只在实际挥出的 active 段采样。旧版把 windup 也算进来，
           // 举剑起手那 0.2s 的慢速位移会先拉出一条长带，接上 active 的横扫后
           // 变成一整个半圆「白色拱门」，把角色整个人挡住。
@@ -803,9 +854,9 @@ export function createSceneView(
         ),
       );
 
-      if (!frozen) {
+      if (animDt > 0) {
         for (let i = 0; i < dummyRigs.length; i++) {
-          if (w.dummies[i]) dummyRigs[i].update(w.dummies[i], frameDt);
+          if (w.dummies[i]) dummyRigs[i].update(w.dummies[i], animDt);
         }
       }
 
@@ -957,6 +1008,34 @@ export function createSceneView(
         const t = Math.max(0, r.life / dashFx.fxDuration);
         r.mat.opacity = 0.9 * t;
         r.mesh.scale.setScalar(r.base * (0.6 + (1 - t) * 1.2));
+        if (r.life <= 0) r.mesh.visible = false;
+      }
+
+      // v9s.37：大剑第三击落地 —— 尘环 + 一次比普通命中更重的镜头下压。
+      // 半径取 Core 的判定半径：尘环边缘就是真实判定边界，玩家能「看着圈躲」。
+      if (w.combat.slamAttackId !== lastSlamId) {
+        lastSlamId = w.combat.slamAttackId;
+        slamSpawns += 1;
+        if (slamFx.enabled) {
+          const gs = w.config.combat.weapons[cb.weapon]?.groundSlam;
+          const rad = Math.max(0.6, gs?.radius ?? 2.2);
+          spawnSlamRing(c.position.x, c.position.z, c.position.y, rad, 0);
+          spawnSlamRing(c.position.x, c.position.z, c.position.y, rad * slamFx.outerScale, slamFx.delay);
+          cam.addShake(slamFx.shake);
+        }
+      }
+      for (const r of slamRings) {
+        if (r.life <= 0) continue;
+        if (r.delay > 0) {
+          r.delay -= frameDt;
+          continue;
+        }
+        r.life -= frameDt;
+        const t = Math.max(0, r.life / Math.max(slamFx.duration, 1e-6));
+        // 先快后慢：前 30% 冲出大半半径，之后缓下来收尾，读作「冲击」而不是「匀速放大」
+        const grow = 1 - Math.pow(t, 1.8);
+        r.mesh.scale.setScalar(r.base * (0.35 + 0.65 * grow));
+        r.mat.opacity = 0.85 * Math.pow(t, 1.3);
         if (r.life <= 0) r.mesh.visible = false;
       }
 
@@ -1246,6 +1325,7 @@ export function createSceneView(
       glowTex.dispose();
       trailTex.dispose();
       for (const r of dashRings) r.mat.dispose();
+      for (const r of slamRings) r.mat.dispose();
       dashRingGeo.dispose();
       for (const r of linkRings) r.mat.dispose();
       linkRingGeo.dispose();

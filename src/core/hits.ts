@@ -12,6 +12,8 @@ export type HitSpec = {
   knockback: number;
   /** 攻击者 id（仅用于 player-hurt 事件的 value；0 = 未知 / 环境） */
   sourceId?: number;
+  /** v9s.37：本次命中的卡肉倍数（击地冲击这类「一次性爆发」给得更重）；缺省 1 */
+  holdMul?: number;
 };
 
 const EPS = 1e-6;
@@ -84,12 +86,25 @@ export function applyHit(world: World, target: HitTarget, spec: HitSpec): void {
   // 取「最大值」而不是累加：同一帧多目标命中 / 连段多段命中不会把冻结叠成慢动作。
   const table = world.config.hits.hitstop;
   // v9s.33：分武器档位 —— 同一记「重击」，大剑停得更久（乘性系数，缺省 1）
-  const scale = world.config.hits.hitstopByWeapon?.[world.combat.weapon] ?? 1;
+  let scale = world.config.hits.hitstopByWeapon?.[world.combat.weapon] ?? 1;
+  // v9s.37：连段衰减。每击都卡只有在单次很短时才成立，三连收招必须越往后越轻。
+  const falloff = world.config.hits.hitstopComboFalloff;
+  if (falloff && falloff.length > 0) {
+    const i = Math.max(0, Math.min(falloff.length - 1, world.combat.comboIndex - 1));
+    scale *= Math.max(0, falloff[i]);
+  }
+  scale *= Math.max(0, spec.holdMul ?? 1);
   const stop = table && spec.type !== 'none'
     ? (table[spec.type] ?? 0) * Math.max(0, scale)
     : 0;
   if (stop > 0 && world.combat.hitstop < stop) {
     world.combat.hitstop = stop;
+    // v9s.37：进入保持期。`animRate` 只跟 `hitstop` 计时，这里写 phase / warp
+    // 是为了让表现层与诊断在同帧就能读到「现在在卡肉」。
+    world.combat.warpPhase = 1;
+    world.combat.warp = world.config.hits.hitstopWarp?.enabled
+      ? Math.max(0, Math.min(1, world.config.hits.hitstopWarp.holdRate))
+      : 0;
     emit(world, 'hitstop', stop, s.position);
   }
 }
@@ -248,6 +263,74 @@ function playerHits(world: World): void {
 }
 
 /**
+ * v9s.37 · 击地范围攻击（大剑第三击）。
+ *
+ * 刀身扫掠是「正面一条线」，砸地是「圆心一圈」：到达 `slamU` 时以落点为圆心结算
+ * 一次圆形命中，把侧面 / 贴身的目标也震到。与刀身共用 `hitIds`：
+ * `onlyUnhit` 默认 true 时不重复掉血，只扩大覆盖。
+ *
+ * 放在 `playerHits` 之后跑：同一帧里正面先按刀结算，击地只补「刀没碰到的人」。
+ */
+function playerGroundSlam(world: World): void {
+  const cb = world.combat;
+  const profile = world.config.combat.weapons[cb.weapon];
+  const slam = profile?.groundSlam;
+  if (!slam) return;
+  if (cb.slamAttackId === cb.attackId) return;   // 本次攻击已经震过
+
+  const activeDur = cb.timings.active;
+  const u = activeDur > EPS ? Math.min(1, Math.max(0, cb.phaseTimer / activeDur)) : 1;
+  if (u < slam.slamU - EPS) return;
+
+  cb.slamAttackId = cb.attackId;
+
+  const cfg = world.config.hits;
+  const p = world.character.position;
+  const fx = Math.sin(cb.attackFacing);
+  const fz = Math.cos(cb.attackFacing);
+  const extra = world.config.dummies.radius;
+  const radius = Math.max(0, slam.radius);
+  const onlyUnhit = slam.onlyUnhit !== false;
+  const type: HurtType = slam.type
+    ?? (cb.weapon === 'greatsword' ? 'knock' : 'heavy');
+  const kb = slam.knockback ?? (cfg.knockback[cb.weapon] ?? 0);
+  const ideal = world.config.targeting.idealRange;
+  const holdMul = slam.holdMul ?? 1.6;
+
+  for (let i = 0; i < world.dummies.length; i++) {
+    const s = world.dummies[i];
+    if (onlyUnhit && cb.hitIds.indexOf(s.id) >= 0) continue;
+    const dx = s.position.x - p.x;
+    const dz = s.position.z - p.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > radius + extra) continue;
+
+    // 击退方向：从落点径向向外；贴身（dist≈0）时退回正前，避免方向随机
+    const nx = dist > EPS ? dx / dist : fx;
+    const nz = dist > EPS ? dz / dist : fz;
+    const targetDist = kb > 0 ? Math.max(dist + kb, ideal) : dist;
+    const push = Math.max(0, targetDist - dist);
+
+    dealHit(world, i, {
+      type,
+      duration: hurtDuration(world, type),
+      dirX: nx,
+      dirZ: nz,
+      knockback: push,
+      holdMul,
+    });
+    cb.hitIds.push(s.id);
+  }
+
+  // 无论有没有打到人，落地本身都要有表现（尘环 / 震动）—— 空砸也要「砸到地上」
+  emit(world, 'ground-slam', radius, {
+    x: p.x + fx * Math.min(radius * 0.25, 0.5),
+    y: p.y,
+    z: p.z + fz * Math.min(radius * 0.25, 0.5),
+  });
+}
+
+/**
  * v9a：派生招在 active 阶段沿「本帧位移线段」做扫掠命中。
  *  - 线段是 links 记录的 fromX/fromZ（movement 之前）→ 当前位置（movement 之后），
  *    因此一帧冲锋几米也不会穿过目标（capsule 判定）；
@@ -363,7 +446,11 @@ function dummyHits(world: World): void {
 export function hitsUpdate(world: World, dt: number): void {
   if (!world.modules.hits) return;
   // v9s.31：从「attack-active 那一帧」改为「active 段内每帧」，窗口与去重都在 playerHits 里。
-  if (world.combat.phase === 'active') playerHits(world);
+  if (world.combat.phase === 'active') {
+    playerHits(world);
+    // v9s.37：先刀身后击地 —— 正面目标按刀结算，击地只补侧面 / 贴身
+    playerGroundSlam(world);
+  }
   scanLinkHits(world, dt);
   dummyHits(world);
 }

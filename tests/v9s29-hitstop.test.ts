@@ -30,6 +30,10 @@ function soloDummy(dist: number, weapon: 'sword-shield' | 'greatsword' = 'sword-
   s.velocity.x = 0;
   s.velocity.z = 0;
   (w.combat as any).weapon = weapon;
+  // v9s.37：这一组验的是「硬冻结」契约（进度 / 位置逐帧不动）。
+  // 瓦片化之后保持期仍有 5% 推进，所以这里显式关掉 —— 同时也就证明了
+  // `hitstopWarp.enabled = false` 能精确回到旧行为。
+  if (w.config.hits.hitstopWarp) w.config.hits.hitstopWarp.enabled = false;
   return w;
 }
 

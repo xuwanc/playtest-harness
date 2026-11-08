@@ -38,6 +38,11 @@ export function resetCombat(world: World): void {
   c.hitstop = 0;
   c.notifyCursor = -1;
   c.hitIds.length = 0;
+  c.warp = 1;
+  c.warpDebt = 0;
+  c.warpPhase = 0;
+  c.warpTimer = 0;
+  c.slamAttackId = 0;
   c.timings = zeroTimings();
 }
 
@@ -58,6 +63,11 @@ export function initialCombatState(weaponSlot: number) {
     hitstop: 0,
     notifyCursor: -1,
     hitIds: [] as number[],
+    warp: 1,
+    warpDebt: 0,
+    warpPhase: 0,
+    warpTimer: 0,
+    slamAttackId: 0,
     timings: zeroTimings(),
   };
 }
@@ -102,6 +112,12 @@ function beginAttack(
   c.attackProgress = 0;
   c.timings = timings;
   c.attackId += 1;
+  // v9s.37：新一段起手不代表上一段的债务作废 —— 但若上一段已经结束，
+  // 残留债务会让新一段莫名加速，所以起手时清零（连段内的偿还只发生在段内）。
+  c.warpDebt = 0;
+  c.warpPhase = 0;
+  c.warpTimer = 0;
+  c.warp = 1;
   // v9s.31：新一段 = 新时间轴。游标回到 -1（下次扫描包含 0 时刻），命中表清空。
   c.notifyCursor = -1;
   c.hitIds.length = 0;
@@ -150,22 +166,100 @@ function startBowRelease(world: World, intents: Intents, charge: number): void {
 }
 
 /**
+ * v9s.37 · 卡肉节奏：本帧动画时间轴速率（同时推进瓦片状态机）。
+ *
+ * 硬冻结（速率 0）读起来是「游戏卡了一下」；改成「接触瓦片」后：
+ *   保持（holdRate 5%）→ 释放（ease 回 1）→ 偿还（1.5× 补回欠下的时间）。
+ * 欠的时间逐帧累加而不是在触发时一次算出 —— 释放段也在欠，这部分同样要还。
+ * 返回 0 时与 v9s.36 的 `hitstop > 0` 行为逐帧等价（`warp.enabled = false`）。
+ */
+function animRate(world: World, dt: number): number {
+  const c = world.combat;
+  const cfg = world.config.hits.hitstopWarp;
+  if (!cfg || !cfg.enabled) {
+    c.warp = c.hitstop > 0 ? 0 : 1;
+    return c.warp;
+  }
+
+  const hold = Math.max(0, Math.min(1, cfg.holdRate));
+
+  // 1) 保持：hits 写入 hitstop 时已把 warpPhase 置 1，这里只跟随计时
+  if (c.hitstop > 0) {
+    c.warpPhase = 1;
+    c.warpTimer = c.hitstop;
+    c.warp = hold;
+    c.warpDebt += dt * (1 - hold);
+    return c.warp;
+  }
+
+  // 2) 保持结束 → 释放
+  if (c.warpPhase === 1) {
+    c.warpPhase = 2;
+    c.warpTimer = 0;
+  }
+  if (c.warpPhase === 2) {
+    const rel = Math.max(1e-3, cfg.release);
+    c.warpTimer += dt;
+    const k = Math.min(1, c.warpTimer / rel);
+    // ease-out（1-(1-k)²）：离开 0 附近要快，尾段才慢下来，否则前半段像没动
+    const e = 1 - (1 - k) * (1 - k);
+    const r = hold + (1 - hold) * e;
+    c.warp = r;
+    c.warpDebt += dt * (1 - r);
+    if (k >= 1) {
+      c.warpPhase = 3;
+      c.warpTimer = 0;
+      // 偿还预算：只允许吃掉 recovery 的一部分，超出的债务作废（否则收招抽一下）
+      const cap = Math.max(0, c.timings.recovery)
+        * Math.max(0, cfg.payback - 1)
+        * Math.max(0, Math.min(1, cfg.paybackBudget));
+      c.warpDebt = Math.min(c.warpDebt, cap);
+    }
+    return c.warp;
+  }
+
+  // 3) 偿还：把欠下的时间用 >1 的速率补回去，总时长守恒
+  if (c.warpPhase === 3 && c.warpDebt > 1e-6) {
+    const extra = Math.min(Math.max(0, cfg.payback - 1), c.warpDebt / Math.max(dt, 1e-5));
+    c.warp = 1 + extra;
+    c.warpDebt = Math.max(0, c.warpDebt - dt * extra);
+    if (c.warpDebt <= 1e-6) {
+      c.warpPhase = 0;
+      c.warp = 1;
+    }
+    return c.warp;
+  }
+
+  c.warpPhase = 0;
+  c.warp = 1;
+  return 1;
+}
+
+/**
  * 阶段推进：windup → active → recovery → settle → idle。
  * settle 是「每段前移后的停顿」：动作本体在 recovery 结束时发 attack-end，
  * 随后进入零位移停顿，停顿结束才开启连击窗口 / 消费缓冲输入。
  */
 function advancePhase(world: World, dt: number, intents: Intents): void {
   const c = world.combat;
-  if (c.phase === 'idle') return;
+  if (c.phase === 'idle') {
+    // 一段彻底结束后不留债务：否则下一段起手会莫名加速
+    c.warp = 1;
+    c.warpPhase = 0;
+    c.warpTimer = 0;
+    c.warpDebt = 0;
+    return;
+  }
 
   const t = c.timings;
 
-  // v9s.29 命中卡肉：冻结整条攻击时间轴（phaseTimer 不推进）。
-  // 计时在 combatUpdate 里扣（idle 时也要扣，否则派生招的卡肉永远不结束），
-  // 这里只负责「冻结」：不推进阶段、不走连击窗口、不重算 attackProgress。
-  if (c.hitstop > 0) return;
-
-  c.phaseTimer += dt;
+  // v9s.29 命中卡肉 → v9s.37 接触瓦片。
+  // 旧版这里是 `if (c.hitstop > 0) return;`（硬冻结）；现在按 `animRate` 给的速率推进，
+  // 保持期只有 5% 速度，所以画面仍是一帧一帧极缓慢地动 —— 读作「黏住」而不是「卡死」。
+  // `warp.enabled = false` 时 animRate 返回 0，与旧行为逐帧等价。
+  const rate = animRate(world, dt);
+  const adv = dt * rate;
+  c.phaseTimer += adv;
 
   // 单帧可能跨过多个阶段（低帧率 / 时间缩放），用有限循环补齐
   let guard = 0;
@@ -184,6 +278,11 @@ function advancePhase(world: World, dt: number, intents: Intents): void {
       c.phase = 'recovery';
     } else if (c.phase === 'recovery') {
       c.phase = 'settle';
+      // 收招开始就不再偿还：剩下的债务作废，避免 settle 期间出现「抽搐式加速」
+      c.warpPhase = 0;
+      c.warpDebt = 0;
+      c.warpTimer = 0;
+      c.warp = 1;
       emit(world, 'attack-end', c.comboIndex);
     } else {
       // settle → idle：整段彻底结束，允许接下一段
@@ -379,9 +478,12 @@ export function combatUpdate(world: World, dt: number, intents: Intents): void {
       // 用「本帧应走的位移增量 / dt」当速度，而不是直接采样曲线高度：
       // 这样离散积分的总位移严格等于 D，不会因为帧率 / 采样端点产生几个百分点的漂移。
       const s = (t: number) => D * (1 - Math.pow(1 - Math.min(1, Math.max(0, t / T)), p + 1));
+      // v9s.37：本帧推进了 adv（= dt × warp），偿还期 adv > dt、保持期 adv ≪ dt，
+      // 前冲位移只跟 phaseTimer 走，所以除法必须用 adv，否则保持期会被算成「速度≈0」以外的怪值。
+      const advNow = dt * c.warp;
       const t1 = Math.min(T, Math.max(0, c.phaseTimer));
-      const t0 = Math.min(T, Math.max(0, c.phaseTimer - dt));
-      let mag = Math.max(0, s(t1) - s(t0)) / Math.max(dt, 1e-4);
+      const t0 = Math.min(T, Math.max(0, c.phaseTimer - advNow));
+      let mag = Math.max(0, s(t1) - s(t0)) / Math.max(advNow, 1e-4);
       // 安全阀：只挡异常配置，正常包络峰值不会触顶
       mag = Math.min(mag, Math.max(0, cfg.lungeMaxSpeed));
       world.impulse.x = Math.sin(c.attackFacing) * mag;

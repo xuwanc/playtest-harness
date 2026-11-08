@@ -289,8 +289,19 @@ export function createDebugPanel(
   exagg.add(tr, 'intensity', 0, 1.5, 0.05).name('刀光亮度');
   exagg.add(tr, 'minStep', 0.005, 0.1, 0.005).name('采样最小位移 (m)');
   exagg.add(view.projectiles, 'slashEnabled').name('旧斩击弧 开（已被刀光替代）');
-  exagg.add(view.hitstop, 'enabled').name('命中定格 开');
-  exagg.add(view.hitstop, 'duration', 0, 0.2, 0.005).name('定格时长 (s)');
+  exagg.add(view.hitstop, 'enabled').name('命中闪光 / 震动 开');
+  // v9s.37：卡肉的节奏参数——真机 A/B 时最该动的就是这四个
+  const warp = cfg.hits.hitstopWarp;
+  if (warp) {
+    const wf = exagg.addFolder('卡肉节奏（接触瓦片）');
+    wf.add(warp, 'enabled').name('瓦片开（关=硬冻结）');
+    wf.add(warp, 'holdRate', 0, 0.4, 0.01).name('保持期速率');
+    wf.add(warp, 'release', 0.005, 0.2, 0.005).name('释放时长 (s)');
+    wf.add(warp, 'payback', 1, 2.5, 0.05).name('偿还倍率');
+    wf.add(cfg.hits.hitstop, 'light', 0, 0.2, 0.005).name('轻击保持 (s)');
+    wf.add(cfg.hits.hitstop, 'heavy', 0, 0.25, 0.005).name('重击保持 (s)');
+    wf.add(cfg.hits.hitstop, 'knock', 0, 0.3, 0.005).name('击飞保持 (s)');
+  }
   // v9s.24：武器相对手的自由度 + 副手握持
   const ww = view.weaponWrist;
   exagg.add(ww, 'enabled').name('腕部滞后 开（关掉=武器焊在手上）');
