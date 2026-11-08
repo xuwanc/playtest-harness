@@ -2207,8 +2207,12 @@ export type ViewConfig = {
    *
    * Core 固定 60Hz 步进、渲染按刷新率跑，120Hz 屏幕与慢放下会出现「同一姿态连续渲染多帧」的抖动；
    * 开启后在两个模拟步之间按 `alpha` 插值姿态输入。关掉即精确回到旧行为（A/B 用）。
+   *
+   * v9s.35：`yawSmoothMs` = 渲染根节点朝向的指数低通时间常数（毫秒，0 = 关闭）。
+   * 插值只让位置一阶连续，朝向的角速度仍是阶梯 —— 慢放时肩 / 手 / 武器在 0.4~0.8m
+   * 半径上会把速度突跳放大成「一顿一顿」。默认 35ms ≈ 半帧，代价是朝向晚约半帧到位。
    */
-  renderInterp?: { enabled: boolean };
+  renderInterp?: { enabled: boolean; yawSmoothMs?: number };
   colors: ColorConfig;
   dummies: DummyViewConfig;
 };

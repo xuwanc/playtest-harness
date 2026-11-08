@@ -1819,7 +1819,8 @@
       "counterBoost": 1.6
     },
     "renderInterp": {
-      "enabled": true
+      "enabled": true,
+      "yawSmoothMs": 35
     }
   }
 }

@@ -430,6 +430,15 @@ _LAUNCH_MARKERS: list[str] = []
 def launch(headed: bool = False, width: int = 1280, height: int = 800):
     from playwright.sync_api import sync_playwright
 
+    # v9s.35：**必须先摘掉 DISPLAY**。
+    # 沙箱里 DISPLAY=:0 是给桌面/截图工具留的，但无头 chromium 看到它会尝试走
+    # X11 的 EGL（GLX）路径，报 `eglInitialize SwANGLE failed: EGL_NOT_INITIALIZED`，
+    # 随后 THREE 拿不到 WebGL 上下文、整个页面停在空 #app 上 —— 现象是
+    # 「页面没准备好（harness: False）」，看着像构建坏了，其实是显卡后端选错。
+    # 无头 + swiftshader 时没有 DISPLAY 才会走真正的软件光栅。
+    if not headed:
+        os.environ.pop("DISPLAY", None)
+
     pw = sync_playwright().start()
     # 不能直接传 --user-data-dir（Playwright 会拒绝），用一个独一无二的 UA 当进程标记：
     # 它会原样出现在 chromium 的命令行里，pkill -f 可以精确匹配到这一次启动的进程。

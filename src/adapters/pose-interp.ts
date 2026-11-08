@@ -28,6 +28,8 @@ export type PoseSnapshot = {
     facing: number; moveYaw: number; bodyYaw: number; headYaw: number;
     headPitch: number; bodyPitch: number;
     gaitPhase: number; stride: number;
+    /** v9s.35：速度分量。表现层用它在身体局部轴上分解步态方向 / 摆幅，不插值会 15Hz 一跳 */
+    vx: number; vy: number; vz: number;
   };
   cb: {
     attackProgress: number;
@@ -35,12 +37,20 @@ export type PoseSnapshot = {
     charge: number;
     hitstop: number;
   };
+  /** v9s.35：翻滚进度（three-scene 直接用 timer 算 rollPivot 旋转，不插值就是整圈分 15 次跳） */
+  dash: { timer: number };
+  /** v9s.35：原地转身进度（表现层踏步 + 骨盆偏转都读它） */
+  turn: { progress: number };
+  /** v9s.35：派生招进度（举盾前撞等姿态按它驱动） */
+  link: { progress: number };
   hurt: { timer: number; duration: number; knockX: number; knockZ: number };
   dm: Array<{
     x: number; y: number; z: number;
     facing: number; bodyYaw: number; headYaw: number;
     gaitPhase: number; stride: number;
     attackProgress: number;
+    /** v9s.35：假人速度，供步态方向 / 被推开的加速度使用 */
+    vx: number; vy: number; vz: number;
   }>;
 };
 
@@ -49,6 +59,9 @@ export type PoseOverrides = {
   character: Partial<CharacterState>;
   combat: Partial<CombatState>;
   playerHurt: Partial<HurtState>;
+  dash: { timer: number };
+  turn: { progress: number };
+  link: { progress: number };
   /** 长度与当前 `world.dummies` 一致；对应假人不存在时为 null（调用方保留原值） */
   dummies: Array<Partial<DummyState> | null>;
 };
@@ -68,11 +81,17 @@ function lerp(a: number, b: number, t: number): number {
 /**
  * 离散键：这几项一变就说明发生了「事件性切换」，插值会把切换抹成渐变。
  * 只放真正离散的量；`hitstop` 虽然是数值，但它表示冻结开始 / 结束，也按事件处理。
+ *
+ * v9s.35：把翻滚 / 原地转身 / 派生招的**阶段**也纳进来 —— 这三个状态机切换时姿态会
+ * 换一套驱动源（例如翻滚开始要把整圈旋转从 0 交给 dash.timer），跨阶段插值会看到
+ * 「从上一段姿势被拽到下一段起手」的怪异过渡。它们内部的连续量（timer / progress）
+ * 仍然插值，所以翻滚、转身踏步、举盾前撞在慢放下是连续的，只有切换那一帧 snap。
  */
 function discreteKey(w: World): string {
   const c = w.combat;
   const dm = w.dummies;
-  let s = `${c.weapon}|${c.phase}|${c.comboIndex}|${c.attackId}|${w.character.grounded ? 1 : 0}|${w.character.sprinting ? 1 : 0}|${w.playerHurt.type}|${c.hitstop > 0 ? 1 : 0}`;
+  let s = `${c.weapon}|${c.phase}|${c.comboIndex}|${c.attackId}|${w.character.grounded ? 1 : 0}|${w.character.sprinting ? 1 : 0}|${w.playerHurt.type}|${c.hitstop > 0 ? 1 : 0}`
+    + `|d:${w.dash.phase}:${w.dash.kind}|t:${w.turnInPlace.phase}|l:${w.playerLink.phase}:${w.playerLink.kind}`;
   for (let i = 0; i < dm.length; i++) {
     const d = dm[i];
     s += `|${d.id}:${d.mode}:${d.attackPhase}:${d.attackId}:${d.hurt.type}`;
@@ -92,6 +111,7 @@ export function capturePose(w: World): PoseSnapshot {
       facing: c.facing, moveYaw: c.moveYaw, bodyYaw: c.bodyYaw, headYaw: c.headYaw,
       headPitch: c.headPitch, bodyPitch: c.bodyPitch,
       gaitPhase: c.gaitPhase, stride: c.stride,
+      vx: c.velocity.x, vy: c.velocity.y, vz: c.velocity.z,
     },
     cb: {
       attackProgress: cb.attackProgress,
@@ -99,12 +119,16 @@ export function capturePose(w: World): PoseSnapshot {
       charge: cb.charge,
       hitstop: cb.hitstop,
     },
+    dash: { timer: w.dash.timer },
+    turn: { progress: w.turnInPlace.progress },
+    link: { progress: w.playerLink.progress },
     hurt: { timer: hurt.timer, duration: hurt.duration, knockX: hurt.knockX, knockZ: hurt.knockZ },
     dm: w.dummies.map((d) => ({
       x: d.position.x, y: d.position.y, z: d.position.z,
       facing: d.facing, bodyYaw: d.bodyYaw, headYaw: d.headYaw,
       gaitPhase: d.gaitPhase, stride: d.stride,
       attackProgress: d.attackProgress,
+      vx: d.velocity.x, vy: d.velocity.y, vz: d.velocity.z,
     })),
   };
 }
@@ -131,6 +155,11 @@ export function blendPose(a: PoseSnapshot, b: PoseSnapshot, t: number): PoseOver
     // 步相是 0..2π 的相位，必须走最短弧，否则过 2π 时会倒退一整圈
     gaitPhase: lerpAngle(a.ch.gaitPhase, b.ch.gaitPhase, k),
     stride: lerp(a.ch.stride, b.ch.stride, k),
+    velocity: {
+      x: lerp(a.ch.vx, b.ch.vx, k),
+      y: lerp(a.ch.vy, b.ch.vy, k),
+      z: lerp(a.ch.vz, b.ch.vz, k),
+    },
   };
   const combat: Partial<CombatState> = {
     attackProgress: lerp(a.cb.attackProgress, b.cb.attackProgress, k),
@@ -154,15 +183,32 @@ export function blendPose(a: PoseSnapshot, b: PoseSnapshot, t: number): PoseOver
       gaitPhase: lerpAngle(ad.gaitPhase, bd.gaitPhase, k),
       stride: lerp(ad.stride, bd.stride, k),
       attackProgress: lerp(ad.attackProgress, bd.attackProgress, k),
+      velocity: {
+        x: lerp(ad.vx, bd.vx, k),
+        y: lerp(ad.vy, bd.vy, k),
+        z: lerp(ad.vz, bd.vz, k),
+      },
     } satisfies Partial<DummyState>;
   });
-  return { time: lerp(a.time, b.time, k), character: ch, combat, playerHurt, dummies };
+  return {
+    time: lerp(a.time, b.time, k),
+    character: ch,
+    combat,
+    playerHurt,
+    dash: { timer: lerp(a.dash.timer, b.dash.timer, k) },
+    turn: { progress: lerp(a.turn.progress, b.turn.progress, k) },
+    link: { progress: lerp(a.link.progress, b.link.progress, k) },
+    dummies,
+  };
 }
 
 /**
  * 把插值结果套到真实 `World` 上，得到「只给渲染看」的替身。
  * 除姿态输入外的一切（config / events / targeting / abilities …）都沿用原对象，
  * 所以渲染层不需要知道插值的存在。
+ *
+ * 注意：`dash` / `turnInPlace` / `playerLink` 也只替换**连续字段**，阶段 / id 等离散量
+ * 原样沿用 —— 离散量在 `canInterpolate` 里已经拦住了，走到这里的两个快照同阶段。
  */
 export function applyPose(w: World, o: PoseOverrides): World {
   const dummies = w.dummies.map((d, i) => {
@@ -175,6 +221,9 @@ export function applyPose(w: World, o: PoseOverrides): World {
     character: { ...w.character, ...o.character },
     combat: { ...w.combat, ...o.combat },
     playerHurt: { ...w.playerHurt, ...o.playerHurt },
+    dash: { ...w.dash, timer: o.dash.timer },
+    turnInPlace: { ...w.turnInPlace, progress: o.turn.progress },
+    playerLink: { ...w.playerLink, progress: o.link.progress },
     dummies,
   };
 }

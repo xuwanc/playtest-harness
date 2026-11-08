@@ -239,14 +239,18 @@ export function startApp(): void {
     // v9s.33：脊柱分段读数（腰 / 胸 / 颈）
     spineDebug: () => view.spineDebug(),
     // v9s.34：渲染插值读数（alpha = 累加器剩余 / fixedDt；applied = 本帧真的插值了）
-    interpDebug: () => ({ alpha: interpAlpha, applied: interpApplied, enabled: renderInterp }),
+    interpDebug: () => ({ alpha: interpAlpha, applied: interpApplied, enabled: renderInterp, skip: interpSkip }),
     /** v9s.34：渲染位姿（插值后的画面位置），验收「画面是否连续」读这个 */
     renderPose: () => view.renderPose(),
+    /** v9s.35：朝向平滑读数（target = 插值后 bodyYaw，shown = 真正画出来的根节点 yaw） */
+    yawDebug: () => view.yawDebug(),
     /** v9s.34：A/B 开关（验收「插值开 / 关」的画面差别，不用改 config 重启） */
     setRenderInterp: (on: boolean) => {
       renderInterp = !!on;
       return renderInterp;
     },
+    /** v9s.35：主循环是否被 clip 工具台锁住（锁住时 view.render 完全不跑，画面定格） */
+    renderHold: () => clipHold,
     // v9s.32：挥空时刀光增亮的读数（证明「不震屏也有反馈」）
     trailDebug: () => view.trailDebug(),
     // v9s.26：刃身两端世界坐标（验收横扫仰角，避免被斜俯视截图误导）
@@ -322,6 +326,8 @@ export function startApp(): void {
   let posePrev: PoseSnapshot | null = null;
   let interpAlpha = 1;
   let interpApplied = false;
+  /** v9s.35：本帧没能插值的原因（''=插值了；'off' 关闭；'noprev' 首帧；'key' 离散键变了；'alpha' 已到 1） */
+  let interpSkip: string = '';
 
   /**
    * v9s.34：给渲染层挑一个「世界」——插值开且两个快照可插值时，返回套了插值姿态的替身；
@@ -330,14 +336,26 @@ export function startApp(): void {
   function pickRenderWorld(frameSeconds: number): typeof world {
     const on = renderInterp && !debug.paused && debug.timeScale > 0;
     interpApplied = false;
-    if (!on || !posePrev || !canInterpolate(posePrev, poseCur)) {
+    interpSkip = '';
+    if (!on) {
+      interpSkip = 'off';
+      interpAlpha = 1;
+      return world;
+    }
+    if (!posePrev) {
+      interpSkip = 'noprev';
+      interpAlpha = 1;
+      return world;
+    }
+    if (!canInterpolate(posePrev, poseCur)) {
+      interpSkip = 'key';
       interpAlpha = 1;
       return world;
     }
     const a = clock.alpha;
     interpAlpha = a;
     // alpha ≈ 1 时插值结果与当前步几乎相同，省掉一次对象分配
-    if (a >= 0.999) return world;
+    if (a >= 0.999) { interpSkip = 'alpha'; return world; }
     interpApplied = true;
     void frameSeconds;
     return applyPose(world, blendPose(posePrev, poseCur, a));

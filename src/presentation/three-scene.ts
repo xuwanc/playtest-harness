@@ -12,6 +12,7 @@ import {
 import { dummyThreatLevel, isHostileDummy } from '../core';
 import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
 import { createVoxelRig } from './voxel-rig';
+import { createYawSmoother } from './yaw-smooth';
 import { createWeaponTrail } from './weapon-trail';
 import type { HurtPose } from './hurt-pose';
 
@@ -34,6 +35,8 @@ export type SceneView = {
   pickDummy(clientX: number, clientY: number): number;
   /** 世界坐标 → 屏幕像素坐标，供自动化验收精确定位假人。 */
   projectToScreen(x: number, y: number, z: number): { x: number; y: number };
+  /** v9s.35：朝向平滑读数（target = 插值后的 bodyYaw，shown = 实际渲染的根节点 yaw） */
+  yawDebug(): { target: number; shown: number; tauMs: number };
   /** v9n：停步收相 / 侧移偏转 / 双腿姿态的实时读数（纯观测）；v9o 追加胸偏转与速度，
    *  v9p 追加停步惯性的前脚前伸量与身体前移量，v9q 追加含击退冲量的步态速度，
    *  v9r 追加骨盆惯性下沉量。 */
@@ -250,6 +253,12 @@ export function createSceneView(
   rollPivot.add(voxel.group);
   playerRoot.add(rollPivot);
   scene.add(playerRoot);
+
+  // v9s.35：渲染侧朝向低通。插值只让位置一阶连续，朝向的**角速度**仍是阶梯；
+  // 手 / 肩 / 武器挂在 0.4~0.8m 半径上，速度突跳被放大成「一顿一顿」。
+  // 这里只平滑「给眼睛看」的根节点 yaw，Core 的 facing / 判定 / 相机目标全部不受影响。
+  const yawSmoother = createYawSmoother();
+  let yawTarget = 0;
 
   // ---- 测试假人 ----
   const dummyRigs = world.dummies.map((s, i) => {
@@ -695,6 +704,9 @@ export function createSceneView(
     bladesWorld() {
       return voxel.bladesWorld();
     },
+    yawDebug() {
+      return { target: yawTarget, shown: yawSmoother.value, tauMs: view.renderInterp?.yawSmoothMs ?? 0 };
+    },
     renderPose() {
       return {
         x: playerRoot.position.x,
@@ -758,7 +770,11 @@ export function createSceneView(
 
       playerRoot.position.set(c.position.x, c.position.y, c.position.z);
       // 身体用平滑朝向（bodyYaw），头 / 腿由 rig 内部按各自角度分离驱动
-      playerRoot.rotation.y = c.bodyYaw;
+      // v9s.35：在插值结果之上再走一次朝向低通（默认 35ms，≈半帧）；0 即关闭，A/B 用。
+      yawTarget = c.bodyYaw;
+      playerRoot.rotation.y = yawSmoother.update(
+        yawTarget, frameDt, view.renderInterp?.yawSmoothMs ?? 0,
+      );
       // 翻滚：绕身体局部 X 轴前滚一整圈，同时按正弦压低重心贴地。
       // 进度直接取 Core 的 dash.timer / duration，不引入表现层自己的计时状态。
       const rolling = w.dash.phase === 'active' && w.dash.kind === 'roll';
