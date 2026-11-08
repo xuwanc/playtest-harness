@@ -171,6 +171,29 @@ def probe(page, weapon: str, seg: int, progress: float, warm: int = 6,
     return page.evaluate(PROBE_JS, opts)
 
 
+# v9s.34：一次 evaluate 扫完所有段。
+#
+# 旧实现每采一帧都要来回一次 Python↔JS，且每帧都跑 warm 次 render 让姿态混合收敛 ——
+# 软件渲染（swiftshader）下一帧约 60~70ms，48 步 × 4 预热 × 9 段 = 1700+ 帧，
+# 这就是九段全量要 4 分半的主因。批量后：IPC 从 400+ 次降到 1 次，
+# 预热只在每段首帧做（后续 t 是连续推进的，平滑量本来就在收敛态）。
+BATCH_JS = "(jobs) => {\n  const probe = " + PROBE_JS + ";\n" + """
+  const out = [];
+  for (const j of jobs) {
+    const rows = [];
+    for (let i = 0; i <= j.steps; i++) {
+      const t = i / j.steps;
+      const d = probe({ weapon: j.weapon, comboIndex: j.seg, progress: t,
+                        warm: i === 0 ? j.warm0 : j.warmN, t });
+      d.t = Math.round(t * 1e4) / 1e4;
+      rows.push(d);
+    }
+    out.push({ weapon: j.weapon, seg: j.seg, rows });
+  }
+  return out;
+}"""
+
+
 def unwrap(values: list[float]) -> list[float]:
     out = [values[0]]
     for v in values[1:]:
@@ -180,14 +203,26 @@ def unwrap(values: list[float]) -> list[float]:
     return out
 
 
-def scan_seg(page, weapon: str, seg: int, steps: int) -> dict:
+def rows_scan(page, weapon: str, seg: int, steps: int,
+              warm0: int = 12, warm_n: int = 4) -> list[dict]:
+    """单段逐帧采样（保留给调试；批量路径走 scan_many）。"""
     rows = []
     for i in range(steps + 1):
         t = i / steps
-        d = probe(page, weapon, seg, t, warm=12 if i == 0 else 4, clip_t=t)
+        d = probe(page, weapon, seg, t, warm=warm0 if i == 0 else warm_n, clip_t=t)
         d["t"] = round(t, 4)
         rows.append(d)
+    return rows
 
+
+def scan_many(page, jobs: list[dict]) -> list[dict]:
+    """批量扫：一次 evaluate 跑完所有段，返回已分析好的 scan 列表。"""
+    raw = page.evaluate(BATCH_JS, {"jobs": jobs}) if False else page.evaluate(BATCH_JS, jobs)
+    return [analyze(r["rows"], r["weapon"], r["seg"]) for r in raw]
+
+
+def analyze(rows: list[dict], weapon: str, seg: int) -> dict:
+    """把逐帧原始读数算成扫角 / 仰角 / 分离角 / 关键帧下标（纯 Python，可单测）。"""
     # v9s.28：双持「两把剑是否真的张开」= 两条刃身在水平面内相对**角色朝向**的夹角。
     # 只看各自 yaw 不够 —— 两把剑可以一起指左前方，那也是「没展开」。
     def rel(y, f):
@@ -248,6 +283,11 @@ def scan_seg(page, weapon: str, seg: int, steps: int) -> dict:
         "iSpin": i_spin,
         "iPitch": i_pitch,
     }
+
+
+def scan_seg(page, weapon: str, seg: int, steps: int,
+             warm0: int = 12, warm_n: int = 4) -> dict:
+    return analyze(rows_scan(page, weapon, seg, steps, warm0, warm_n), weapon, seg)
 
 
 # ---------------------------------------------------------------- 截图标注
@@ -383,10 +423,18 @@ def hide_overlay(page) -> None:
 # ---------------------------------------------------------------- 页面启动
 
 
-def launch(headed: bool = False):
+# v9s.34：给每次启动打一个唯一 user-data-dir，收工时按它精确杀进程（见 shutdown）
+_LAUNCH_MARKERS: list[str] = []
+
+
+def launch(headed: bool = False, width: int = 1280, height: int = 800):
     from playwright.sync_api import sync_playwright
 
     pw = sync_playwright().start()
+    # 不能直接传 --user-data-dir（Playwright 会拒绝），用一个独一无二的 UA 当进程标记：
+    # 它会原样出现在 chromium 的命令行里，pkill -f 可以精确匹配到这一次启动的进程。
+    marker = f"cliplab-{os.getpid()}-{len(_LAUNCH_MARKERS)}"
+    _LAUNCH_MARKERS.append(marker)
     browser = pw.chromium.launch(
         headless=not headed,
         executable_path=os.environ.get("CLIP_LAB_CHROMIUM") or None,
@@ -396,13 +444,48 @@ def launch(headed: bool = False):
             "--enable-unsafe-swiftshader",
             "--use-gl=angle",
             "--use-angle=swiftshader",
+            f"--user-agent={marker}",
         ],
     )
-    page = browser.new_page(viewport={"width": 1280, "height": 800}, device_scale_factor=1)
+    page = browser.new_page(viewport={"width": width, "height": height}, device_scale_factor=1)
     errors: list[str] = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.on("console", lambda m: errors.append("console.error: " + m.text) if m.type == "error" else None)
     return pw, browser, page, errors
+
+
+def shutdown(pw, browser, budget: float = 3.0) -> None:
+    """v9s.34：收工不再等 Playwright 的优雅关闭。
+
+    软件渲染（swiftshader）下 `browser.close()` / `pw.stop()` 都会卡在一个 **30s** 的超时上
+    等渲染器放手 —— 实测九段全量 38s 里 30s 花在这里，真正干活只有 8s。
+    现在按启动时打的 `--user-data-dir` 标记精确杀掉浏览器进程（毫秒级），
+    再把 `pw.stop()` 丢到守护线程里收尾；杀不掉也不会阻塞退出。
+    """
+    import signal
+    import subprocess
+    import threading
+
+    for marker in list(_LAUNCH_MARKERS):
+        try:
+            subprocess.run(["pkill", "-9", "-f", marker], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    _LAUNCH_MARKERS.clear()
+
+    def _stop() -> None:
+        try:
+            pw.stop()
+        except Exception:
+            pass
+
+    th = threading.Thread(target=_stop, daemon=True)
+    th.start()
+    th.join(budget)
+    # 注意：这里**不要**再调 browser.close() —— 浏览器已被杀掉后它会永久阻塞，
+    # 之前就因此把 8s 的检查拖成 5 分钟。
+    del browser, signal
 
 
 def open_game(page, url: str) -> None:
@@ -570,12 +653,12 @@ def version_of() -> str:
         return "?"
 
 
-def run_scans(page, weapons: list[str], segs_map: dict[str, list[int]], steps: int) -> list[dict]:
-    scans = []
-    for w in weapons:
-        for seg in segs_map[w]:
-            scans.append(scan_seg(page, w, seg, steps))
-    return scans
+def run_scans(page, weapons: list[str], segs_map: dict[str, list[int]], steps: int,
+              warm0: int = 12, warm_n: int = 2) -> list[dict]:
+    """批量扫多段：一次 evaluate 跑完，IPC 从「每帧一次」降到「每批一次」。"""
+    jobs = [{"weapon": w, "seg": seg, "steps": steps, "warm0": warm0, "warmN": warm_n}
+            for w in weapons for seg in segs_map[w]]
+    return scan_many(page, jobs)
 
 
 def attach_shots(page, out_dir: Path, scan: dict, keyframes: bool) -> list[tuple[str, str]]:
@@ -636,7 +719,8 @@ def cmd_scan(args) -> int:
         pw, browser, page, errors = launch(args.headed)
         try:
             open_game(page, srv.url)
-            scan = scan_seg(page, args.weapon, args.seg, args.steps)
+            scan = run_scans(page, [args.weapon], {args.weapon: [args.seg]},
+                             args.steps, args.warm0, args.warm_n)[0]
             scan["clip"] = combo_name(page, args.weapon, args.seg)
             ok, notes = judge(scan)
             scan["judge"] = (ok, notes)
@@ -668,8 +752,10 @@ def cmd_scan(args) -> int:
                 print(f"  页面错误 {errors[:3]}")
             return 0 if ok else 1
         finally:
-            browser.close()
-            pw.stop()
+            _tc = time.time()
+            shutdown(pw, browser)
+            if os.environ.get("CLIP_LAB_TIMING"):
+                print(f"  （清理 {time.time() - _tc:.1f}s）")
 
 
 def cmd_shot(args) -> int:
@@ -701,23 +787,34 @@ def cmd_shot(args) -> int:
                 print(f"页面错误 {errors[:3]}")
             return 0
         finally:
-            browser.close()
-            pw.stop()
+            shutdown(pw, browser)
 
 
 def cmd_check(args) -> int:
     weapons = [w for w in WEAPON_SEGS if not args.weapon or w == args.weapon]
+    t_start = time.time()
+    t_launch = t_open = 0.0
     with StaticServer() as srv:
+        t0 = time.time()
         pw, browser, page, errors = launch(args.headed)
+        t_launch = time.time() - t0
         try:
+            t0 = time.time()
             open_game(page, srv.url)
+            t_open = time.time() - t0
             out_dir = OUT_ROOT / f"check-{time.strftime('%m%d-%H%M%S')}"
             out_dir.mkdir(parents=True, exist_ok=True)
 
             scans = []
+            # v9s.34：先一次 evaluate 批量扫完，再逐段判定 / 截图（判定要保持顺序）
+            _t0 = time.time()
+            _batch = {(x["weapon"], x["seg"]): x
+                      for x in run_scans(page, weapons, WEAPON_SEGS, args.steps,
+                                         args.warm0, args.warm_n)}
+            _scan_s = time.time() - _t0
             for w in weapons:
                 for seg in WEAPON_SEGS[w]:
-                    s = scan_seg(page, w, seg, args.steps)
+                    s = _batch[(w, seg)]
                     s["clip"] = combo_name(page, w, seg)
                     ok, notes = judge(s)
                     s["judge"] = (ok, notes)
@@ -738,6 +835,11 @@ def cmd_check(args) -> int:
             (out_dir / "report.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             md = write_report(out_dir, payload)
 
+            # v9s.34：耗时拆开打印 —— 优化前这里是「一个总数」，看不出瓶颈在扫描还是截图
+            print(f"  （{len(scans)} 段 × {args.steps} 步：扫描 {_scan_s:.1f}s / "
+                  f"启动 {t_launch:.1f}s / 加载 {t_open:.1f}s / 截图 "
+                  f"{'开' if args.shots else '关'} / 预热 {args.warm0}+{args.warm_n}）")
+            print(f"  （总 {time.time() - t_start:.1f}s，含清理）")
             failed = [s for s in scans if not s["judge"][0]]
             print()
             print(f"{'全部通过' if not failed else f'{len(failed)} 段未过'}  报告 {md}")
@@ -745,8 +847,10 @@ def cmd_check(args) -> int:
                 print(f"页面错误 {errors[:3]}")
             return 0 if not failed and not errors else 1
         finally:
-            browser.close()
-            pw.stop()
+            _tc = time.time()
+            shutdown(pw, browser)
+            if os.environ.get("CLIP_LAB_TIMING"):
+                print(f"  （清理 {time.time() - _tc:.1f}s）")
 
 
 def cmd_combo(args) -> int:
@@ -794,16 +898,21 @@ def cmd_combo(args) -> int:
                     d0, d1 = ends[i]
                     nxt = ends[i + 1][0] if i + 1 < len(segs) else None
                     link = None
+                    body_link = None
                     if nxt:
                         y1 = rel(d1["yaw"], d1["face"])
                         y2 = rel(nxt["yaw"], nxt["face"])
                         link = abs((y1 - y2 + 540.0) % 360.0 - 180.0)
+                        # v9s.34：把「身体朝向」和「刃身朝向」拆开看。
+                        # 身体的连续性才是玩家读到的「动作接上了没有」；刃身那条天然很大，
+                        # 因为段首的 strike 曲线 ≈ 0，姿态按 strike 淡入，剑必然回到接近中位。
+                        body_link = abs((d1["face"] - nxt["face"] + 540.0) % 360.0 - 180.0)
                     dm = mids[i]
                     sep = None
                     if dm.get("yaw") is not None and dm.get("offYaw") is not None:
                         sep = abs((rel(dm["yaw"], dm["face"]) - rel(dm["offYaw"], dm["face"]) + 540.0) % 360.0 - 180.0)
                     rows.append({
-                        "weapon": w, "seg": seg, "link": link, "sep": sep,
+                        "weapon": w, "seg": seg, "link": link, "bodyLink": body_link, "sep": sep,
                         "clip": combo_name(page, w, seg),
                         "endYaw": rel(d1["yaw"], d1["face"]) if d1.get("yaw") is not None else None,
                         "startYaw": rel(d0["yaw"], d0["face"]) if d0.get("yaw") is not None else None,
@@ -843,25 +952,33 @@ def cmd_combo(args) -> int:
             md.append("")
             md.append("## 1. 锚点衔接（上段收势 → 下段起手）")
             md.append("")
-            md.append("| 武器 | 段 | 剪辑 | 上段末刃身 | 衔接跳变 | 结论 |")
-            md.append("|---|---|---|---|---|---|")
+            md.append("| 武器 | 段 | 剪辑 | 上段末刃身 | 刃身跳变 | 身体跳变 | 结论 |")
+            md.append("|---|---|---|---|---|---|---|")
             for r in rows:
                 if r["link"] is None:
                     continue
                 ok = r["link"] <= LINK_WARN
                 if r["link"] > LINK_FAIL:
                     bad += 1
+                bl = r.get("bodyLink")
+                bl_txt = f"{bl:.0f}°" if bl is not None else "—"
+                tag = "✅" if ok else ("❌ >130°" if r["link"] > LINK_FAIL else "⚠️ >70°")
                 md.append(
                     f"| {WEAPON_LABEL.get(r['weapon'], r['weapon'])} | {r['seg']} | `{r['clip']}` | "
-                    f"{r['endYaw']:+.0f}° | **{r['link']:.0f}°** | "
-                    f"{'✅' if ok else ('❌ >90°' if r['link'] > LINK_FAIL else '⚠️ >55°')} |"
+                    f"{r['endYaw']:+.0f}° | **{r['link']:.0f}°** | {bl_txt} | {tag} |"
                 )
             md.append("")
-            md.append("> 跳变 = 上段「最早可取消时刻」的刃身朝向 vs 下段起手朝向。"
+            md.append("> **刃身跳变** = 上段「最早可取消时刻」的刃身朝向 vs 下段起手朝向，"
                       "≤70° 时 `segBlend`（默认 0.08s）够用；**>130° 会看成闪一下**。"
-                      "注意这里天然为正：段首幅度由 `attackBlend` 淡入、接近中位，"
-                      "而段末是满幅，两者不可能为零。想让这条线变好看，"
-                      "要么把段首姿态往「上一段收势方向」写，要么缩短 `cancelWindow` 之后的收势。")
+                      "这条天然偏大：段首姿态按 `strike` 曲线淡入（t=0 时 ≈0），剑必然回到接近中位，"
+                      "而段末是满幅 —— 所以它衡量的其实是「淡入过程中的位移量」，不是数据错误。")
+            md.append(">")
+            md.append("> **身体跳变** 才是「动作有没有接上」的直接读数："
+                      "上段末 `bodyYaw` vs 下段起 `bodyYaw`。三连击若在十级以内，"
+                      "说明躯干是连续转过去的，刃身那条大数字只是淡入造成的视觉过渡。")
+            md.append(">")
+            md.append("> 想让刃身那条也变小：把段首姿态往「上一段收势方向」写，"
+                      "或缩短 `cancelWindow` 之后的收势（让可取消时剑还没收那么远）。")
             md.append("")
 
             md.append("## 2. 节奏配比（前摇 / 挥击 / 收势）")
@@ -920,8 +1037,7 @@ def cmd_combo(args) -> int:
             # 连击衔接是艺术判断，工具只给数值不做拦截；只有页面报错才非零退出。
             return 0 if not errors else 1
         finally:
-            browser.close()
-            pw.stop()
+            shutdown(pw, browser)
 
 
 def cmd_selftest(args) -> int:
@@ -962,6 +1078,10 @@ def cmd_selftest(args) -> int:
 
 
 def main() -> int:
+    import atexit
+    if os.environ.get("CLIP_LAB_TIMING"):
+        _t0 = time.time()
+        atexit.register(lambda: print(f"  （进程退出 {time.time() - _t0:.1f}s）"))
     # Linux 上没有可用 X 时，Chromium 的 WebGL 会静默起不来（页面白屏、harness 不存在）。
     # 这里自动套一层 xvfb-run，调用方不用记这个坑。
     if (
@@ -982,6 +1102,9 @@ def main() -> int:
     p_scan.add_argument("--weapon", required=True, choices=list(WEAPON_LABEL))
     p_scan.add_argument("--seg", type=int, required=True, choices=[1, 2, 3])
     p_scan.add_argument("--steps", type=int, default=48)
+    p_scan.add_argument("--warm0", type=int, default=12, help="每段首帧预热渲染次数")
+    p_scan.add_argument("--warm-n", type=int, default=2, dest="warm_n",
+                        help="后续帧预热次数（默认 2；实测与 4 的差 <1°，但快 1.3 倍）")
     p_scan.add_argument("--shots", action="store_true", help="同时出关键帧截图")
     p_scan.set_defaults(func=cmd_scan)
 
@@ -996,7 +1119,11 @@ def main() -> int:
     p_check = sub.add_parser("check", help="跑全部段的验收规则")
     p_check.add_argument("--weapon", choices=list(WEAPON_LABEL))
     p_check.add_argument("--steps", type=int, default=48)
-    p_check.add_argument("--shots", action="store_true", default=True)
+    p_check.add_argument("--warm0", type=int, default=12, help="每段首帧预热渲染次数")
+    p_check.add_argument("--warm-n", type=int, default=2, dest="warm_n",
+                         help="后续帧预热次数（默认 2；实测与 4 的差 <1°，但快 1.3 倍）")
+    p_check.add_argument("--shots", action="store_true", default=False,
+                         help="同时出关键帧截图（软件渲染下每张约 3s，默认关）")
     p_check.set_defaults(func=cmd_check)
 
     p_combo = sub.add_parser("combo", help="连击结构检查（锚点衔接 / 节奏 / 平衡）")
@@ -1007,7 +1134,11 @@ def main() -> int:
     p_self.set_defaults(func=cmd_selftest)
 
     args = ap.parse_args()
-    return args.func(args)
+    code = args.func(args)
+    # v9s.34：守护线程 / 已杀掉的浏览器可能拖着解释器不退出，这里直接硬退（报告已落盘）
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
 
 
 if __name__ == "__main__":

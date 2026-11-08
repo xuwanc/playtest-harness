@@ -2202,6 +2202,13 @@ export type ViewConfig = {
   hitstop: HitstopViewConfig;
   /** v9s.33：动态平衡量化 / 自动配重（纯表现，只读骨架，不写 Core） */
   balance?: BalanceViewConfig;
+  /**
+   * v9s.34：定步长渲染插值（纯表现层驱动策略）。
+   *
+   * Core 固定 60Hz 步进、渲染按刷新率跑，120Hz 屏幕与慢放下会出现「同一姿态连续渲染多帧」的抖动；
+   * 开启后在两个模拟步之间按 `alpha` 插值姿态输入。关掉即精确回到旧行为（A/B 用）。
+   */
+  renderInterp?: { enabled: boolean };
   colors: ColorConfig;
   dummies: DummyViewConfig;
 };
@@ -2225,6 +2232,14 @@ export type BalanceViewConfig = {
   maxShift: number;
   /** 修正的平滑速率（1/s） */
   counterRate: number;
+  /**
+   * v9s.34：前馈预测时长（秒）。用「侧向速度 × 该时长」把偏移外推，
+   * 抵消闭环（读脚位 → 挪骨盆 → 下帧脚位变）的相位滞后。
+   * 0 = 精确回到 v9s.33 的纯反馈行为（A/B 用）。
+   */
+  predLead?: number;
+  /** v9s.34：负载加权的速率倍率上限 —— 偏得越多、修正越急，避免「慢慢挪」追不上 */
+  counterBoost?: number;
 };
 
 /**

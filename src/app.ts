@@ -1,4 +1,6 @@
 import { createClock } from './adapters/clock';
+import { applyPose, blendPose, canInterpolate, capturePose } from './adapters/pose-interp';
+import type { PoseSnapshot } from './adapters/pose-interp';
 import { createInput } from './adapters/input';
 import type { InputFrame } from './adapters/input';
 import { clampZoom } from './adapters/pinch';
@@ -236,6 +238,15 @@ export function startApp(): void {
     balanceDebug: () => view.balanceDebug(),
     // v9s.33：脊柱分段读数（腰 / 胸 / 颈）
     spineDebug: () => view.spineDebug(),
+    // v9s.34：渲染插值读数（alpha = 累加器剩余 / fixedDt；applied = 本帧真的插值了）
+    interpDebug: () => ({ alpha: interpAlpha, applied: interpApplied, enabled: renderInterp }),
+    /** v9s.34：渲染位姿（插值后的画面位置），验收「画面是否连续」读这个 */
+    renderPose: () => view.renderPose(),
+    /** v9s.34：A/B 开关（验收「插值开 / 关」的画面差别，不用改 config 重启） */
+    setRenderInterp: (on: boolean) => {
+      renderInterp = !!on;
+      return renderInterp;
+    },
     // v9s.32：挥空时刀光增亮的读数（证明「不震屏也有反馈」）
     trailDebug: () => view.trailDebug(),
     // v9s.26：刃身两端世界坐标（验收横扫仰角，避免被斜俯视截图误导）
@@ -304,6 +315,33 @@ export function startApp(): void {
   let last = performance.now();
   let fps = 60;
   let lastDiagTick = 0;
+  // v9s.34：定步长渲染插值 —— 只保存「驱动骨架的连续量」，不含 World 本体
+  // v9s.34：渲染插值总闸（config.view.renderInterp.enabled，可热关做 A/B）
+  let renderInterp = VIEW_CONFIG.renderInterp?.enabled ?? true;
+  let poseCur: PoseSnapshot = capturePose(world);
+  let posePrev: PoseSnapshot | null = null;
+  let interpAlpha = 1;
+  let interpApplied = false;
+
+  /**
+   * v9s.34：给渲染层挑一个「世界」——插值开且两个快照可插值时，返回套了插值姿态的替身；
+   * 否则原样返回（暂停 / 换武器 / 跨段 / 离散事件都是 snap）。
+   */
+  function pickRenderWorld(frameSeconds: number): typeof world {
+    const on = renderInterp && !debug.paused && debug.timeScale > 0;
+    interpApplied = false;
+    if (!on || !posePrev || !canInterpolate(posePrev, poseCur)) {
+      interpAlpha = 1;
+      return world;
+    }
+    const a = clock.alpha;
+    interpAlpha = a;
+    // alpha ≈ 1 时插值结果与当前步几乎相同，省掉一次对象分配
+    if (a >= 0.999) return world;
+    interpApplied = true;
+    void frameSeconds;
+    return applyPose(world, blendPose(posePrev, poseCur, a));
+  }
 
   function frame(now: number): void {
     const dt = Math.min((now - last) / 1000, 0.1);
@@ -332,6 +370,9 @@ export function startApp(): void {
     const steps = clock.frame(dt, lastFrame.intents, debug.timeScale, debug.paused, () => {
       const list = world.events;
       for (let i = 0; i < list.length; i++) recorder.event(list[i], world.time);
+      // v9s.34：每个固定步结束后滚一次姿态快照，掉帧补算多步时 prev 才是「上一步」
+      posePrev = poseCur;
+      poseCur = capturePose(world);
     });
     if (steps > 0) pendingDummyClick = 0;
     recorder.sample(world, lastFrame, dt * 1000, steps);
@@ -342,7 +383,7 @@ export function startApp(): void {
     }
 
     syncWeaponButtons(world.combat.weapon);
-    if (!clipHold) view.render(world, dt);
+    if (!clipHold) view.render(pickRenderWorld(dt), dt);
     lab.tick();
     motionDebug.update(world, lastFrame, view.getGroundBasis());
     const diag = view.diagnostics();

@@ -11,6 +11,12 @@ export type ClockDriver = {
   singleStep(intents: Intents): void;
   reset(): void;
   readonly accumulator: number;
+  /**
+   * v9s.34：渲染插值系数 `alpha = 累加器剩余 / fixedDt`，0..1。
+   * 0 = 刚跨过一步（画面取上一步），1 = 即将跨步（画面取当前步）。
+   * 暂停 / 时间缩放为 0 时返回 1（画面就是当前步，不做插值）。
+   */
+  readonly alpha: number;
 };
 
 /**
@@ -63,6 +69,11 @@ export function createClock(world: World): ClockDriver {
     },
     get accumulator() {
       return acc;
+    },
+    get alpha() {
+      const dt = world.config.fixedDt;
+      if (!(dt > 0)) return 1;
+      return Math.max(0, Math.min(1, acc / dt));
     },
   };
 }

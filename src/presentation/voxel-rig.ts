@@ -21,7 +21,7 @@ import {
 } from './program-anim';
 import type { GaitDrive } from './program-anim';
 import { emptyHurtPose, solveHurtPose } from './hurt-pose';
-import { solveBalance } from './balance';
+import { counterRateFor, feedForwardLateral, solveBalance } from './balance';
 import type { BalancePoint, BalanceResult } from './balance';
 import type { HurtPose } from './hurt-pose';
 import { solveInertiaPose } from './inertia';
@@ -136,11 +136,17 @@ export type VoxelRig = {
    *  v9o 追加 chestYaw / speed；v9q 追加 gaitSpeed（= velocity + 击退冲量，步态实际驱动）；
    *  v9r 追加 stopDip（骨盆惯性下沉量，验收「骨盆跟着沉、脚不跟着沉」）。 */
   /** v9s.33：动态平衡读数（COM / 捕获点 / 支撑余量 / 综合分）；未开启时为 null */
-  balanceDebug(): (BalanceResult & { shift?: number; latDeficit?: number }) | null;
+  balanceDebug(): (BalanceResult & { shift?: number; latDeficit?: number; lateralFf?: number }) | null;
   /** v9s.33：脊柱分段读数（腰 / 胸 / 颈）；未开启时为 null */
   spineDebug(): {
-    enabled: boolean; waistYaw: number; chestYaw: number; totalYaw: number; neckPitch: number;
+    enabled: boolean; waistYaw: number; chestYaw: number; totalYaw: number;
+    totalPitch: number; totalLean: number; neckPitch: number; leak: number;
   } | null;
+  /**
+   * v9s.34：躯干**总角**（腰 + 胸）。
+   * 脊柱分段后 `upper.rotation` 只剩腰段（42% 在 `chest`），需要总角一律走这里。
+   */
+  torsoTotal(): { yaw: number; pitch: number; lean: number };
   gaitDebug(): {
     stopT: number; hipYaw: number; chestYaw: number; speed: number; gaitSpeed: number;
     /** v9p：停步惯性脉冲的前脚前伸量（rad）/ 身体前移量（m）/ 骨盆下沉量（m），未接管时为 0 */
@@ -1576,6 +1582,13 @@ export function createVoxelRig(
    * 颈段只吃俯仰：头相对躯干反向转 `neck × 总俯仰`，身体压下去时视线仍然平。
    * 扭转留给 gaze（headYaw），两套来源不打架。
    */
+  /** 拆分前的躯干总角：帧尾校验用（null = 本帧没拆分 / 未启用脊柱分段） */
+  let intendedTorso: { x: number; y: number; z: number } | null = null;
+  /** 帧尾校验的残差：> 0 说明有代码在 splitSpine 之后又把 upper 当总角写 */
+  let spineLeak = 0;
+  /** v9s.34：前馈后的侧向偏移（与纯反馈的差值就是前馈贡献） */
+  let lastLateralFf = 0;
+
   function splitSpine(): void {
     if (!spineOn) return;
     const cfg = spineCfg!;
@@ -1591,11 +1604,28 @@ export function createVoxelRig(
     chest.rotation.set(tx * kc, ty * kc, tz * kc);
     const neck = clamp(cfg.neck ?? 0, 0, 1);
     if (neck > 0) headPivot.rotation.x -= tx * neck;
+    // 记下拆分前的总角，帧尾用它校验「有没有人在 split 之后又把 upper 当总角写」
+    intendedTorso = { x: tx, y: ty, z: tz };
+  }
+
+  /**
+   * v9s.34：本帧躯干「总」角（腰 + 胸）。
+   *
+   * **所有需要总角的代码都必须走这里，不要直接读 `upper.rotation`** ——
+   * `splitSpine()` 之后 `upper` 只剩腰段（42% 被拆到 `chest`），
+   * 直接读会静默偏小且不报错（v9s.33 实际踩了 5 处）。
+   */
+  function torsoTotal(): { yaw: number; pitch: number; lean: number } {
+    return {
+      yaw: upper.rotation.y + (spineOn ? chest.rotation.y : 0),
+      pitch: upper.rotation.x + (spineOn ? chest.rotation.x : 0),
+      lean: upper.rotation.z + (spineOn ? chest.rotation.z : 0),
+    };
   }
 
   /** 本帧躯干「总」偏航：脊柱拆分后 upper 只剩腰段，读总角必须把胸段加回来。 */
   function torsoYaw(): number {
-    return upper.rotation.y + (spineOn ? chest.rotation.y : 0);
+    return torsoTotal().yaw;
   }
 
   /**
@@ -1683,19 +1713,28 @@ export function createVoxelRig(
     const dx = res.xcomX - res.centerX;
     const dz = res.xcomZ - res.centerZ;
     const lateral = dx * rightX + dz * rightZ;       // + = 质心偏向身体右侧
+    // v9s.34：闭环有相位滞后（读脚位 → 挪骨盆 → 下帧脚位再变），
+    // 用侧向速度前馈把「lead 秒后的偏移」提前算进来；lead = 0 精确回到纯反馈。
+    const latSpeed = vx * rightX + vz * rightZ;
+    // 双脚离地时支撑面退化（xcom / center 都是 0），此时的外推没有意义，直接归零
+    const lateralFf = res.grounded
+      ? feedForwardLateral(lateral, latSpeed, balanceCfg.predLead ?? 0)
+      : 0;
+    lastLateralFf = lateralFf;
     // 从 45% 半宽就开始轻微配重（不是等到真的踩到边缘才动）：
     // 手臂能贡献的质心位移只有几毫米，早一点、小一点，才不会在边缘突然一抽。
-    // 从 45% 半宽就开始轻微修正（不是等到真的踩到边缘才动）。
-    const latDeficit = Math.abs(lateral) - 0.45 * res.halfX;
+    const latDeficit = Math.abs(lateralFf) - 0.45 * res.halfX;
     lastLatDeficit = latDeficit;
     let target = 0;
     if (latDeficit > 0.002 && res.grounded) {
       // 上半身约占体重 60%，平移骨盆 x 米 ≈ 质心移动 0.6x 米；
       // 再乘 0.7 留一点余量，避免「修正过头」反向震荡。
       const gain = 0.7 / 0.6;
-      target = -Math.sign(lateral) * Math.min(Math.max(0.005, balanceCfg.maxShift ?? 0.045), (latDeficit + 0.002) * gain);
+      target = -Math.sign(lateralFf) * Math.min(Math.max(0.005, balanceCfg.maxShift ?? 0.045), (latDeficit + 0.002) * gain);
     }
-    const rate = Math.max(0.1, balanceCfg.counterRate);
+    // 负载加权：偏得越多越急，避免「慢慢挪」追不上快速横移
+    const load = Math.abs(lateralFf) / Math.max(1e-4, res.halfX);
+    const rate = Math.max(0.1, counterRateFor(balanceCfg.counterRate, load, balanceCfg.counterBoost ?? 0));
     balanceShift += (target - balanceShift) * (1 - Math.exp(-rate * dt));
   }
 
@@ -2602,6 +2641,20 @@ export function createVoxelRig(
 
       // 5) v9s.33：平衡读数放在最后 —— 质点位置要读 IK 之后的真实脚位 / 手位。
       updateBalance(c, dt);
+
+      // 6) v9s.34：脊柱拆分一致性守卫。
+      //    splitSpine() 之后任何一层再把 `upper` 当总角写（少 42%）都会被这里抓到：
+      //    残差写进 spineDebug().leak，测试里断言为 0，线上调试面板也能看到。
+      if (spineOn && intendedTorso) {
+        const t = torsoTotal();
+        spineLeak = Math.max(
+          Math.abs(t.pitch - intendedTorso.x),
+          Math.abs(t.yaw - intendedTorso.y),
+          Math.abs(t.lean - intendedTorso.z),
+        );
+      } else {
+        spineLeak = 0;
+      }
     },
     lean(): { forward: number; side: number } {
       return { forward: leanForward, side: leanSide };
@@ -2701,19 +2754,27 @@ export function createVoxelRig(
     hipYaw(): number {
       return hipYaw;
     },
+    torsoTotal() {
+      return torsoTotal();
+    },
     spineDebug() {
       if (!spineOn) return null;
+      const t = torsoTotal();
       return {
         enabled: true,
         waistYaw: upper.rotation.y,
         chestYaw: chest.rotation.y,
-        totalYaw: upper.rotation.y + chest.rotation.y,
+        totalYaw: t.yaw,
+        totalPitch: t.pitch,
+        totalLean: t.lean,
         neckPitch: headPivot.rotation.x,
+        /** v9s.34：帧尾一致性残差（应恒为 0；非 0 = 有人在 split 之后把 upper 当总角写） */
+        leak: spineLeak,
       };
     },
     balanceDebug() {
       return lastBalance
-        ? { ...lastBalance, shift: balanceShift, latDeficit: lastLatDeficit }
+        ? { ...lastBalance, shift: balanceShift, latDeficit: lastLatDeficit, lateralFf: lastLateralFf }
         : null;
     },
     gaitDebug() {

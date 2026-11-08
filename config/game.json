@@ -1814,7 +1814,12 @@
       "gravity": 9.81,
       "autoCounter": true,
       "maxShift": 0.045,
-      "counterRate": 8
+      "counterRate": 8,
+      "predLead": 0.12,
+      "counterBoost": 1.6
+    },
+    "renderInterp": {
+      "enabled": true
     }
   }
 }

@@ -135,3 +135,39 @@ export function solveBalance(
     overX, overZ, grounded: true,
   };
 }
+
+/**
+ * v9s.34 · 前馈外推：把「当前侧向偏移」按侧向速度外推 `lead` 秒。
+ *
+ * 为什么要它：自动修正是个闭环 —— 读 IK 后的脚位 → 算偏移 → 挪骨盆 → 下一帧脚位又变。
+ * `counterRate = 8`（τ≈125ms）是按「不抖」调的，所以快速横移 / 被击退时，
+ * 修正永远慢半拍，读数会滞后 1~2 帧。
+ *
+ * 前馈不是「更用力」，而是「更早」：用速度估计 `lead` 秒后的偏移量，
+ * 与当前偏移取**绝对值更大**的那个作为控制目标。静止时两者相同，
+ * 纯反馈行为完全不变 —— `lead = 0` 时精确退化。
+ */
+export function feedForwardLateral(lateral: number, lateralSpeed: number, lead: number): number {
+  if (!Number.isFinite(lateral)) return 0;
+  if (!Number.isFinite(lateralSpeed) || !(lead > 0)) return lateral;
+  const pred = lateral + lateralSpeed * lead;
+  // 预测会穿过中心（符号翻转）：说明人正在往回收，外推值没有意义 ——
+  // 直接给 0（不再往外压），而不是反号去推另一侧，否则骨盆会在中心两侧来回抽。
+  if (lateral !== 0 && Math.sign(pred) !== Math.sign(lateral)) return 0;
+  // 只放大「正在往外出」的情况：往里倒（速度指向中心）时提前收力会显得抽搐
+  return Math.abs(pred) > Math.abs(lateral) ? pred : lateral;
+}
+
+/**
+ * v9s.34 · 负载加权修正速率。
+ *
+ * `load` = 偏移量 / 支撑半宽（1 = 正好踩在边缘）。
+ * 偏得越多，允许的修正越快 —— 慢挪几毫米够用，真要摔了就得一步到位。
+ * `boost = 0` 时精确回到常数速率（v9s.33 行为）。
+ */
+export function counterRateFor(base: number, load: number, boost: number): number {
+  const b = Math.max(0, base);
+  if (!(boost > 0)) return b;
+  const l = clamp(Number.isFinite(load) ? load : 0, 0, 2);
+  return b * (1 + boost * l);
+}

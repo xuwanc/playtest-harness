@@ -127,6 +127,11 @@ export type SceneView = {
     right: { base: { x: number; y: number; z: number }; tip: { x: number; y: number; z: number } } | null;
     left: { base: { x: number; y: number; z: number }; tip: { x: number; y: number; z: number } } | null;
   };
+  /**
+   * v9s.34：**渲染位姿**（不是 Core 状态）。
+   * 定步长插值下两者会差最多一个模拟步，验收「画面是否连续」必须读这个而不是 `world.character`。
+   */
+  renderPose(): { x: number; y: number; z: number; bodyYaw: number };
   /** clip 工具：世界坐标 → 页面像素。截图标注刃身 / 扫角用，纯只读。 */
   projectPoint(x: number, y: number, z: number): { x: number; y: number };
   /** v9s.28：clip 工具专用，把剪辑时间轴钉到 t（null = 恢复 progress→swingCurve 映射）。 */
@@ -689,6 +694,14 @@ export function createSceneView(
     },
     bladesWorld() {
       return voxel.bladesWorld();
+    },
+    renderPose() {
+      return {
+        x: playerRoot.position.x,
+        y: playerRoot.position.y,
+        z: playerRoot.position.z,
+        bodyYaw: playerRoot.rotation.y,
+      };
     },
     projectPoint(x, y, z) {
       return projectToScreen(x, y, z);

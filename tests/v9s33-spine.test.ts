@@ -114,4 +114,27 @@ describe('v9s.33 脊柱分段', () => {
     expect(Math.hypot(sa.x - sb.x, sa.y - sb.y, sa.z - sb.z)).toBeLessThan(0.01);
     a.rig.dispose(); b.rig.dispose();
   });
+
+  it('v9s.34：帧尾一致性守卫 —— 拆分后没人再写 `upper`，leak 恒为 0', () => {
+    const { w, rig } = mkRig(true);
+    const phases = [
+      intent(),
+      intent({ moveZ: 1 }),
+      intent({ moveX: 1 }),
+      intent({ attackHeld: true }),
+    ];
+    for (const it of phases) {
+      for (let i = 0; i < 25; i++) {
+        run(w, 1, it);
+        rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt, false, w.time);
+        // 残差只允许浮点噪声；一旦有人把 upper 当总角再写一次，会立刻变成 1e-2 量级
+        expect(Math.abs(rig.spineDebug()!.leak)).toBeLessThan(1e-9);
+      }
+    }
+    // 总角仍然等于「腰 + 胸」，且与拆分前记下的总角一致
+    const d = rig.spineDebug()!;
+    expect(d.totalYaw).toBeCloseTo(d.waistYaw + d.chestYaw, 12);
+    expect(rig.torsoTotal().yaw).toBeCloseTo(d.totalYaw, 12);
+    rig.dispose();
+  });
 });
