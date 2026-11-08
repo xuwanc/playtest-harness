@@ -2,7 +2,6 @@
 node_modules/
 
 # 说明：dist/ 有意保留入库，供 GitHub Pages 直接部署
-# 说明：preview-*.png 有意保留入库，README 正文引用了这些截图
 
 # 本地环境与密钥
 .env
@@ -34,5 +33,11 @@ coverage/
 __pycache__/
 *.pyc
 
-# 本轮验收截图（本地证据，不入库；历史 preview-*.png 例外，已长期跟踪）
-shots*/
+# 截图 / 录屏（本地证据，一律不入库）
+# 统一放 shots/<批次>/：legacy（历史 preview-*）、v9s38 / v9s39（每轮验收）、diag（临时诊断）
+/shots/
+# 根目录不再接受零散图片（历史上一度堆了 41 张 preview-*.png）
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp

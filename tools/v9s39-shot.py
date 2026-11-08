@@ -11,7 +11,7 @@ ROOT = Path('/workspace/playtest-harness')
 sys.path.insert(0, str(ROOT / 'tools' / 'clip-lab'))
 import clip_lab as C
 
-OUT = ROOT / 'shots39'
+OUT = ROOT / 'shots' / 'v9s39'
 OUT.mkdir(exist_ok=True)
 
 

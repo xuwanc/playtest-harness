@@ -162,8 +162,8 @@ const groundFxY = (x: number, z: number, fromY: number) =>
 |---|---|---|
 | 地块不透明 | `__harness.fxDebug()` | `boxOpaque: true, boxCount > 0` |
 | 层级单调 | `fxDebug().orders` | `ring(22) < groundFx(30) < trail(40) < slash(44) < projectile(48)` |
-| 高台上的环不埋 | 截图 `../../shots38/02-fx-on-block.png`、`10-swing-on-block.png` | 尘环压在 1.2m 方块顶面 |
-| 平地对照 | 截图 `../../shots38/03-fx-on-ground.png` | 同一套特效高度一致 |
+| 高台上的环不埋 | 截图 `../../shots/v9s38/02-fx-on-block.png`、`10-swing-on-block.png` | 尘环压在 1.2m 方块顶面 |
+| 平地对照 | 截图 `../../shots/v9s38/03-fx-on-ground.png` | 同一套特效高度一致 |
 | 自检进 CI | `npm run smoke` | 16/16 PASS，含上述两条 |
 
 单测：`tests/v9s38-fx-layer.test.ts`（5 例）—— `groundHeightAt` 三例（阶梯 / 墙被忽略 / 无盒回落）
