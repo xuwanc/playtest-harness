@@ -3585,6 +3585,9 @@ B 按住技能2 拖 (40,-32)  v = (-2.97, 2.97)   moveYaw = -45°   facing = 128
 
 ## A. 自动验收（4 条命令，退出码必须为 0）
 
+> **一条命令跑完下面四步（推荐，v9s.35 起）：`npm run verify`** —— 依次 `build`（tsc + vite）→ 全量单测 →
+> `verify:portable` → `smoke`，任一失败即停。分散跑时漏一条就少一层保障。
+
 | 命令 | 验证什么 | 期望 |
 |---|---|---|
 | `npm run build` | TypeScript strict 全量类型检查 + Vite 生产构建 | `tsc --noEmit` 无错误，产出 `dist/` |

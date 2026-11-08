@@ -14,6 +14,7 @@
     "test:watch": "vitest",
     "check:boundary": "node scripts/check-boundary.mjs",
     "verify:portable": "vitest run tests/portable.test.ts && node scripts/check-boundary.mjs",
+    "verify": "npm run build && npm test && npm run verify:portable && npm run smoke",
     "clip:lab": "python3 tools/clip-lab/clip_lab.py",
     "clip:lab:check": "python3 tools/clip-lab/clip_lab.py check",
     "clip:lab:selftest": "python3 tools/clip-lab/clip_lab.py selftest",
