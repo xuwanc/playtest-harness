@@ -1060,7 +1060,7 @@ A/B 判据换成两条更本质的指标（「脚悬空高度」会被收势姿�
 | `test:affected` | ~3~5s | 每批 |
 | `vite build` | ~1.2s | 每批 |
 | clip-lab 九段全量 | **~4m30s** | 每批 |
-| clip-lab 单武器单段 | ~35s | 单点调参 |
+| clip-lab 单武器单段（`scan`） | ~22s | 单点调参 |
 | clip-lab 单武器全段 | ~1m35s | 改一把武器 |
 | 发布 + 线上冒烟（Xvfb + Chromium） | ~45s | 每批 |
 | 线上截图人工对比 | 2~5min | 视改动 |
@@ -1069,7 +1069,8 @@ A/B 判据换成两条更本质的指标（「脚悬空高度」会被收势姿�
 截图对比再 2~5min，占单批总时间的 70% 以上。已落地的对策：
 
 1. 只在**改动涉及挥击剪辑 / 姿态 / 骨架**时跑 clip-lab，改逻辑 / UI 的批次跳过；
-2. 调参时用 `--weapon <id>`（1m35s）或 `--weapon <id> --seg <n>`（35s）代替九段全量；
+2. 调参时用 `check --weapon <id>`（1m35s）或 `scan --weapon <id> --seg <n>`（实测 22s，含启动浏览器）代替九段全量；
+   只看某一段的定格画面用 `shot --weapon <id> --seg <n> --keyframes`；
 3. 测试用 `test:affected`，只有动 Core / 配置 / 测试基建才跑全量（全量也只有 9s，不必过度优化）；
 4. 发布后固定跑同一条冒烟脚本（读 `spineDebug / balanceDebug / gaitDebug / camera.kickCount`），
    把「肉眼确认有没有接上」换成读数，人工只看观感。
