@@ -17,16 +17,19 @@
 | 现象 / 关键词 | 先看哪里 | 符号 | 详细文档 | 验收 |
 |---|---|---|---|---|
 | 特效在某些地块上看不见 / 被地面盖掉 | `presentation/fx-layer.ts`、`presentation/three-scene.ts` | `FX_ORDER`、`setCollidersVisible` | [systems/presentation-fx.md](systems/presentation-fx.md) §1 | `npm run smoke`「地块走不透明通道」 |
-| 贴地特效埋进台阶 / 高台里 | `core/collision.ts`、`three-scene.ts` | `groundHeightAt()`、`groundFxY()` | [systems/presentation-fx.md](systems/presentation-fx.md) §2 | `npm run smoke`「特效层级单调」+ 截图 `shots38/02,03,10` |
+| 贴地特效埋进台阶 / 高台里 | `core/collision.ts`、`three-scene.ts` | `groundHeightAt()`、`groundFxY()` | [systems/presentation-fx.md](systems/presentation-fx.md) §2 | `npm run smoke`「特效层级单调」+ 截图 `shots/v9s38/02,03,10` |
 | 两种特效谁压谁不确定 / 新特效给几号 | `presentation/fx-layer.ts`（唯一来源） | `FX_ORDER`、`setFxOrder()` | 同上 §1.3 / §1.4 | `__harness.fxDebug().orders` |
 | 玩家被打不退 / 想要默认击退 | `config/game.json` → `core.hits.noDamageToPlayer`、`core/hits.ts` | `applyHit` | [decisions/ADR-007](decisions/ADR-007-knockback-default.md) | `npm run smoke`「玩家受击击退默认打开」 |
 | 要三个（或更多）会和玩家一样挥刀的 AI | `core/dummies.ts`、`presentation/fighter-rig.ts` | `createDummies`、`syncFighterCombat`、`createFighterRig` | [systems/dummies-fighters.md](systems/dummies-fighters.md) | `npm run smoke`「三个持械陪练」 |
 | 陪练不挥刀 / 挥刀没姿势 / 贴着玩家不动 | 同上 + `desiredDirection` | `s.mode === 'spar'`、`standoff`、`attackIntervalFor` | 同上「攻击欲望放低」 | `tests/v9s38-fighters.test.ts` |
-| 陪练站在原点 / 画面里只有一个 | `presentation/fighter-rig.ts` | `group.position.set(s.position…)` | 同上「踩过的坑」1 | 截图 `shots38/01` |
+| 陪练站在原点 / 画面里只有一个 | `presentation/fighter-rig.ts` | `group.position.set(s.position…)` | 同上「踩过的坑」1 | 截图 `shots/v9s38/01` |
 | 陪练只会单发一刀 / 想加连击 | `core/dummies.ts` | `attackComboLeft`、`comboTotalFor`、`inComboRound` | [systems/dummies-fighters.md](systems/dummies-fighters.md)「连击」 | `tests/v9s39-fighter-combo.test.ts` |
 | 连击接不上第二段 | 同上 + `desiredDirection` | `COMBO_CHASE`、`comboGap`、`hits.reach` | 同上「连击」四条规则 | `npm run smoke`「陪练一轮打出多段连击」 |
+| 陪练「保持距离」时疯狂碎步 / 磨脚 | `core/dummies.ts` | `strafeGate`、`SPAR_STRAFE`、`RADIAL_GAIN` | [systems/dummies-fighters.md](systems/dummies-fighters.md)「对峙时走走停停」 | `tests/v9s40-standoff-gait.test.ts`、`npm run smoke`「对峙时走走停停」 |
+| 陪练挨打时腿抽风（步频翻倍） | `presentation/fighter-rig.ts` | `cs.velocity` 不叠 knock | 同上「踩过的坑」8 | `__harness.dummyRigDebug(id).gaitSpeed` |
+| 截图放哪 / 能不能入库 | `shots/`（`.gitignore` 已挡） | — | [assets/conventions.md](assets/conventions.md) | `git status` 里不该出现 png |
 | 刀光 / 斩击弧不出现 | `presentation/three-scene.ts` | `weapon-trail.ts`、`FX_ORDER.trail / slash` | [systems/presentation-fx.md](systems/presentation-fx.md) | `__harness.fxDebug()` |
-| 调试面板某项不知道去哪了 | `presentation/debug-panel.ts` | 7 个 `top()` 一级分类 | 本页 §3.4 | 截图 `shots38/07,08` |
+| 调试面板某项不知道去哪了 | `presentation/debug-panel.ts` | 7 个 `top()` 一级分类 | 本页 §3.4 | 截图 `shots/v9s38/07,08` |
 | 攻击卡肉时机 / 卡肉太长 | `core/hits.ts`、`config.combat.weapons.*.hitSweep` | `hitSweep`、`hitstop` 三段式 | [systems/animation-notes-3.md](systems/animation-notes-3.md) | `npm run sweep -- --check`、`npm run smoke` |
 | 动作姿势不对 / 换段跳变 | `presentation/swing-pose.ts`、`config.view.animation.swing.clips` | `PoseClip`、`samplePoseClip`、`blendCombatPose` | [systems/animation.md](systems/animation.md) | `npm run clip:lab:check` |
 | 慢放时一顿一顿 | `presentation/yaw-smooth.ts`、`app.ts` 的插值 | `view.renderInterp`、`interpAlpha` | [systems/animation-notes-2.md](systems/animation-notes-2.md) | `__harness.interpDebug()` |

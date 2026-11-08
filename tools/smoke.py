@@ -271,6 +271,54 @@ def main() -> int:
                 check("陪练一轮打出多段连击（≥3 刀，段号到 3）",
                       combo["segs"] >= 3 and combo["maxSeg"] >= 3, str(combo))
 
+                # ---- v9s.40：对峙时「走走停停」，不是一直绕圈磨脚 ----
+                # 旧行为：死区内每帧都给切线方向 → 玩家站着不动，陪练也 100% 时间在走，
+                # 速度只有 0.6~1.1 m/s（碎步）。现在横移走时间门（strafePeriod / strafeDuty），
+                # 关门后速度归零、停步收相站定。判据两条：移动时间占比、移动时的平均速度。
+                page.evaluate(
+                    "() => {"
+                    "  const h = window.__harness, w = h.world, c = w.character;"
+                    "  const s = w.dummies[w.config.dummies.count + 2];"
+                    "  w.combat.phase = 'idle'; w.combat.phaseTimer = 0; w.combat.comboIndex = 0;"
+                    "  s.mode = 'spar'; s.attackCooldown = 9999;"
+                    "  s.position.x = c.position.x; s.position.z = c.position.z + 2.4;"
+                    "  s.homeX = s.position.x; s.homeZ = s.position.z;"
+                    "  s.velocity.x = 0; s.velocity.z = 0;"
+                    "  window.__driftAnchor = { x: c.position.x, z: c.position.z };"
+                    "  window.__driftProbe = { t0: w.time, frames: 0, moving: 0, sumSpeed: 0,"
+                    "    path: 0, px: s.position.x, pz: s.position.z };"
+                    "  window.__driftTimer = setInterval(() => {"
+                    "    const P = window.__driftProbe;"
+                    "    const a = window.__driftAnchor;"
+                    # 木桩玩家：它动一点，陪练的「纠偏」就会被合法触发，测到的就不是踱步了
+                    "    c.position.x = a.x; c.position.z = a.z;"
+                    "    c.velocity.x = 0; c.velocity.z = 0;"
+                    "    w.playerHurt.knockX = 0; w.playerHurt.knockZ = 0;"
+                    "    const sp = Math.hypot(s.velocity.x, s.velocity.z);"
+                    "    P.frames += 1;"
+                    "    if (sp > 0.15) { P.moving += 1; P.sumSpeed += sp; }"
+                    "    P.path += Math.hypot(s.position.x - P.px, s.position.z - P.pz);"
+                    "    P.px = s.position.x; P.pz = s.position.z;"
+                    "  }, 16);"
+                    "}"
+                )
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__driftProbe.t0 + 4.0",
+                    timeout=90000,
+                )
+                drift = page.evaluate(
+                    "() => {"
+                    "  clearInterval(window.__driftTimer);"
+                    "  const P = window.__driftProbe;"
+                    "  return { frames: P.frames, moving: P.moving,"
+                    "    moveRatio: +(P.moving / Math.max(1, P.frames)).toFixed(2),"
+                    "    avgMoveSpeed: +(P.sumSpeed / Math.max(1, P.moving)).toFixed(2),"
+                    "    path: +P.path.toFixed(2) };"
+                    "}"
+                )
+                check("对峙时走走停停（移动时间 ≤ 60%，不再一直磨脚）", drift["moveRatio"] <= 0.60, str(drift))
+                check("踱步是大步（移动时均速 ≥ 1.2 m/s）", drift["avgMoveSpeed"] >= 1.2, str(drift))
+
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
                       f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}",
                       " 命中 progress", f"{hit_prog:.3f}" if hit_prog is not None else "-")

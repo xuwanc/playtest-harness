@@ -22,11 +22,16 @@ import { createVoxelRig } from './voxel-rig';
  * 外层多套一个 `group` 承担位置 + 身体朝向：`voxel-rig` 自己的 root 会被挥击的
  * 「整体带转 / 整圈旋转」占用（`root.rotation.y = rootTurn`），两者叠加不能共用一个节点。
  */
+/** 陪练步态读数：直接复用主角骨架的 gaitDebug 返回类型，避免两处字段漂移。 */
+export type FighterGaitDebug = ReturnType<ReturnType<typeof createVoxelRig>['gaitDebug']>;
+
 export type FighterRig = {
   group: THREE.Group;
   update(s: DummyState, frameDt: number, coreTime: number): void;
   /** 箭插在陪练身上时挂到最近的身体段（与 dummy-rig 同语义，粒度粗一点但够用）。 */
   boneAtWorld(x: number, y: number, z: number): { node: THREE.Object3D; point: THREE.Vector3 } | null;
+  /** v9s.40：陪练的步态读数（与玩家同一套 gaitDebug），用于验收「对峙时腿是否在抖」。 */
+  debug(): FighterGaitDebug;
   dispose(): void;
 };
 
@@ -86,9 +91,13 @@ export function createFighterRig(cfg: FighterRigConfig): FighterRig {
       cs.position.x = s.position.x;
       cs.position.y = s.position.y;
       cs.position.z = s.position.z;
-      cs.velocity.x = s.velocity.x + s.hurt.knockX;
+      // v9s.40：**不要把击退并进 velocity**。Core 的击退只加到 position，骨架会自己按
+      // `hurt.knockX × gaitCfg.knockGaitScale` 并入步态驱动；这里再叠一次就是双计 ——
+      // 陪练被击中时步频翻倍、腿在原地飞快倒腾（玩家读作「磨脚」），而且停步门控拿到的
+      // 也不是「自主移动速度」。位置仍用 s.position（已含击退位移）。
+      cs.velocity.x = s.velocity.x;
       cs.velocity.y = s.velocity.y;
-      cs.velocity.z = s.velocity.z + s.hurt.knockZ;
+      cs.velocity.z = s.velocity.z;
       cs.facing = s.facing;
       cs.moveYaw = Math.atan2(cs.velocity.x, cs.velocity.z);
       cs.bodyYaw = s.bodyYaw;
@@ -108,6 +117,9 @@ export function createFighterRig(cfg: FighterRigConfig): FighterRig {
       if (s.combat) {
         rig.update(cs, s.combat, s.hurt, frameDt, false, coreTime, s.link);
       }
+    },
+    debug(): FighterGaitDebug {
+      return rig.gaitDebug();
     },
     boneAtWorld(x, y, z): { node: THREE.Object3D; point: THREE.Vector3 } | null {
       if (attachNodes.length === 0) return null;

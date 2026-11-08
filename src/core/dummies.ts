@@ -35,6 +35,48 @@ const COMBO_CHASE = 1.3;
 /** 一轮打完后至少歇这么久（秒，× fighters.attackInterval）：防止把它调到很小时变成无限连。 */
 const ROUND_GAP_SCALE = 0.4;
 
+/**
+ * v9s.40 · 陪练在对峙距离上「踱步」的横移幅度（× 自身移速）。
+ *
+ * 旧值 0.55 是为了「看得出在走位」随便取的，结果是 1.1 m/s 的碎步：步幅小、步频高，
+ * 玩家站着不动时陪练却一刻不停地在绕圈 —— 真机上就是「疯狂磨脚」。
+ * 现在只在门开时走，走就走得像样（0.9 ≈ 1.9 m/s，接近它自己的上限 2.1）。
+ */
+const SPAR_STRAFE = 0.9;
+
+/** 径向纠偏的饱和比例：|err| 达到 band 时给 full，中间线性 —— 开关式 ±1 会在阈值上来回抽。 */
+const RADIAL_GAIN = 0.9;
+
+/**
+ * v9s.40 · 死区踱步的时间门（0..1，C¹）。
+ *
+ * 对峙的真实节奏是「走两步、站住看一眼」，而不是匀速绕圈。用确定性时间门把横移切成
+ * 脉冲：按 id 错开相位（无随机、可快照），两端用 smoothstep 过渡，关门后方向给 0，
+ * 速度指数衰减到 0，表现层自然走「停步收相」站定。
+ *
+ * @param time   world.time（秒）
+ * @param id     假人 id（错开相位用，避免所有单位同拍起步）
+ * @param period 一个「走 + 停」周期（秒）
+ * @param duty   一个周期里横移占的比例
+ */
+function strafeGate(time: number, id: number, period: number, duty: number): number {
+  const p = Math.max(period, 0.1);
+  const t = (((time + id * 2.37) % p) + p) % p;
+  const on = Math.min(Math.max(duty, 0), 1) * p;
+  if (on <= EPS || t >= on) return 0;
+  const edge = Math.min(Math.max(p * 0.12, 0.15), on * 0.5);
+  const k = Math.min(1, Math.min(t / edge, (on - t) / edge));
+  return k * k * (3 - 2 * k);
+}
+
+/** 合方向向量按长度 1 归一（径向 + 切向叠加可能超过满速）。 */
+function clampDir(x: number, z: number): { x: number; z: number } {
+  const len = Math.hypot(x, z);
+  if (len <= 1) return { x, z };
+  return { x: x / len, z: z / len };
+}
+
+
 /** 角度归一化到 (-π, π]，走最短弧。 */
 function wrapAngle(a: number): number {
   return Math.atan2(Math.sin(a), Math.cos(a));
@@ -385,18 +427,15 @@ function desiredDirection(
       z = nz;
     }
   } else if (s.mode === 'keep-distance') {
+    // v9s.40：径向改**比例**控制 + 死区里横移走时间门。
+    // 旧版是「err 超死区就整速前进 / 后退」的开关，玩家在死区边缘微动时方向逐帧反转；
+    // 死区内又不是站定而是恒速绕圈 → 表现层读作原地碎步磨脚。
     const err = dist - cfg.keepDistance;
-    if (err > cfg.keepDeadZone) {
-      x = nx;
-      z = nz;
-    } else if (err < -cfg.keepDeadZone) {
-      x = -nx;
-      z = -nz;
-    } else {
-      // 距离已进入死区：绕着玩家侧移，让「保持一定距离」看得出来而不是僵住
-      x = -nz * cfg.keepStrafe;
-      z = nx * cfg.keepStrafe;
-    }
+    const band = Math.max(cfg.keepDeadZone, 0.2);
+    const radial = Math.max(-1, Math.min(1, err / band)) * RADIAL_GAIN;
+    const tangent = strafeGate(world.time, s.id, cfg.strafePeriod, cfg.strafeDuty) * cfg.keepStrafe;
+    x = nx * radial - nz * tangent;
+    z = nz * radial + nx * tangent;
   } else if (s.mode === 'attack') {
     // 挥砍过程中站定，不追击
     if (dist > attackRangeFor(world, s, cfg) && s.attackPhase === 'idle') {
@@ -415,7 +454,6 @@ function desiredDirection(
     // 连击里只做两件事：够不着就压上，贴太近就稍微让开一点。
     const range = attackRangeFor(world, s, cfg);
     const standoff = range * 1.7;
-    const strafe = Math.sin(world.time * 0.55 + s.id * 1.9) * 0.55;
     if (inComboRound(s)) {
       if (dist > range * COMBO_CHASE) {
         x = nx;
@@ -427,17 +465,22 @@ function desiredDirection(
     } else if (s.attackPhase === 'idle' && s.attackCooldown <= 0 && dist > range) {
       x = nx;
       z = nz;
-    } else if (dist > standoff + 0.35) {
-      x = nx;
-      z = nz;
-    } else if (dist < standoff - 0.45) {
-      x = -nx;
-      z = -nz;
     } else {
-      x = -nz * strafe;
-      z = nx * strafe;
+      // v9s.40：对峙期的径向纠偏改成**连续比例**，横移交给时间门。
+      //  - 旧的 ±0.35 / −0.45 是开关式：玩家在阈值附近微动就逐帧反转方向，
+      //    速度只能在 0 附近来回拉，腿却一直在迈 —— 表现层看起来就是原地磨脚；
+      //  - 旧的横移是每帧恒速的 sin 绕圈：玩家站着不动，陪练永远在走（实测 0.6~1.1 m/s
+      //    不停，5 秒走 3 米）。现在只有门开的那一小段才走，关门就站定收脚。
+      const band = 0.5;
+      const radial = Math.max(-1, Math.min(1, (dist - standoff) / band)) * RADIAL_GAIN;
+      const tangent = strafeGate(world.time, s.id, cfg.strafePeriod, cfg.strafeDuty) * SPAR_STRAFE;
+      x = nx * radial - nz * tangent;
+      z = nz * radial + nx * tangent;
     }
   }
+
+  // 径向（≤0.9）+ 切向（≤0.9）叠加会超过单位长度 → 归一，避免「斜着走比直着走快」
+  ({ x, z } = clampDir(x, z));
 
   let facing = s.facing;
   if (s.mode === 'wander') {

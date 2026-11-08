@@ -21,6 +21,7 @@ import type { BodyTypeConfig, Box, DummyState, StationSpec, ViewConfig, World } 
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
 import { createFighterRig } from './fighter-rig';
+import type { FighterGaitDebug } from './fighter-rig';
 import { createLabLayer } from './lab-scene';
 import { createBurstFx } from './scene-burst-fx';
 import {
@@ -63,6 +64,8 @@ export type SceneView = {
   };
   /** v9s.35：朝向平滑读数（target = 插值后的 bodyYaw，shown = 实际渲染的根节点 yaw） */
   yawDebug(): { target: number; shown: number; tauMs: number };
+  /** v9s.40：持械陪练的步态读数（简化假人没有腿骨架 → null） */
+  dummyRigDebug(id: number): FighterGaitDebug | null;
   /**
    * v9s.38：特效层级读数（发布自检用）。
    * `boxOpaque` = 地块是否走不透明通道（旧版透明地面会盖掉刀光）；
@@ -310,6 +313,8 @@ export function createSceneView(
     group: THREE.Group;
     update(s: DummyState, frameDt: number, coreTime?: number): void;
     boneAtWorld(x: number, y: number, z: number): { node: THREE.Object3D; point: THREE.Vector3 } | null;
+    /** 只有走 voxel-rig 的持械陪练有步态读数；简化假人没有腿骨架，返回 null。 */
+    debug?: () => FighterGaitDebug;
     dispose(): void;
   };
   const fighterMoveSpeed = world.config.dummies.fighters?.moveSpeed ?? world.config.dummies.moveSpeed;
@@ -1163,6 +1168,11 @@ export function createSceneView(
     },
     pickDummy,
     projectToScreen,
+    /** v9s.40：持械陪练的步态读数（id 从 1 开始，与 DummyState.id 一致）。 */
+    dummyRigDebug(id: number): FighterGaitDebug | null {
+      const rig = dummyRigs[id - 1];
+      return rig?.debug ? rig.debug() : null;
+    },
     diagnostics(): {
       lean: { forward: number; side: number };
       slashNormal: { x: number; y: number; z: number };

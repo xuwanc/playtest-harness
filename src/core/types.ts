@@ -1249,6 +1249,13 @@ export type DummyConfig = {
   keepDistance: number;
   keepDeadZone: number;
   keepStrafe: number;
+  /**
+   * v9s.40：死区内「踱步」的时间门。周期（秒）/ 占空比（0..1，横移占一个周期的比例）。
+   * 旧行为是死区内**每帧**都给切线方向 → 假人与陪练永远在绕圈小步走（用户读作「磨脚」）。
+   * 现在按时间切脉冲：开门时走，关门时方向归零、速度衰减到 0、停步收相站定。
+   */
+  strafePeriod: number;
+  strafeDuty: number;
   /** 攻击：进入范围才挥砍（无伤害）/ 冷却 / 三段时长 */
   attackRange: number;
   attackInterval: number;

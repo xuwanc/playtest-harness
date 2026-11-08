@@ -94,25 +94,66 @@ c.warp = 1;
 | **冷却期只走位** | `attackCooldown > 0` → 切向 strafe | 冷却中绕着你转，不推进 |
 | **首击错开** | `attackInterval × (0.25 + 0.22 × i)` | 三个不同时挥刀，不会读成「被集火」 |
 
-`desiredDirection()` 的 `spar` 分支：
+`desiredDirection()` 的 `spar` 分支（v9s.40）：
 
 ```ts
 const range = attackRangeFor(world, s, cfg);   // cfg.reach[weapon] × attackRangeScale
 const standoff = range * 1.7;
 
-if (inComboRound(s)) {                        // v9s.39：一轮连击中间
-  if (dist > range * 1.3)      { x = nx;  z = nz;  }        // 够不着 → 压上
-  else if (dist < range * 0.55){ x = -nx * 0.6; z = -nz * 0.6; } // 贴太近 → 让一点
-}                                              // 其余情况站住（连击中间不退回 standoff）
+if (inComboRound(s)) {                          // v9s.39：一轮连击中间
+  if (dist > range * 1.3)        { x = nx; z = nz; }              // 够不着 → 压上
+  else if (dist < range * 0.55)  { x = -nx * 0.6; z = -nz * 0.6; } // 贴太近 → 让一点
+}                                               // 其余情况站住（连击中间不退回 standoff）
 else if (idle && cooldown <= 0 && dist > range) { x = nx; z = nz; } // 冷却好了 → 压上
-else if (dist > standoff + 0.35)      { x = nx;  z = nz;  }   // 太远 → 靠近
-else if (dist < standoff - 0.45)      { x = -nx; z = -nz; }   // 太近 → 退开
-else                                  { x = -nz * strafe; z = nx * strafe; } // 刚好 → 绕
+else {
+  const radial  = clamp((dist - standoff) / 0.5, -1, 1) * 0.9;      // 连续径向纠偏
+  const tangent = strafeGate(t, id, period, duty) * 0.9;            // 门控横移（走/停）
+  x = nx * radial - nz * tangent;
+  z = nz * radial + nx * tangent;
+}
 ```
 
-`±0.35 / ±0.45` 是**滞回带**：没有它，站到 standoff 边界上会一帧进一帧退地抖。
-
 调参入口：调试面板 →「假人 / 混战」→「持械陪练」，五个滑杆（移速 / 攻击间隔 / 起手距离 / 击退比例 / 牵引半径）+ 一个行为下拉。下拉读「第一个陪练当前的行为」，点单个陪练之后这里会跟着变。
+
+### 对峙时走走停停，别一直磨脚（v9s.40）
+
+用户反馈：**「陪练在和角色保持距离的时候会疯狂磨脚」**。实测（玩家钉住、只留剑盾陪练）
+旧行为下陪练 100% 的帧都在动，速度 0.67~1.11 m/s、5 秒走 3 米 —— 就是原地碎步绕圈。
+两条独立根因：
+
+| 根因 | 旧写法 | 为什么读作「磨脚」 |
+|---|---|---|
+| 横移永不归零 | 死区内每帧都返回切线方向 `sin(t × 0.55 + id) × 0.55` | 玩家不动，陪练也一刻不停；幅度只有 55% 移速 → 步幅小、步频高 |
+| 开关式径向 | `dist > standoff + 0.35` / `dist < standoff − 0.45` 二选一，全速进 / 全速退 | 玩家在阈值附近微动（或自身被分离力推 2cm）→ 方向逐帧反转，速度在 0 附近反复拉锯，腿一直在迈 |
+
+修法两件，都很小：
+
+1. **径向改比例控制**：`radial = clamp((dist − standoff) / 0.5, −1, 1) × 0.9`。
+   越过阈值时从 0 平滑长到满速，不存在「一帧进一帧退」。
+2. **横移走时间门** `strafeGate()`：按 `strafePeriod / strafeDuty` 切成脉冲，
+   **按 id 错相位**（`time + id × 2.37`）所以三个陪练不会同拍起步，两端 smoothstep，
+   关门时方向给 0 → 速度指数衰减到 0 → 表现层走停步收相，自然站定。
+   开门时幅度提到 0.9（≈1.9 m/s，接近它自己 2.1 的上限），走就走得像样，不碎。
+
+| 参数（`core.dummies`） | 默认 | 含义 |
+|---|---|---|
+| `strafePeriod` | 5.2s | 一个「走 + 停」周期 |
+| `strafeDuty` | 0.34 | 一个周期里横移占的比例（34% 走、66% 站） |
+
+同一套门也用在普通假人的 `keep-distance`（玩家不动时它也不该绕圈）。
+
+**附带修掉的一个双计**：`fighter-rig` 原先把 `hurt.knock` 并进了传给骨架的 `velocity`，
+而 `voxel-rig` 内部又会按 `gaitCfg.knockGaitScale` 把击退并入**步态驱动** —— 陪练挨打时
+步频被放大一倍，腿在原地飞快倒腾。现在 `cs.velocity` 只写自主速度，位置仍含击退位移。
+
+实测（玩家钉住 4.7s，同一台软件渲染机）：
+
+| 指标 | 改前 | 改后 |
+|---|---|---|
+| 平均速度 | 0.67 m/s | 0.42 m/s |
+| 位移路径 | 3.08 m | 2.21 m |
+| 停步收相帧 | 11 / 90 | 49 / 90 |
+| 移动时均速 | 0.9 m/s（碎步） | 1.5 m/s（大步） |
 
 ### 连击：一次冷却好 = 打一整轮（v9s.39）
 
@@ -205,6 +246,14 @@ rig.update(cs, s.combat, s.hurt, frameDt, false, coreTime, s.link);
 
 `tools/smoke.py` 的「陪练一轮打出多段连击」这三条都踩过，现在是钉玩家 + 搬工位 + 等游戏时间的写法。
 
+**8. 击退不要既进 velocity 又进 knock** —— `voxel-rig` 会把 `hurt.knockX × knockGaitScale`
+并入步态驱动；`fighter-rig` 若再把 knock 加进 `cs.velocity`，陪练挨打时步频直接翻倍（v9s.40 修的）。
+判据：被打的瞬间 `gaitDebug().gaitSpeed` 不应超过 `|velocity| + |knock|` 的上限。
+
+**9. 「保持距离」的观感问题不一定是动画，多半是走位策略** —— v9s.40 前的死区逻辑每帧都给
+切线方向，玩家不动它也在绕圈（0.7~1.1 m/s 碎步）。先在 Core 里量「移动帧占比 / 移动时均速」
+再动表现层，否则会去调步幅参数白忙。
+
 ### 加第四个陪练要改哪
 
 1. `config/game.json` → `core.dummies.fighters`：`weapons` 加武器（如 `'staff'`）、`spawn` 加坐标、`initialModes` 加一项；
@@ -222,10 +271,13 @@ rig.update(cs, s.combat, s.hurt, frameDt, false, coreTime, s.link);
 | 点击轮转 | 点陪练 | 在 6 种模式间循环，HUD 显示「陪练」 |
 | 玩家打得到陪练 | `tests/v9s38-fighters.test.ts` | `hit` 事件、`hitCount` 增长 |
 | 陪练打得到玩家 | 同上（`noDamageToPlayer = false`） | `playerHurt` 写入 + 玩家被击退 |
-| 外观对称 | 截图 `shots38/09-fighters-closeup.png` | 三种武器挂点、配色可分辨 |
+| 外观对称 | 截图 `shots/v9s38/09-fighters-closeup.png` | 三种武器挂点、配色可分辨 |
 | 一轮是 3 刀 | `tests/v9s39-fighter-combo.test.ts` | 段号 1→2→3，3 次 `dummy-attack` / 3 次 `dummy-hit` |
 | 段间有停顿 | 同上 | 缝隙期 `combat.phase === 'settle'`、`progress === 1` |
 | 起手频率不变 | 同上 | 12s 内 3~4 轮（不是 3 倍） |
 | 连击能被拆掉 | 同上 | 受击 / 目标跑远 → 剩余段作废、段号归 0 |
 | 真机打得出来 | `npm run smoke`「陪练一轮打出多段连击」 | `segs ≥ 3` 且段号到 3 |
-| 三段刀路不同 | 截图 `shots39/02~04-combo-seg{1,2,3}.png` | 剑盾：右下 → 左上 → 横胸 |
+| 三段刀路不同 | 截图 `shots/v9s39/02~04-combo-seg{1,2,3}.png` | 剑盾：右下 → 左上 → 横胸 |
+| 对峙走走停停 | `tests/v9s40-standoff-gait.test.ts` / `npm run smoke`「对峙时走走停停」 | 移动帧 ≤ 60%，且 > 5% |
+| 踱步是大步 | 同上「踱步是大步」 | 移动帧均速 ≥ 1.2 m/s |
+| 站定不滑 | `tests/v9s40-standoff-gait.test.ts` | 站定帧帧均位移 < 3mm |

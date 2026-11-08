@@ -114,9 +114,11 @@ describe('v9s.20 · 假人贴边', () => {
     s.position.z = 0;
     s.homeX = b.maxX;
     s.homeZ = 0;
-    // 玩家在左后方：期望方向斜朝界外 + 沿墙
-    place(w, b.maxX - 3, -3);
+    // 玩家在左后方且**比 keepDistance 更近**：期望方向斜朝界外 + 沿墙。
+    // v9s.40：站着不动不再恒定绕圈（旧行为会自己溜到边界），必须真的被逼到墙边。
+    place(w, b.maxX - 3, -2);
     run(w, 90, intent());
+    expect(s.position.x).toBeGreaterThan(b.maxX - 0.05);
     expect(s.position.x).toBeLessThanOrEqual(b.maxX + 1e-9);
     expect(Math.abs(s.velocity.x)).toBeLessThan(1e-6);
   });

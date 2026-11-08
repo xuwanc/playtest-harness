@@ -848,6 +848,8 @@
       "keepDistance": 4,
       "keepDeadZone": 0.6,
       "keepStrafe": 0.35,
+      "strafePeriod": 5.2,
+      "strafeDuty": 0.34,
       "attackRange": 1.6,
       "attackInterval": 1.6,
       "attackWindup": 0.34,

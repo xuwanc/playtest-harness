@@ -2,7 +2,7 @@
 
 用来**测试玩法与模块功能**的网页版 3D 实验台。核心目标是「核心逻辑可移植」：玩法规则放在纯 TypeScript、零依赖、不碰 DOM 与渲染库的 Core 里，Web 表现层只负责展示。
 
-当前版本 **v0.9.58**。线上地址通过项目内部渠道获取（仓库不收录访问链接与凭据）。
+当前版本 **v0.9.61**。线上地址通过项目内部渠道获取（仓库不收录访问链接与凭据）。
 
 ## 快速开始
 
@@ -48,8 +48,9 @@ src/adapters/       输入 / 手势 / 时钟：DOM 事件 → Intents
 src/presentation/   Three.js 渲染、体素骨架、HUD、调试面板、特效
 src/app.ts          组装层（唯一同时认识 Core 与 Web 的地方）
 config/game.json    全部可调数值（core.* 逻辑 / view.* 表现 / scene.* 关卡）
-tests/              vitest：88 文件 / 876 例
-tools/              smoke.py（16 项自检）、clip-lab（动作验证台）、截图脚本
+tests/              vitest：90 文件 / 893 例
+tools/              smoke.py（19 项自检）、clip-lab（动作验证台）、截图脚本
+shots/              截图（唯一存放处，整目录不入库；见 docs/assets/conventions.md）
 docs/               INDEX 索引 + systems / state / decisions / journal / checklists / assets
 ```
 

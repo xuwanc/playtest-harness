@@ -246,6 +246,8 @@ export function startApp(): void {
     speedSamples: () => motionDebug.samples(),
     // v9n：停步收相 / 侧移偏转 / 双腿姿态读数（验收用手感诊断）
     gaitDebug: () => view.gaitDebug(),
+    /** v9s.40：持械陪练的步态读数（只对 voxel-rig 的陪练有效，简化假人返回 null）。 */
+    dummyRigDebug: (id: number) => view.dummyRigDebug(id),
     // v9s.23：挥击姿态（段号 / 方向 / 躯干三轴 / 肩部位移）
     swingDebug: () => view.swingDebug(),
     // v9s.32：持械待机姿态（权重 / 双臂偏移 / 躯干扭转 / 刀身仰角）
