@@ -150,12 +150,36 @@ export type WeaponProfile = {
    */
   hitWindow?: { start: number; end: number };
   /**
+   * v9s.36 · 刃身扫掠门（命中时机对齐「刀真的到人」）。
+   *
+   * 旧版判定从 active 第 0 帧就开始：那时 `swingCurve` 还是 -1（刃身在身后蓄势），
+   * 但扇形 + reach 已经满足 → 命中并触发卡肉，画面定格在**刀还没挥出去**的姿态。
+   * 这里给「每段连击的刃尖相对角随 u 的变化」，Core 只在这一帧的扫掠区间
+   * 覆盖目标方位角时才结算命中（区间两端各放宽 `tolDeg`）。
+   *
+   * 数据来源：`tools/clip-lab` 逐进度采样 `bladeWorld()` 的刃尖相对角（真实剪辑曲线，
+   * 不是另算一套）。缺省不配 = 旧行为（A/B 与回滚用）。
+   */
+  hitSweep?: {
+    /** 角度容差（度），扫掠区间两端各放宽；缺省 10 */
+    tolDeg?: number;
+    /** 按连击段（'1'..'3'）；缺该段 = 该段不设门（旧行为） */
+    byCombo?: Record<string, HitSweepSegment>;
+  };
+  /**
    * v9s.31 · 本武器连击窗口覆写（秒）。缺省用 `combat.comboWindow`。
    *
    * 双剑的段间空隙应该比大剑短得多：同一个 0.45s 窗口下，双剑按早了接不上、
    * 按晚了要等，节奏发黏。分武器配才是手感。
    */
   comboWindow?: number;
+};
+
+export type HitSweepSegment = {
+  /** 关键点 `[u, angDeg]`，u 为 active 内进度（0..1），angDeg 为刃尖相对身体朝向的水平角 */
+  pts?: Array<[number, number]>;
+  /** 突刺 / 下劈这类刃尖角几乎不变的段：`u >= stabU` 即视为「刃身已到位」 */
+  stabU?: number;
 };
 
 export type CastProfile = {

@@ -398,6 +398,9 @@ describe('v9s.26 表现层与命中判定解耦', () => {
     w.combat.timings = { windup: 0.1, active: 0.2, recovery: 0.2, settle: 0, lunge: 0 };
     w.combat.phaseTimer = 0;
     w.combat.hitIds.length = 0;
+    // v9s.36：这组用例只验「扇形半角」几何，固定摆到 active 第一帧；
+    // 扫掠门（刀真的扫到才判）会让第一帧一律不命中，由 v9s36-contact 单独验。
+    delete w.config.combat.weapons['greatsword'].hitSweep;
     hitsUpdate(w, w.config.fixedDt);
     return w.hitCount;
   }

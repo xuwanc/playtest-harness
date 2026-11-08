@@ -134,6 +134,29 @@ function hurtDuration(world: World, type: HurtType): number {
   return c.hurtLight;
 }
 
+/** 线性插值 `[u, angDeg]` 关键点表；u 越界时取端点值。 */
+function angleAtPts(pts: Array<[number, number]>, u: number): number {
+  if (pts.length === 0) return 0;
+  if (u <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) {
+    const [u1, a1] = pts[i];
+    if (u <= u1) {
+      const [u0, a0] = pts[i - 1];
+      const k = u1 > u0 ? (u - u0) / (u1 - u0) : 1;
+      return a0 + (a1 - a0) * k;
+    }
+  }
+  return pts[pts.length - 1][1];
+}
+
+/** 角度归一到 (-180, 180]。 */
+function wrapDeg(a: number): number {
+  let x = a;
+  while (x > 180) x -= 360;
+  while (x < -180) x += 360;
+  return x;
+}
+
 /** 玩家攻击在命中窗口内的扫描：扇区 + 武器距离 + 受击类型 + 击退。 */
 function playerHits(world: World): void {
   const cb = world.combat;
@@ -161,6 +184,31 @@ function playerHits(world: World): void {
   const extra = world.config.dummies.radius;
   const ideal = world.config.targeting.idealRange;
 
+  // v9s.36：刃身扫掠门。
+  // 旧版从 active 第 0 帧就判定，此刻 `swingCurve` 仍是 -1（刃身在身后蓄势），
+  // 但扇形 + reach 已经满足 —— 于是「刀还没挥出去」就命中并卡肉，画面定格在起手姿态。
+  // 现在要求「本帧刃身扫过的角度区间」覆盖目标方位角才结算：
+  //   · pts 段：区间 = [ang(0), ang(u)] 按 tolDeg 放宽；
+  //   · 突刺段（刃尖角几乎不变）：u < stabU 一律不结算，到点位再判。
+  const sweep = profile?.hitSweep;
+  const seg = sweep?.byCombo?.[String(cb.comboIndex)] ?? sweep?.byCombo?.['1'];
+  const sweepTol = sweep?.tolDeg ?? 10;
+  let sweepLo = 0;
+  let sweepHi = 0;
+  let sweepActive = false;
+  if (seg) {
+    if (typeof seg.stabU === 'number') {
+      // 突刺：刃身还没伸出去，整段先不判
+      if (u < seg.stabU) return;
+    } else if (seg.pts && seg.pts.length >= 2) {
+      const a0 = angleAtPts(seg.pts, 0);
+      const a1 = angleAtPts(seg.pts, u);
+      sweepLo = Math.min(a0, a1) - sweepTol;
+      sweepHi = Math.max(a0, a1) + sweepTol;
+      sweepActive = true;
+    }
+  }
+
   for (const s of world.dummies) {
     // v9s.31：本次攻击已经结算过的目标跳过 —— 窗口内每帧都会扫，
     // 没有这张表就会把一击掉成十几击。
@@ -172,6 +220,11 @@ function playerHits(world: World): void {
     const nx = dist > EPS ? dx / dist : fx;
     const nz = dist > EPS ? dz / dist : fz;
     if (dist > EPS && (dx * fx + dz * fz) / dist < cosArc) continue;
+    // 目标方位角（相对身体朝向）必须落在本帧的扫掠区间内 —— 否则刀还没到
+    if (sweepActive) {
+      const theta = wrapDeg(Math.atan2(dx, dz) / DEG - cb.attackFacing / DEG);
+      if (theta < sweepLo || theta > sweepHi) continue;
+    }
 
     // 受击类型：大剑 = 击退重击，弓 / 三段收招 = 重击，其余 = 轻击
     let type: HurtType = 'light';

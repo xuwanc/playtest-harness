@@ -46,6 +46,25 @@ window.__smokeStart = () => {
   requestAnimationFrame(tick);
 };
 window.__smokeStop = () => { window.__smoke.on = false; return window.__smoke.rows; };
+
+// v9s.36：命中时机采样 —— 只记「命中的那一帧，攻击进度走到了多少」。
+// 旧版判定从 active 第 0 帧开始，命中时 progress ≈ 0.217（刃身还在身后蓄势）；
+// 扫掠门之后必须等到刃身挥到身前（progress ≥ 0.3）。
+window.__hit = { on: false, rows: [] };
+window.__hitStart = () => {
+  const h = window.__harness;
+  window.__hit.rows = [];
+  window.__hit.on = true;
+  const tick = () => {
+    if (!window.__hit.on) return;
+    const w = h.world;
+    window.__hit.rows.push({ prog: w.combat.attackProgress, hits: w.hitCount,
+                             stop: w.combat.hitstop, phase: w.combat.phase });
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+};
+window.__hitStop = () => { window.__hit.on = false; return window.__hit.rows; };
 """
 
 
@@ -107,8 +126,39 @@ def main() -> int:
                 zero = sum(1 for d in dels if d < 1e-6)
                 check("慢放转身无「画面不动」帧", zero <= max(1, len(dels) * 0.02), f"{zero}/{len(dels)} 帧不动")
 
+                # ---- v9s.36：卡肉必须发生在「刀挥到人」之后 ----
+                page.evaluate("() => { window.__harness.debug.timeScale = 1; }")
+                page.evaluate("""() => {
+                  const h = window.__harness, w = h.world, c = w.character, d = w.dummies[0];
+                  c.position.x = d.position.x - 1.0 * Math.sin(c.bodyYaw);
+                  c.position.z = d.position.z - 1.0 * Math.cos(c.bodyYaw);
+                  c.facing = Math.atan2(d.position.x - c.position.x, d.position.z - c.position.z);
+                  c.bodyYaw = c.facing;
+                }""")
+                page.wait_for_timeout(250)
+                before = page.evaluate("() => window.__harness.world.hitCount")
+                page.evaluate("window.__hitStart()")
+                page.keyboard.press("j")
+                page.wait_for_timeout(700)
+                hit_rows = page.evaluate("window.__hitStop()")
+                hit_prog = None
+                prev_hits = before
+                for r in hit_rows:
+                    if r["hits"] > prev_hits:
+                        hit_prog = r["prog"]
+                        break
+                    prev_hits = r["hits"]
+                if hit_prog is None:
+                    check("攻击能命中（近身一剑）", False, f"hitCount 未增加（{before}）")
+                else:
+                    check("攻击能命中（近身一剑）", True)
+                    # 旧行为 = 0.217（active 第一帧）；扫掠门后应到 0.3+
+                    check("卡肉发生在刃身挥出之后（progress ≥ 0.30）", hit_prog >= 0.30,
+                          f"命中时 progress={hit_prog:.3f}")
+
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
-                      f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}")
+                      f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}",
+                      " 命中 progress", f"{hit_prog:.3f}" if hit_prog is not None else "-")
         finally:
             C.shutdown(pw, browser)
 
