@@ -83,6 +83,11 @@ export type SwingPose = {
   kind: string;
   /** 归一化挥出量 0..1（0 = 蓄势满，1 = 挥出满），供拖尾 / 形变层复用 */
   strike: number;
+  /**
+   * v9s.31：本段声明的段间混合时长（秒）；null / 缺省 = 按姿态差自动算。
+   * 只有「必须精确对齐某一帧」的特殊段才需要写死。
+   */
+  blend?: number | null;
 };
 
 type Frame = {
@@ -219,6 +224,7 @@ export function solveSwingPose(
     lead,
     kind,
     strike: u,
+    blend: ref && Number.isFinite(ref.blend) ? (ref.blend as number) : null,
   };
 
   const arm: SwingArm = {
@@ -304,7 +310,85 @@ export function blendSwingPose(a: SwingPose, b: SwingPose, t: number): SwingPose
     // 段号在换段瞬间就更新了，kind 也跟目标段保持一致（否则诊断读到「段 1 / overhead」）
     kind: b.kind,
     strike: lerp(a.strike, b.strike, k),
+    blend: b.blend ?? null,
   };
+}
+
+/** 最短角差（用于姿态距离，避免 ±π 附近把「几乎相同」算成大差）。 */
+function wrapPi(a: number): number {
+  let x = a;
+  while (x > Math.PI) x -= Math.PI * 2;
+  while (x < -Math.PI) x += Math.PI * 2;
+  return x;
+}
+
+function armDistance(a: SwingArm | null, b: SwingArm | null): number {
+  // 一侧接管、另一侧不接管：混合过程本来就是「淡入淡出」，给一个中等距离即可
+  if (!a || !b) return a || b ? 0.6 : 0;
+  return Math.abs(a.pitch - b.pitch) * 1.0
+    + Math.abs(a.yaw - b.yaw) * 0.8
+    + Math.abs(a.roll - b.roll) * 0.6
+    + Math.abs(a.elbow - b.elbow) * 0.8;
+}
+
+/**
+ * v9s.31 · 两段挥击姿态的「角度距离」（rad 加权和）。
+ *
+ * 用途不是精确度量，而是给自动混合时长一个**单调且可比**的尺度：
+ * 姿态差越大 → 混合越久。权重按「观众最先注意到哪个通道变化」排：
+ * 躯干扭转 / 手臂俯仰 / 剑身仰角权重最高，刃面滚转这类细节最低。
+ * `spinYaw` 不参与（它是时间轴语义，不插值）；骨盆位移按 2 rad/m 折算。
+ */
+export function swingPoseDistance(a: SwingPose, b: SwingPose): number {
+  const ang = (x: number, y: number) => Math.abs(wrapPi(x - y));
+  let d = 0;
+  d += ang(a.yaw, b.yaw) * 1.0;
+  d += ang(a.rootYaw, b.rootYaw) * 0.7;
+  d += ang(a.pitch, b.pitch) * 0.9;
+  d += ang(a.roll, b.roll) * 0.9;
+  d += Math.abs(a.pelvisX - b.pelvisX) * 2;
+  d += Math.abs(a.pelvisZ - b.pelvisZ) * 2;
+  d += armDistance(a.armR, b.armR);
+  d += armDistance(a.armL, b.armL) * 0.8;
+  d += ang(a.bladePitch ?? 0, b.bladePitch ?? 0) * 1.1;
+  d += ang(a.bladePitchOff ?? 0, b.bladePitchOff ?? 0) * 0.7;
+  d += ang(a.bladeTwist, b.bladeTwist) * 0.5;
+  d += ang(a.bladeYaw, b.bladeYaw) * 0.5;
+  return d;
+}
+
+/**
+ * v9s.31 · 按「姿态差 / 目标角速度」算段间混合时长（秒）。
+ *
+ * 旧的固定 `segBlend` 有两个毛病：双剑快攻里 0.1s 占整段近一半（发黏），
+ * 大剑换段姿态差 200° 时 0.1s 内跨完（硬切）。现在改成：
+ *   span = clamp(distance / rate, min, max)
+ * 姿态差小的快刀自然更短，重击自然更长，同时被上下限兜住。
+ *
+ * @param override 段级显式覆写（`SwingClipRef.blend`），给了就直用。
+ * @param from     上一段末帧姿态；null = 本段是第一段（没有来源，用兜底 segBlend）。
+ * @param maxSpan  本段可用预算（通常是「新段总时长 × 0.22」）。快刀整段只有 0.35s，
+ *                 混合再长就会吃掉挥击本身 —— 预算比固定上限更贴近节奏。
+ */
+export function autoSegBlend(
+  from: SwingPose | null,
+  to: SwingPose,
+  cfg: SwingPoseViewConfig,
+  override?: number | null,
+  maxSpan?: number,
+): number {
+  if (override !== null && override !== undefined && Number.isFinite(override) && override >= 0) {
+    return Math.max(0.008, override);
+  }
+  const fallback = Math.max(0.008, cfg.segBlend ?? 0.1);
+  if (!from) return fallback;
+  const min = Math.max(0.008, cfg.segBlendMin ?? 0.03);
+  const cap = Math.max(min, Number.isFinite(maxSpan) ? (maxSpan as number) : (cfg.segBlendMax ?? 0.14));
+  // 姿态距离的绝对值跨度不大（不同武器 1~9 rad），直接除角速度会大量撞上下限；
+  // 先按「一次完整换段」的参考距离归一到 0..1，再映射进本段预算，单调且尺度稳定。
+  const ref = Math.max(0.1, cfg.segBlendRef ?? 6);
+  const k = clamp(swingPoseDistance(from, to) / ref, 0, 1);
+  return min + (cap - min) * k;
 }
 
 /** 段间过渡的缓动（smoothstep），两端导数为 0，接缝不抽。 */

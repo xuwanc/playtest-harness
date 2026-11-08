@@ -1,3 +1,3 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`确定性与契约快照 > golden snapshot：固定输入序列的状态哈希不漂移 1`] = `"95ad63c6d716b8e9a9e2ed72aa5aae19fa2f85c0002fa80fea439ee031f90bcf"`;
+exports[`确定性与契约快照 > golden snapshot：固定输入序列的状态哈希不漂移 1`] = `"78e1385d46024ad57eb53cb17bf4de4ae3a5d9ab8b3cc9abd8aea0a58d9f6e54"`;

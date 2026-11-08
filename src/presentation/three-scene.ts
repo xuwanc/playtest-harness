@@ -78,6 +78,8 @@ export type SceneView = {
       pitchDelta: number;
       /** v8e：平滑后的用户缩放倍率（>1 拉远、<1 拉近） */
       zoom: number;
+      /** v9s.31：镜头震动能量 0..1（关键帧事件 / 命中共用），用于验收 notify 是否真的被消费 */
+      shake: number;
     };
   };
   /** v9s.15：整层测试工位标识（地面盘 + 标牌）显隐，纯表现开关 */
@@ -686,6 +688,21 @@ export function createSceneView(
       }
       wasHitstop = stopping;
 
+      // v9s.31：关键帧事件 → 表现层一次性效果。
+      // Core 保证「每条通知恰好一次」，这里只做映射，不再自己按进度猜时机。
+      //  - blade-air：挥出瞬间的风压。大剑给得更重，读得出「这把刀很沉」；
+      //  - foot-step：换步落地，一记极轻的震，纯粹为了让脚步有存在感。
+      for (let i = 0; i < w.events.length; i++) {
+        const e = w.events[i];
+        if (e.type !== 'notify') continue;
+        const v = Number.isFinite(e.value) ? e.value : 0;
+        if (e.name === 'blade-air') {
+          cam.addShake((0.06 + 0.16 * Math.max(0, Math.min(1, v))) * (cb.weapon === 'greatsword' ? 1.5 : 1));
+        } else if (e.name === 'foot-step') {
+          cam.addShake(0.03 * Math.max(0, Math.min(1, v)));
+        }
+      }
+
       playerRoot.position.set(c.position.x, c.position.y, c.position.z);
       // 身体用平滑朝向（bodyYaw），头 / 腿由 rig 内部按各自角度分离驱动
       playerRoot.rotation.y = c.bodyYaw;
@@ -1076,6 +1093,8 @@ export function createSceneView(
         pitchDelta: number;
         /** v8e：平滑后的用户缩放倍率（>1 拉远、<1 拉近） */
         zoom: number;
+        /** v9s.31：镜头震动能量 0..1（关键帧事件 / 命中共用） */
+        shake: number;
       };
     } {
       // v7c #10：斩击弧中心轴（盘面法线）恒为角色正前方（局部 +Z），再绕身体朝向
@@ -1112,6 +1131,7 @@ export function createSceneView(
           threat: world.camera.threat,
           threatCount: world.camera.threatCount,
           ...cam.smart(),
+          shake: cam.shakeLevel(),
         },
       };
     },

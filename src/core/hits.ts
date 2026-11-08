@@ -130,7 +130,7 @@ function hurtDuration(world: World, type: HurtType): number {
   return c.hurtLight;
 }
 
-/** 玩家攻击在 active 帧的命中扫描：扇区 + 武器距离 + 受击类型 + 击退。 */
+/** 玩家攻击在命中窗口内的扫描：扇区 + 武器距离 + 受击类型 + 击退。 */
 function playerHits(world: World): void {
   const cb = world.combat;
   const cfg = world.config.hits;
@@ -139,6 +139,17 @@ function playerHits(world: World): void {
   // 旧版这里会对 reach.bow = 9m、arc 65° 做一次近战扇形扫描 —— 箭还没飞到、甚至射空，
   // 前方一片假人就全部受击 / 计数（用户反馈的「没打到人却多人受击」）。
   if (cb.weapon === 'bow') return;
+
+  // v9s.31：命中窗口。旧版只在 `attack-active` 那一帧扫一次，挥到一半才走进刀风的
+  // 敌人吃不到伤害；现在整个窗口内每帧都扫，靠 hitIds 保证「同一目标本次攻击只结算一次」。
+  const profile = world.config.combat.weapons[cb.weapon];
+  const win = profile?.hitWindow;
+  const start = win ? Math.min(1, Math.max(0, win.start)) : 0;
+  const end = win ? Math.min(1, Math.max(start, win.end)) : 1;
+  const activeDur = cb.timings.active;
+  const u = activeDur > EPS ? Math.min(1, Math.max(0, cb.phaseTimer / activeDur)) : 1;
+  if (u < start - EPS || u > end + EPS) return;
+
   const reach = cfg.reach[cb.weapon] ?? 0;
   const cosArc = Math.cos(Math.min(90, Math.max(0, cfg.arcDeg)) * DEG);
   const fx = Math.sin(cb.attackFacing);
@@ -147,6 +158,9 @@ function playerHits(world: World): void {
   const ideal = world.config.targeting.idealRange;
 
   for (const s of world.dummies) {
+    // v9s.31：本次攻击已经结算过的目标跳过 —— 窗口内每帧都会扫，
+    // 没有这张表就会把一击掉成十几击。
+    if (cb.hitIds.indexOf(s.id) >= 0) continue;
     const dx = s.position.x - p.x;
     const dz = s.position.z - p.z;
     const dist = Math.hypot(dx, dz);
@@ -172,6 +186,7 @@ function playerHits(world: World): void {
       dirZ: nz,
       knockback: push,
     });
+    cb.hitIds.push(s.id);
   }
 }
 
@@ -284,14 +299,14 @@ function dummyHits(world: World): void {
 }
 
 /**
- * 命中 / 受击 / 击退模块：消费本帧的 attack-active / dummy-hit 事件与派生招扫掠。
+ * 命中 / 受击 / 击退模块：近战按命中窗口扫描 + 派生招扫掠 + 假人挥砍结算。
  * 与 combat / dummies 解耦：只靠显式事件队列与 world 状态通信，不互相调用。
  * 对应 C# 形态：static void HitsUpdate(World w, float dt)
  */
 export function hitsUpdate(world: World, dt: number): void {
   if (!world.modules.hits) return;
-  const active = world.events.some((e) => e.type === 'attack-active');
-  if (active) playerHits(world);
+  // v9s.31：从「attack-active 那一帧」改为「active 段内每帧」，窗口与去重都在 playerHits 里。
+  if (world.combat.phase === 'active') playerHits(world);
   scanLinkHits(world, dt);
   dummyHits(world);
 }

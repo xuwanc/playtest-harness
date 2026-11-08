@@ -22,3 +22,4 @@ export * from './step';
 export * from './pathfinding';
 export * from './skills';
 export * from './pose-clip';
+export * from './notify';

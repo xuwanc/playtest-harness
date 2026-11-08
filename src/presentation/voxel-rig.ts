@@ -29,7 +29,7 @@ import {
   decayImpact, NEUTRAL_STRETCH, smoothStretch, solveStretch,
 } from './limb-stretch';
 import type { StretchConfig, StretchPose } from './limb-stretch';
-import { blendSwingPose, segEase, solveSwingPose } from './swing-pose';
+import { autoSegBlend, blendSwingPose, segEase, solveSwingPose } from './swing-pose';
 import type { SwingPose } from './swing-pose';
 
 export type VoxelRig = {
@@ -698,6 +698,8 @@ export function createVoxelRig(
   let swingSeg = 0;
   /** 段间过渡进度 0..1 */
   let swingFade = 1;
+  /** v9s.31：本次换段冻结的混合时长（秒）—— 按两段姿态差自动算，不逐帧重算 */
+  let swingSpan = 0.1;
   /**
    * v9s.28：clip-lab 专用的「直接指定剪辑时间轴 0..1」覆盖。
    *
@@ -1307,8 +1309,15 @@ export function createVoxelRig(
       swingFrom = swingPose;
       swingFade = 0;
       swingSeg = combat.comboIndex;
+      // v9s.31：混合时长按「两段姿态差 / 目标角速度」算一次并冻结 ——
+      // 快刀（差小）更短不发黏，重击（差大）更长不硬切；段级 blend 可覆写。
+      // 上限用「本段总时长 × 22%」而不是固定值：双剑整段只有 0.35s，
+      // 混合拖到 0.14s 就把挥击本身吃掉了。
+      const segDur = combat.timings.windup + combat.timings.active + combat.timings.recovery;
+      const budget = Math.max(swingCfg.segBlendMin ?? 0.03, segDur * 0.22);
+      swingSpan = autoSegBlend(swingFrom, target, swingCfg, target.blend ?? null, budget);
     }
-    const span = Math.max(0.008, swingCfg.segBlend);
+    const span = Math.max(0.008, swingSpan);
     swingFade = Math.min(1, swingFade + dt / span);
     const pose = swingFrom && swingFade < 1
       ? blendSwingPose(swingFrom, target, segEase(swingFade))
@@ -1480,6 +1489,7 @@ export function createVoxelRig(
       swingPose = null;
       swingSeg = 0;
       swingFade = 1;
+      swingSpan = Math.max(0.008, swingCfg.segBlend);
       swingBladePitch = null;
       swingBladePitchOff = null;
       swingBladeTwist = null;

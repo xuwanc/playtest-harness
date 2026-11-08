@@ -278,7 +278,10 @@ export function createDebugPanel(
   exagg.add(sw, 'shoulderLift', 0, 0.12, 0.005).name('肩部抬升上限 (m)');
   exagg.add(sw, 'shoulderPush', 0, 0.1, 0.005).name('肩部前送上限 (m)');
   exagg.add(sw, 'shoulderIn', 0, 0.1, 0.005).name('双手武器肩内收 (m)');
-  exagg.add(sw, 'segBlend', 0, 0.35, 0.01).name('段间姿态过渡 (s)');
+  exagg.add(sw, 'segBlend', 0, 0.35, 0.01).name('段间过渡兜底 (s)');
+  // v9s.31：段间混合按姿态差自动算，这两个决定「最快 / 多差算一次大换段」
+  exagg.add(sw, 'segBlendMin', 0.008, 0.12, 0.004).name('段间过渡下限 (s)');
+  exagg.add(sw, 'segBlendRef', 2, 16, 0.5).name('段间过渡参考距离 (rad)');
   exagg.add(sw.weaponScale, 'greatsword', 0, 1.6, 0.05).name('大剑幅度倍率');
   const tr = view.weaponTrail;
   exagg.add(tr, 'enabled').name('挥击刀光 开');

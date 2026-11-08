@@ -74,7 +74,32 @@
             0.6,
             0.95
           ],
-          "comboCount": 3
+          "comboCount": 3,
+          "hitWindow": {
+            "start": 0,
+            "end": 0.85
+          },
+          "comboWindow": 0.62,
+          "notifies": [
+            {
+              "at": "windup",
+              "u": 0.7,
+              "name": "blade-air",
+              "value": 0.5
+            },
+            {
+              "at": "active",
+              "u": 0.0,
+              "name": "blade-air",
+              "value": 1.0
+            },
+            {
+              "at": "recovery",
+              "u": 0.35,
+              "name": "foot-step",
+              "value": 0.6
+            }
+          ]
         },
         "dual-swords": {
           "moveMultiplier": 1.08,
@@ -86,7 +111,38 @@
             0.55,
             0.85
           ],
-          "comboCount": 3
+          "comboCount": 3,
+          "hitWindow": {
+            "start": 0,
+            "end": 0.9
+          },
+          "comboWindow": 0.5,
+          "notifies": [
+            {
+              "at": "windup",
+              "u": 0.5,
+              "name": "blade-air",
+              "value": 0.45
+            },
+            {
+              "at": "active",
+              "u": 0.0,
+              "name": "blade-air",
+              "value": 1.0
+            },
+            {
+              "at": "active",
+              "u": 0.6,
+              "name": "blade-air",
+              "value": 0.7
+            },
+            {
+              "at": "recovery",
+              "u": 0.3,
+              "name": "foot-step",
+              "value": 0.5
+            }
+          ]
         },
         "greatsword": {
           "moveMultiplier": 0.85,
@@ -98,7 +154,32 @@
             0.9,
             1.4
           ],
-          "comboCount": 3
+          "comboCount": 3,
+          "hitWindow": {
+            "start": 0,
+            "end": 0.8
+          },
+          "comboWindow": 0.78,
+          "notifies": [
+            {
+              "at": "windup",
+              "u": 0.85,
+              "name": "blade-air",
+              "value": 0.8
+            },
+            {
+              "at": "active",
+              "u": 0.0,
+              "name": "blade-air",
+              "value": 1.0
+            },
+            {
+              "at": "recovery",
+              "u": 0.45,
+              "name": "foot-step",
+              "value": 1.0
+            }
+          ]
         },
         "staff": {
           "moveMultiplier": 0.95,
@@ -926,6 +1007,9 @@
         "shoulderPush": 0.045,
         "shoulderIn": 0.032,
         "segBlend": 0.1,
+        "segBlendMin": 0.03,
+        "segBlendRef": 6,
+        "segBlendMax": 0.14,
         "weaponScale": {
           "greatsword": 1.0,
           "sword-shield": 0.78,

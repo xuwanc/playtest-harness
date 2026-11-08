@@ -374,7 +374,7 @@ describe('v9s.26 剑盾第三击：盾猛顶', () => {
 // ---------------------------------------------------------------- 判定解耦
 
 describe('v9s.26 表现层与命中判定解耦', () => {
-  /** 直接推一个 attack-active 事件做扇形扫描，绕开状态机、精确控制角度。 */
+  /** 把 combat 摆进 active 段第一帧做扇形扫描，绕开状态机、精确控制角度。 */
   function hitScan(arcDeg: number, angleDeg: number): number {
     const w = makeWorld();
     w.modules.targeting = false;
@@ -393,7 +393,11 @@ describe('v9s.26 表现层与命中判定解耦', () => {
       }
     });
     w.hitCount = 0;
-    w.events.push({ type: 'attack-active', tick: w.tick, x: p.x, y: p.y, z: p.z, value: 0 });
+    // v9s.31：命中改由「active 段 + 命中窗口」驱动，不再靠 attack-active 单帧事件。
+    w.combat.phase = 'active';
+    w.combat.timings = { windup: 0.1, active: 0.2, recovery: 0.2, settle: 0, lunge: 0 };
+    w.combat.phaseTimer = 0;
+    w.combat.hitIds.length = 0;
     hitsUpdate(w, w.config.fixedDt);
     return w.hitCount;
   }

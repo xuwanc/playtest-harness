@@ -31,6 +31,8 @@ export type CameraRig = {
    * 但它和定格同一帧触发，玩家读到的就是「打实了」。
    */
   addShake(amount: number): void;
+  /** v9s.31：当前震动能量 0..1（纯观测，供 diagnostics / 自动化验收） */
+  shakeLevel(): number;
 };
 
 const NEUTRAL: CameraIntent = {
@@ -154,6 +156,9 @@ export function createCameraRig(
     addShake(amount): void {
       if (!Number.isFinite(amount) || amount <= 0) return;
       shake = Math.min(1, shake + amount);
+    },
+    shakeLevel(): number {
+      return shake;
     },
     setZoom(next): void {
       zoomTarget = Number.isFinite(next) && next > 0 ? next : 1;

@@ -1,6 +1,7 @@
 import { resolveFacingYaw } from './aim';
 import { fireArrow } from './arrows';
 import { cancelLink } from './links';
+import { collectNotifies, phaseScalar } from './notify';
 import { WEAPON_ORDER } from './types';
 import type { AttackTimings, EventType, Intents, World } from './types';
 
@@ -9,6 +10,12 @@ const EPS = 1e-6;
 function emit(world: World, type: EventType, value: number): void {
   const p = world.character.position;
   world.events.push({ type, tick: world.tick, x: p.x, y: p.y, z: p.z, value });
+}
+
+/** v9s.31：关键帧事件走同一条事件队列，额外带上 name。 */
+function emitNotify(world: World, name: string, value: number): void {
+  const p = world.character.position;
+  world.events.push({ type: 'notify', tick: world.tick, x: p.x, y: p.y, z: p.z, value, name });
 }
 
 function zeroTimings(): AttackTimings {
@@ -29,6 +36,8 @@ export function resetCombat(world: World): void {
   c.attackFacing = 0;
   c.lastCharge = 0;
   c.hitstop = 0;
+  c.notifyCursor = -1;
+  c.hitIds.length = 0;
   c.timings = zeroTimings();
 }
 
@@ -47,6 +56,8 @@ export function initialCombatState(weaponSlot: number) {
     attackId: 0,
     lastCharge: 0,
     hitstop: 0,
+    notifyCursor: -1,
+    hitIds: [] as number[],
     timings: zeroTimings(),
   };
 }
@@ -91,6 +102,9 @@ function beginAttack(
   c.attackProgress = 0;
   c.timings = timings;
   c.attackId += 1;
+  // v9s.31：新一段 = 新时间轴。游标回到 -1（下次扫描包含 0 时刻），命中表清空。
+  c.notifyCursor = -1;
+  c.hitIds.length = 0;
   emit(world, 'attack-start', comboIndex);
 }
 
@@ -175,7 +189,9 @@ function advancePhase(world: World, dt: number, intents: Intents): void {
       // settle → idle：整段彻底结束，允许接下一段
       c.phase = 'idle';
       c.phaseTimer = 0;
-      c.comboWindow = world.config.combat.comboWindow;
+      // v9s.31：连击窗口可按武器覆写（双剑的缝隙比大剑短得多）
+      c.comboWindow = world.config.combat.weapons[c.weapon].comboWindow
+        ?? world.config.combat.comboWindow;
 
       // 攻击中缓冲的按键：停顿结束后自动接下一段
       if (c.queued) {
@@ -209,6 +225,36 @@ function advancePhase(world: World, dt: number, intents: Intents): void {
   else if (c.phase === 'recovery') elapsed = t.windup + t.active + c.phaseTimer;
   else if (c.phase === 'settle') elapsed = total;
   if (c.phase !== 'idle') c.attackProgress = total > 0 ? Math.min(1, elapsed / total) : 1;
+
+  // v9s.31：关键帧事件。把本帧走过的区间 (cursor, after] 扫一遍。
+  //  - settle / idle 时标量按 3 计：进入 settle 的那一帧会把 recovery 末尾的
+  //    `u: 1` 通知补齐（否则「收招」类事件永远发不出来）；
+  //  - 卡肉在上面的 `return` 处已经挡住，冻结期间不会推进游标；
+  //  - 单帧跨阶段 / 掉帧补算都只是一个更大的区间，天然不会漏。
+  emitPhaseNotifies(world);
+}
+
+/**
+ * 扫描本帧的关键帧事件并写入事件队列。
+ * 单独拆出来是为了让「阶段推进」与「事件分发」的边界清楚：前者只改状态，
+ * 后者只读状态 + 写队列。
+ */
+function emitPhaseNotifies(world: World): void {
+  const c = world.combat;
+  if (c.phase === 'idle') return;
+  const t = c.timings;
+  const dur = c.phase === 'windup' ? t.windup
+    : c.phase === 'active' ? t.active
+      : c.phase === 'recovery' ? t.recovery : 0;
+  const u = dur > EPS ? Math.min(1, Math.max(0, c.phaseTimer / dur)) : 1;
+  // settle 不属于三段之一：按 recovery 末尾（标量 3）结算
+  const after = c.phase === 'settle' ? 3 : phaseScalar(c.phase, u);
+  if (after <= c.notifyCursor + EPS) return;
+  const defs = world.config.combat.weapons[c.weapon].notifies;
+  for (const n of collectNotifies(defs, c.notifyCursor, after)) {
+    emitNotify(world, n.name, n.value);
+  }
+  c.notifyCursor = after;
 }
 
 /**

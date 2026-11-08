@@ -9,6 +9,7 @@
  */
 
 import type { PoseClip } from './pose-clip';
+import type { NotifyDef } from './notify';
 
 export type Vec3 = { x: number; y: number; z: number };
 export type Vec2XZ = { x: number; z: number };
@@ -132,6 +133,29 @@ export type WeaponProfile = {
   lunge: [number, number, number];
   /** 剑类为 3，法杖 / 弓为 0 */
   comboCount: number;
+  /**
+   * v9s.31 · 关键帧事件（见 `core/notify.ts`）。
+   *
+   * Core 按攻击时间轴逐帧扫描并写入 `world.events`（type='notify'，带 name），
+   * 表现层据此触发刀光 / 音效 / 镜头震动；判定窗口也可由它表达，
+   * 但常规近战请优先用下面的 `hitWindow`（更省事、自带去重）。
+   */
+  notifies?: NotifyDef[];
+  /**
+   * v9s.31 · 命中窗口：active 段内的归一化区间（0..1）。
+   *
+   * 旧版只在 active 的第一帧扫一次扇形 —— 挥到一半才走进刀风的敌人吃不到伤害。
+   * 现在整个窗口内每帧都扫，且**每个目标每次攻击只结算一次**（`CombatState.hitIds`），
+   * 所以既不会重复掉血，又能命中中途进入的目标。缺省 `{ start: 0, end: 1 }`。
+   */
+  hitWindow?: { start: number; end: number };
+  /**
+   * v9s.31 · 本武器连击窗口覆写（秒）。缺省用 `combat.comboWindow`。
+   *
+   * 双剑的段间空隙应该比大剑短得多：同一个 0.45s 窗口下，双剑按早了接不上、
+   * 按晚了要等，节奏发黏。分武器配才是手感。
+   */
+  comboWindow?: number;
 };
 
 export type CastProfile = {
@@ -287,6 +311,20 @@ export type CombatState = {
    * 且完全确定性（同输入同帧数 → 同结果），可被单测覆盖。
    */
   hitstop: number;
+  /**
+   * v9s.31 · 关键帧事件游标（阶段连续标量 0..3，-1 = 本段尚未开始）。
+   *
+   * 每帧扫描 `(notifyCursor, 当前标量]` 后前移，保证掉帧 / 跨阶段 / 卡肉冻结下
+   * 事件不漏发也不重发。放在 Core 是为了确定性：同输入同帧数 → 同事件序列。
+   */
+  notifyCursor: number;
+  /**
+   * v9s.31 · 本次攻击已结算过的目标 id（配合 `WeaponProfile.hitWindow`）。
+   *
+   * 命中窗口内每帧都会扫扇形，没有这张表就会一帧掉一次血。每次起手清空，
+   * 因此「同一段攻击对同一目标只结算一次」，多段伤害需要显式写多段判定。
+   */
+  hitIds: number[];
   timings: AttackTimings;
 };
 
@@ -1594,6 +1632,13 @@ export type SwingClipRef = {
   lead?: 'R' | 'L';
   /** 覆写本段幅度倍率（缺省用 weaponScale） */
   scale?: number;
+  /**
+   * v9s.31 · 覆写本段的段间混合时长（秒）。
+   *
+   * 缺省由「两段姿态差 / 目标角速度」自动算（见 `autoSegBlend`）：姿态差小的快刀
+   * 混合更短（不黏），姿态差大的重击混合更长（不硬切）。只有特殊段才需要手写。
+   */
+  blend?: number;
 };
 
 export type SwingPoseViewConfig = {
@@ -1608,6 +1653,21 @@ export type SwingPoseViewConfig = {
   shoulderIn: number;
   /** 段间姿态过渡时长（s）：上段收势 → 下段起手不再是单帧跳变 */
   segBlend: number;
+  /**
+   * v9s.31 · 段间混合的自动时长（按「两段姿态差」映射到本段预算）。
+   *
+   * 固定 0.1s 的问题：双剑快攻里 0.1s 占整段近一半，连击发黏；
+   * 大剑重击姿态差很大，0.1s 内要跨 200°，读起来是硬切。
+   * 现在 `segBlend` 退化为「第一段没有来源时的兜底」，实际时长按：
+   *   k = clamp(distance / segBlendRef, 0, 1)
+   *   span = segBlendMin + (段预算 − segBlendMin) · k
+   * 姿态差小的快刀落在下限附近，差大的接近段预算，中间连续过渡。
+   */
+  segBlendRef?: number;
+  /** 自动混合时长下限（s，缺省 0.03）：再快也要有 2 帧，否则就是硬切 */
+  segBlendMin?: number;
+  /** 自动混合时长上限（s，缺省 0.14）：再大的姿态差也不能拖过 next 的前摇 */
+  segBlendMax?: number;
   /**
    * v9s.29 · 进入战斗姿态的淡入时长（s，缺省 0.1）。
    *
@@ -2208,7 +2268,14 @@ export type EventType =
   /** v9a：派生招命中一个目标，value = 目标假人 id */
   | 'link-hit'
   /** v9s.29：命中卡肉开始，value = 冻结时长（秒）。表现层据此触发镜头震动 / 音效 */
-  | 'hitstop';
+  | 'hitstop'
+  /**
+   * v9s.31：关键帧事件（AnimNotify）。`name` 是事件名，`value` 是附带数值。
+   *
+   * 与上面「每个事件一个 type」不同：这里的 type 只有一种，语义全部在 name 里，
+   * 因为通知是**数据驱动**的（加一个事件不该改 Core 的联合类型）。
+   */
+  | 'notify';
 
 /** 显式事件队列（数组），对应 C# 的 List<GameEvent>，可跨语言比对。 */
 export type GameEvent = {
@@ -2219,6 +2286,8 @@ export type GameEvent = {
   z: number;
   /** 语义随事件类型而定：连击段 / 施法序号 / 蓄力值 / 武器槽位 / 假人 id */
   value: number;
+  /** v9s.31：仅 `type='notify'` 时存在，关键帧事件名（`blade-air` / `foot-step` …） */
+  name?: string;
 };
 
 export type CharacterState = {
