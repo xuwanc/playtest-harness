@@ -1042,7 +1042,9 @@ npm run sweep -- --heights --weapon greatsword --combo 3   # 找砸地时刻
   `onlyUnhit=false` 打两次 / 每次攻击只发一次事件 / 删配置回旧行为 / 卡肉 ×1.7。
 - `npx vitest run` **86 文件 / 862 例**全绿；`determinism` 契约快照按「状态字段有意新增」更新并复跑两次稳定。
 - `npm run verify` 全链通过；`npm run smoke` **11/11**（新增「击地尘环生成」），命中 progress 0.368。
-- `npm run sweep -- --check` 九段偏差 2~3°（u=0 那一点 16°，是预热不足，已在 README 注明）。
+- `npm run sweep -- --check`：九段逐点偏差 **2~3°**；唯一例外是每段的 u=0（差 16°）——
+  那一点落在段首，`preview` 没有 windup 历史，读到的是段间过渡帧，而且该点不产生命中，
+  所以保留原值。`--write` 在偏差 ≤ 阈值时**默认不写回**（避免无意义 churn），要强制用 `--force`。
 
 ## v9s.36 · 卡肉时机对齐（刃身扫掠门）
 

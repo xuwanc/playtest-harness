@@ -16,6 +16,10 @@
 `--write` 只改 `pts` 的数值，保留 `tolDeg` / `byCombo` 结构与其它配置的排版；
 每段还会顺带打印「最大偏差」，超过 `--tol`（默认 6°）会以非零退出码提醒 ——
 这条曲线漂了，判定就会和人看到的刀重新错开。
+
+已知限制：每段的 **u=0** 读不准（实测差 16°）。`preview` 直接跳到 active，没有 windup
+的历史，段首姿态还带着「上一段 → 这一段」的过渡；而 u=0 是身后蓄势点、不产生命中，
+所以保留原值即可。
 """
 
 from __future__ import annotations
@@ -88,6 +92,7 @@ def main() -> int:
     ap.add_argument("--max-u", type=float, default=0.8, help="采样到哪个 u（默认 0.8）")
     ap.add_argument("--warm", type=int, default=6, help="每个采样点预热帧数（默认 6）")
     ap.add_argument("--tol", type=float, default=6.0, help="偏差告警阈值（度）")
+    ap.add_argument("--force", action="store_true", help="即使偏差没超阈值也写回")
     args = ap.parse_args()
 
     if not args.write:
@@ -138,8 +143,11 @@ def main() -> int:
                 )
                 pts: list[list[float]] = []
                 heights: list[list[float]] = []
-                for uu in us:
-                    r = sample(page, weapon, combo, uu, args.warm)
+                for i, uu in enumerate(us):
+                    # 每段的第 0 点：上一段末尾的姿态离得最远，腕部 / 副手要更长时间收敛，
+                    # 预热不够会读成过渡帧（实测差 16°）。其余点按 --warm 即可。
+                    warm = max(args.warm, 36) if i == 0 else args.warm
+                    r = sample(page, weapon, combo, uu, warm)
                     ang = angle_deg(r["tip"], r["yaw"])
                     pts.append([uu, ang])
                     heights.append([uu, r["tip"][1]])
@@ -176,14 +184,17 @@ def main() -> int:
     print(f"\n最大偏差：{worst:.1f}°（{worst_tag or '-'}），阈值 {args.tol:g}°")
 
     if args.write:
-        for weapon, combo, pts, _h in rows:
-            weapons[weapon]["hitSweep"]["byCombo"][str(combo)]["pts"] = [
-                [uu, round(ang, 1)] for uu, ang in pts
-            ]
-        CONFIG.write_text(
-            json.dumps(_CFG, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        print(f"已写回 {CONFIG.relative_to(ROOT)}")
+        if worst <= args.tol and not args.force:
+            print(f"偏差 {worst:.1f}° ≤ 阈值 {args.tol:g}°，不写回（要强制用 --force）")
+        else:
+            for weapon, combo, pts, _h in rows:
+                weapons[weapon]["hitSweep"]["byCombo"][str(combo)]["pts"] = [
+                    [round(uu, 2) if uu % 0.2 else uu, round(ang)] for uu, ang in pts
+                ]
+            CONFIG.write_text(
+                json.dumps(_CFG, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+            print(f"已写回 {CONFIG.relative_to(ROOT)}")
 
     if worst > args.tol:
         print(f"警告：曲线偏移超过 {args.tol:g}°，动画改过就必须重采（--write）")
