@@ -1511,6 +1511,86 @@
         },
         "poseIn": 0.1,
         "poseOut": 0.16
+      },
+      "stance": {
+        "sword-shield": {
+          "armSwing": 0.85,
+          "armR": {
+            "pitch": -0.12,
+            "roll": 0.1,
+            "elbow": -0.15
+          },
+          "armL": {
+            "pitch": -0.45,
+            "roll": 0.1,
+            "elbow": -0.75
+          },
+          "torsoYaw": 0.12,
+          "bladePitchDeg": -8,
+          "blend": 0.22
+        },
+        "dual-swords": {
+          "armSwing": 1.0,
+          "armR": {
+            "pitch": -0.15,
+            "roll": 0.16,
+            "elbow": -0.45
+          },
+          "armL": {
+            "pitch": -0.15,
+            "roll": -0.16,
+            "elbow": -0.45
+          },
+          "torsoYaw": 0.0,
+          "bladePitchDeg": -12,
+          "bladePitchOffDeg": -8,
+          "blend": 0.22
+        },
+        "greatsword": {
+          "armSwing": 0.45,
+          "armR": {
+            "pitch": -0.3,
+            "roll": 0.05,
+            "elbow": -0.55
+          },
+          "armL": {
+            "pitch": -0.2,
+            "roll": -0.1,
+            "elbow": -0.65
+          },
+          "torsoPitch": 0.04,
+          "bladePitchDeg": -30,
+          "blend": 0.26
+        },
+        "staff": {
+          "armSwing": 0.6,
+          "armR": {
+            "pitch": -0.1,
+            "roll": 0.06,
+            "elbow": -0.35
+          },
+          "armL": {
+            "pitch": 0.02,
+            "roll": -0.08,
+            "elbow": -0.15
+          },
+          "torsoYaw": 0.06,
+          "blend": 0.22
+        },
+        "bow": {
+          "armSwing": 0.55,
+          "armL": {
+            "pitch": -0.15,
+            "roll": -0.1,
+            "elbow": -0.2
+          },
+          "armR": {
+            "pitch": 0.02,
+            "elbow": -0.25
+          },
+          "torsoYaw": -0.08,
+          "blend": 0.22
+        }
       }
     },
     "weaponMount": {
@@ -1669,7 +1749,8 @@
       "minSpeed": 5.5,
       "color": "#8fd0ff",
       "intensity": 0.42,
-      "tipBoost": 0.35
+      "tipBoost": 0.35,
+      "pulseDecay": 14
     },
     "hitstop": {
       "enabled": true,

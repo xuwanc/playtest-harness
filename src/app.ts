@@ -164,10 +164,19 @@ export function startApp(): void {
 
   // 玩法实验台的调试钩子：浏览器控制台 / 自动化验收可直接读状态、投影坐标，
   // 以及热改表现层配置（相机、特效时长等），无需重编译
-  // v9s.30：体型切换（B 键）。放在 window 上而不是 InputFrame 里 —— 体型是纯表现层
+  // v9s.30：体型切换。放在 window 上而不是 InputFrame 里 —— 体型是纯表现层
   // 选项，不该进 Core 的 intents / 快照；切换时只重建骨架，角色位置与状态都不动。
+  // v9s.32：补上 UI 入口（顶部「体型」胶囊），不再只靠 B 键；点击与快捷键共用
+  // 同一个循环函数，且每次都从 view 的真实 id 取下一项，控制台改过也不会错位。
   const bodyIds = view.bodyTypes().ids;
-  let bodyIdx = 0;
+  const bodyBtn = document.getElementById('body-toggle');
+  const bodyName = (id: string): string => VIEW_CONFIG.bodyTypes?.[id]?.name ?? id;
+  const syncBodyLabel = (): void => {
+    if (!bodyBtn) return;
+    const id = view.bodyTypes().id;
+    bodyBtn.textContent = `体型 ${bodyName(id)}`;
+    bodyBtn.setAttribute('aria-label', `切换体型（当前：${bodyName(id)}，快捷键 B）`);
+  };
   const toast = document.createElement('div');
   toast.style.cssText = [
     'position:fixed', 'left:50%', 'top:14px', 'transform:translateX(-50%)',
@@ -183,12 +192,22 @@ export function startApp(): void {
     window.clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => { toast.style.opacity = '0'; }, 1600);
   };
+  const cycleBody = (): void => {
+    if (bodyIds.length < 2) {
+      showToast('只有一个体型预设');
+      return;
+    }
+    const cur = view.bodyTypes().id;
+    const i = Math.max(0, bodyIds.indexOf(cur));
+    const next = view.setBodyType(bodyIds[(i + 1) % bodyIds.length]);
+    syncBodyLabel();
+    showToast(`体型：${bodyName(next)}（B / 顶部胶囊切换）`);
+  };
+  syncBodyLabel();
+  bodyBtn?.addEventListener('click', cycleBody);
   window.addEventListener('keydown', (e) => {
-    if (e.repeat || e.code !== 'KeyB' || bodyIds.length < 2) return;
-    bodyIdx = (bodyIdx + 1) % bodyIds.length;
-    const next = view.setBodyType(bodyIds[bodyIdx]);
-    const cfg = VIEW_CONFIG.bodyTypes?.[next];
-    showToast(`体型：${cfg?.name ?? next}（B 切换）`);
+    if (e.repeat || e.code !== 'KeyB') return;
+    cycleBody();
   });
 
   (window as unknown as { __harness?: unknown }).__harness = {
@@ -211,11 +230,19 @@ export function startApp(): void {
     gaitDebug: () => view.gaitDebug(),
     // v9s.23：挥击姿态（段号 / 方向 / 躯干三轴 / 肩部位移）
     swingDebug: () => view.swingDebug(),
+    // v9s.32：持械待机姿态（权重 / 双臂偏移 / 躯干扭转 / 刀身仰角）
+    stanceDebug: () => view.stanceDebug(),
+    // v9s.32：挥空时刀光增亮的读数（证明「不震屏也有反馈」）
+    trailDebug: () => view.trailDebug(),
     // v9s.26：刃身两端世界坐标（验收横扫仰角，避免被斜俯视截图误导）
     bladeWorld: () => view.bladeWorld(),
     projectPoint: (x: number, y: number, z: number) => view.projectPoint(x, y, z),
-    // v9s.30：体型切换（B 键同一入口），验收可直接看长腿 / 长臂下的姿态
-    setBodyType: (id: string) => view.setBodyType(id),
+    // v9s.30：体型切换（B 键 / 顶部胶囊同一入口），验收可直接看长腿 / 长臂下的姿态
+    setBodyType: (id: string) => {
+      const next = view.setBodyType(id);
+      syncBodyLabel();
+      return next;
+    },
     bodyTypes: () => view.bodyTypes(),
     bladesWorld: () => view.bladesWorld(),
     /**

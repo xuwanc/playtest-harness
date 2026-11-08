@@ -3,7 +3,7 @@ import { wrapAngle } from '../core';
 import type {
   CharacterState, ColorConfig, CombatState, GaitViewConfig, HurtState, HurtViewConfig,
   IKViewConfig, LeanViewConfig, LinkState, LinkViewConfig, OrientationViewConfig,
-  ProgramAnimViewConfig, SwingPoseViewConfig, TurnInPlaceState, VoxelConfig, WeaponId,
+  ProgramAnimViewConfig, StanceViewConfig, SwingPoseViewConfig, TurnInPlaceState, VoxelConfig, WeaponId,
   WeaponMountConfig,
   WeaponWristViewConfig,
 } from '../core';
@@ -107,6 +107,21 @@ export type VoxelRig = {
     bladeYawOff: number;
     shoulderL: { x: number; y: number; z: number };
     shoulderR: { x: number; y: number; z: number };
+  };
+  /**
+   * v9s.32：当前武器的持械待机姿态读数（权重 / 双臂偏移 / 躯干扭转 / 刀身仰角）。
+   * 供 clip-lab 与自动化验收确认「换武器后上半身真的换了」。
+   */
+  stanceDebug(): {
+    weapon: WeaponId;
+    weight: number;
+    armL: { pitch: number; yaw: number; roll: number; elbow: number };
+    armR: { pitch: number; yaw: number; roll: number; elbow: number };
+    torsoYaw: number;
+    torsoPitch: number;
+    bladePitchDeg: number;
+    bladePitchOffDeg: number;
+    armSwing: number;
   };
   /**
    * v9s.28：clip-lab 专用 —— 把剪辑时间轴固定到 t（0..1），绕过 `swingCurve(progress)`。
@@ -589,6 +604,14 @@ export function createVoxelRig(
   markBlade(parts.staff.right, 0.78, 0.92);
 
   let currentWeapon: WeaponId | null = null;
+
+  // v9s.32：持械待机姿态。换武器时从 0 淡入，避免手臂瞬间跳到新基准；
+  // 其余时间恒为 1。姿态永远只叠加在「非攻击」基准上，攻击由挥击剪辑整体覆盖。
+  let stanceWeapon: WeaponId | null = null;
+  let stanceWeight = 1;
+  let stancePitch = 0;
+  let stancePitchOff = 0;
+  let stanceCfgNow: StanceViewConfig | null = null;
 
   // 移动惯性倾斜：纯表现层本地状态，不进入 Core / 快照。
   // 由速度差分得到加速度在身体前方的投影（启动前倾 / 刹车后仰），
@@ -1199,7 +1222,9 @@ export function createVoxelRig(
     };
 
     // ---- 主手 ----
-    const e = (swingBladePitch ?? mountBasePitch(w)) + drag;
+    // v9s.32：非攻击帧叠加该武器的持械仰角（例如大剑待机时剑尖压得更低），
+    // 攻击帧仍以挥击剪辑的 bladePitch 为准，偏移自然让位。
+    const e = (swingBladePitch ?? (mountBasePitch(w) + stancePitch)) + drag;
     // 刻意**不**把腕角算进补偿链：腕滞后是「剑比手慢半拍」的那一层，
     // 抵消掉它就等于把 v9s24 的白做了（实测剑尖相对手只差 1cm）。这里只抵消
     // 躯干 + 肩 + 肘，让剑停在目标仰角附近，再叠加腕部的甩动。
@@ -1211,7 +1236,7 @@ export function createVoxelRig(
     // 反解基准按武器几何区分：剑是「长轴 +Y」→ 基准 π/2（0 = 剑水平）；
     // 盾是「法线 +Z」的平板 → 基准 = 默认挂点角（0 = 盾面正对前方），
     // 于是盾猛顶时数据只要写 0，盾面就始终保持朝前，不管左臂前顶到哪个角度。
-    const eo = swingBladePitchOff ?? (w === 'sword-shield' ? null : mountOffBasePitch(w));
+    const eo = swingBladePitchOff ?? (w === 'sword-shield' ? null : mountOffBasePitch(w) + stancePitchOff);
     const offChain = torsoPitch + offArm.root.rotation.x + offArm.joint.rotation.x;
     if (w === 'sword-shield') {
       offMount.rotation.x = eo === null
@@ -1673,6 +1698,21 @@ export function createVoxelRig(
       // 身体前方单位向量 = (sin(bodyYaw), cos(bodyYaw))；加速度投影 >0 为加速、<0 为刹车。
       const dt = Math.max(1 / 240, Math.min(frameDt, 0.1));
 
+      // ---- v9s.32 持械待机姿态：按武器取基准偏移，换武器时淡入 ----
+      // 只改「非攻击」基准（步态摆臂 + 躯干朝向）；攻击时 applyCombatPose 会整体
+      // 覆盖手臂 / 躯干，交叉淡出仍以这里写好的姿态为起点，所以起手不再从
+      // 「统一徒手站姿」开始，而是从「这把武器的持械站姿」开始。
+      stanceCfgNow = animCfg.stance?.[combat.weapon] ?? null;
+      if (stanceWeapon !== combat.weapon) {
+        stanceWeapon = combat.weapon;
+        stanceWeight = stanceCfgNow ? 0 : 1;
+      }
+      const stanceDur = Math.max(0.01, stanceCfgNow?.blend ?? 0.22);
+      stanceWeight = Math.min(1, stanceWeight + dt / stanceDur);
+      const stanceK = stanceCfgNow ? stanceWeight : 0;
+      stancePitch = ((stanceCfgNow?.bladePitchDeg ?? 0) * Math.PI) / 180 * stanceK;
+      stancePitchOff = ((stanceCfgNow?.bladePitchOffDeg ?? 0) * Math.PI) / 180 * stanceK;
+
       // ---- v8c 时间源：优先取 Core 的 world.time ----
       // 暂停 / 时间缩放 / 单步推进时，落地缓冲与逻辑同步；不传时（单测）按 frameDt 累加。
       const now = coreTime === undefined ? (localTime += frameDt) : coreTime;
@@ -2019,16 +2059,25 @@ export function createVoxelRig(
         legR.root.rotation.z = gait.legR.rollZ;
         legL.joint.rotation.x = gait.legL.kneeX;
         legR.joint.rotation.x = gait.legR.kneeX;
-        armL.root.rotation.x = gait.armL;
-        armR.root.rotation.x = gait.armR;
+        // v9s.32：持械姿态 = 步态摆臂 × 该武器的摆臂倍率 + 基础偏移。
+        // 偏移是「相对」的，所以走路时依然保留步伐摆动（只是重武器摆得更少），
+        // 站住时则停在武器自己的持械角度上。
+        const sk = stanceCfgNow ? stanceWeight : 0;
+        const swingScale = 1 + (((stanceCfgNow?.armSwing ?? 1) - 1) * sk);
+        const offR = stanceCfgNow?.armR;
+        const offL = stanceCfgNow?.armL;
+        const armLx = gait.armL * swingScale + (offL?.pitch ?? 0) * sk;
+        const armRx = gait.armR * swingScale + (offR?.pitch ?? 0) * sk;
+        armL.root.rotation.x = armLx;
+        armR.root.rotation.x = armRx;
         // v8g：肘朝身前折（负号）；顺手修旧版 armR 误用 gait.armL 的取值
-        armL.joint.rotation.x = -(0.18 + gait.armL * 0.2);
-        armR.joint.rotation.x = -(0.18 + gait.armR * 0.2);
+        armL.joint.rotation.x = -(0.18 + armLx * 0.2) + (offL?.elbow ?? 0) * sk;
+        armR.joint.rotation.x = -(0.18 + armRx * 0.2) + (offR?.elbow ?? 0) * sk;
         // 手臂 roll / yaw 每帧归零：applyCombatPose 的大剑双手分支会写这两项
-        armL.root.rotation.z = 0;
-        armR.root.rotation.z = 0;
-        armL.root.rotation.y = 0;
-        armR.root.rotation.y = 0;
+        armL.root.rotation.z = (offL?.roll ?? 0) * sk;
+        armR.root.rotation.z = (offR?.roll ?? 0) * sk;
+        armL.root.rotation.y = (offL?.yaw ?? 0) * sk;
+        armR.root.rotation.y = (offR?.yaw ?? 0) * sk;
         // 骨盆起伏 / 左右重心转移 / 侧倾统一写在共享 pelvis 上：
         // 上下半身由层级自动联动，不必再分别给两个并列组手动对齐同一份位移。
         pelvis.position.x = gait.pelvisX;
@@ -2115,6 +2164,13 @@ export function createVoxelRig(
       // 只在「过渡中」混合：w=1 是恒等，w=0 时上面已经写完待机姿态，
       // 再拿上一帧的快照混一次会把旧姿态糊回来（快照只在非零权重时刷新）。
       if (combatPoseW > 0 && combatPoseW < 1) blendCombatPose(combatPoseW);
+      // v9s.32：躯干朝向的持械偏移。攻击权重越高，这部分越让位给挥击姿态，
+      // 收招时再随 combatPoseW 淡回 —— 不额外引入一条淡入淡出时间轴。
+      if (stanceCfgNow) {
+        const w = (1 - combatPoseW) * stanceWeight;
+        upper.rotation.y += (stanceCfgNow.torsoYaw ?? 0) * w;
+        upper.rotation.x += (stanceCfgNow.torsoPitch ?? 0) * w;
+      }
       // 2.05) 法杖引导姿态：不进近战状态机，在基础步态之上单独叠加（v7c #12）
       applyChannelPose(channeling, c.gaitPhase);
       // 2.06) v9a 派生招姿态（举盾前撞）：与 combat.phase 正交，按 link.progress 独立驱动
@@ -2313,6 +2369,32 @@ export function createVoxelRig(
     },
     setClipT(t: number | null) {
       clipLabT = t === null || !Number.isFinite(t) ? null : Math.max(0, Math.min(1, t));
+    },
+    stanceDebug() {
+      const offR = stanceCfgNow?.armR;
+      const offL = stanceCfgNow?.armL;
+      const k = stanceCfgNow ? stanceWeight : 0;
+      return {
+        weapon: (currentWeapon ?? 'sword-shield') as WeaponId,
+        weight: k,
+        armL: {
+          pitch: (offL?.pitch ?? 0) * k,
+          yaw: (offL?.yaw ?? 0) * k,
+          roll: (offL?.roll ?? 0) * k,
+          elbow: (offL?.elbow ?? 0) * k,
+        },
+        armR: {
+          pitch: (offR?.pitch ?? 0) * k,
+          yaw: (offR?.yaw ?? 0) * k,
+          roll: (offR?.roll ?? 0) * k,
+          elbow: (offR?.elbow ?? 0) * k,
+        },
+        torsoYaw: (stanceCfgNow?.torsoYaw ?? 0) * k,
+        torsoPitch: (stanceCfgNow?.torsoPitch ?? 0) * k,
+        bladePitchDeg: (stancePitch * 180) / Math.PI,
+        bladePitchOffDeg: (stancePitchOff * 180) / Math.PI,
+        armSwing: stanceCfgNow?.armSwing ?? 1,
+      };
     },
     swingDebug() {
       const p = swingPose;

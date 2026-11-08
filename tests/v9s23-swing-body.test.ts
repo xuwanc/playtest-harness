@@ -232,7 +232,9 @@ describe('v9s.23 骨架落地：身体 / 肩部', () => {
     expect(worstStep).toBeLessThan(0.02);        // 单帧不超过 2cm：不是硬切
     const settled = rig.swingDebug();
     expect(settled.shoulderR.y).toBeCloseTo(baseY, 6);
-    expect(settled.shoulderR.z).toBeCloseTo(0, 6);
+    // v9s.32：大剑待机姿态把双臂收在身前（pitch −0.3），肩点会前送约 2mm。
+    // 这里要抓的是「攻击留下的 3.5cm 前送有没有清掉」，2mm 的持械基准不算残留。
+    expect(settled.shoulderR.z).toBeLessThan(0.01);
     rig.dispose();
   });
 

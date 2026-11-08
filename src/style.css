@@ -112,6 +112,17 @@ html, body {
   color: #dff0ff;
 }
 
+/* v9s.32：体型切换 —— 它是「动作」不是「折叠面板」，用偏青的描边区分，
+   避免和旁边四个 ▸ 胶囊混在一起；点击后文案直接显示当前体型。 */
+.body-pill {
+  border-color: rgba(140, 215, 195, 0.5);
+  color: #cdf3e6;
+}
+
+.body-pill:active {
+  background: rgba(55, 130, 110, 0.65);
+}
+
 /* ---- v9s.15：测试工位面板（点名字传送） ---- */
 #lab-panel {
   width: min(272px, 80vw);

@@ -30,6 +30,8 @@ export type TrailConfig = {
   intensity: number;
   /** 刃尖一侧额外提亮（0 = 与刃根同色，1 = 尖端更亮） */
   tipBoost: number;
+  /** v9s.32：挥空脉冲的衰减速率（1/s），越大闪得越短 */
+  pulseDecay?: number;
 };
 
 type Sample = {
@@ -50,8 +52,16 @@ export type WeaponTrail = {
   ): void;
   /** 换武器 / 复位时清空，避免残留一段旧轨迹 */
   reset(): void;
+  /**
+   * v9s.32：挥空 / 挥出瞬间的短促增亮。
+   *
+   * 以前这个时机是靠镜头震动表达的，但空挥也跟着震 → 打空气和打实人的反馈一样，
+   * 命中感被稀释。现在镜头震动只留给「真的打到了」（Core 的 hitstop），
+   * 空挥只让刀光闪一下：有反馈、但没有「打实了」的重量。
+   */
+  pulse(strength: number): void;
   /** 诊断读数：当前采样点数量与是否可见（供验收 / 调试面板） */
-  debug(): { count: number; visible: boolean; speed: number; moved: number; hasBlade: boolean; active: boolean };
+  debug(): { count: number; visible: boolean; speed: number; moved: number; hasBlade: boolean; active: boolean; pulse: number };
   dispose(): void;
 };
 
@@ -97,6 +107,7 @@ export function createWeaponTrail(cfg: TrailConfig): WeaponTrail {
   let lastMoved = 0;
   let lastHasBlade = false;
   let lastActive = false;
+  let pulseGain = 0;
 
   function rebuild(): void {
     const n = samples.length;
@@ -114,7 +125,7 @@ export function createWeaponTrail(cfg: TrailConfig): WeaponTrail {
       // 亮度、几个采样点连成「白色拱门」；只靠立方时又淡到看不见。
       const fade = t * t;
       const speedGain = Math.min(1, s.speed / Math.max(1e-3, cfg.minSpeed * 2));
-      const bright = cfg.intensity * fade * (0.55 + 0.45 * speedGain);
+      const bright = cfg.intensity * fade * (0.55 + 0.45 * speedGain) * (1 + pulseGain);
       // v9s.23：带子沿年龄收窄（刃根向刃尖靠拢），尾巴收成一个点。
       // 不收窄时，大剑下劈的剑尖在 0.18s 内扫过 2m 多，6 个采样点连成一条等宽
       // 的白带，从斜上方看就是一整个「拱门」；收窄后才读成一条被拉长的划痕。
@@ -151,6 +162,9 @@ export function createWeaponTrail(cfg: TrailConfig): WeaponTrail {
         return;
       }
       const step = Math.max(0, dt);
+      // 挥空增亮：按指数衰减，帧率无关；decay 14 ≈ 70ms 内回到 1/e
+      pulseGain *= Math.exp(-Math.max(1, cfg.pulseDecay ?? 14) * step);
+      if (pulseGain < 1e-3) pulseGain = 0;
       for (const s of samples) s.age += step;
       while (samples.length > 0 && samples[0].age > cfg.life) samples.shift();
 
@@ -192,11 +206,17 @@ export function createWeaponTrail(cfg: TrailConfig): WeaponTrail {
       return {
         count: samples.length, visible: mesh.visible,
         speed: lastSpeed, moved: lastMoved, hasBlade: lastHasBlade, active: lastActive,
+        pulse: pulseGain,
       };
+    },
+    pulse(strength) {
+      if (!Number.isFinite(strength) || strength <= 0) return;
+      pulseGain = Math.min(1.5, pulseGain + strength);
     },
     reset() {
       samples = [];
       prevTip = null;
+      pulseGain = 0;
       mesh.visible = false;
       geo.setDrawRange(0, 0);
     },

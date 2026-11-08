@@ -213,7 +213,10 @@ describe('v9o 主角：胸随下盘适当偏转，头仍朝目标', () => {
         expect(Math.sign(up)).toBe(Math.sign(low));          // 同向，不是反着拧
         expect(Math.abs(up)).toBeLessThan(Math.abs(low));    // 胸转得比腿少
         expect(Math.abs(up)).toBeGreaterThan(0.05);          // 确实转了，不是 0
-        expect(rig.gaitDebug().chestYaw).toBeCloseTo(up, 6); // 诊断读数与实际一致
+        // v9s.32：待机 / 移动的上半身会叠加「持械躯干扭转」（剑盾侧身站），
+        // 这层不进 chestYaw（那是纯「胸随下盘」的读数），所以比较时要补上。
+        const stanceYaw = rig.stanceDebug().torsoYaw;
+        expect(rig.gaitDebug().chestYaw + stanceYaw).toBeCloseTo(up, 6);
       }
     }
     expect(saw).toBe(true);

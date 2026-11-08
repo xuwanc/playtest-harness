@@ -1606,6 +1606,48 @@ export type ProgramAnimViewConfig = {
   trail: TrailViewConfig;
   /** v9s.23：近战挥击的身体 / 肩部幅度（纯表现，可整体关闭） */
   swing?: SwingPoseViewConfig;
+  /** v9s.32：各武器的待机 / 移动上半身姿态（纯表现，可整体关闭） */
+  stance?: Record<string, StanceViewConfig>;
+};
+
+/**
+ * v9s.32 · 一把武器的「持械待机 / 移动」上半身姿态。
+ *
+ * 旧版所有武器在 idle / 行走时都套用同一条程序化摆臂：剑盾、双剑、大剑、法杖、弓
+ * 的手臂角度完全一样，只换手里的模型。真实的持械待机至少有三件事不同：
+ *
+ * 1. **持械臂的基准角**：举盾时左臂前架、双刀时两臂外张、大剑时双手收在身前；
+ * 2. **摆臂幅度**：双手重武器几乎不摆臂，短剑会跟着步伐自然摆动；
+ * 3. **躯干朝向**：剑盾侧身站、双刀正面对敌，躯干扭转不同。
+ *
+ * 这些量都写成「相对步态基准的偏移」，在攻击时由挥击剪辑整体覆盖（交叉淡入淡出），
+ * 因此不会与连击姿态打架。角度单位 rad，刀刃仰角用度（与挥击数据同一口径）。
+ */
+export type StanceViewConfig = {
+  /** 摆臂倍率（1 = 与徒手一致；双手重武器 0.4~0.6 读起来更稳） */
+  armSwing?: number;
+  /** 主手（右手）偏移；pitch 负 = 抬到身前，roll 负 = 向体侧外张（右手） */
+  armR?: StanceArmOffset;
+  /** 副手（左手）偏移；roll 正 = 向体侧外张（左手） */
+  armL?: StanceArmOffset;
+  /** 躯干扭转（rad，+ = 转向角色右侧 / 持剑侧） */
+  torsoYaw?: number;
+  /** 躯干前倾（rad，+ = 低头压肩） */
+  torsoPitch?: number;
+  /** 主手刀身世界仰角偏移（度，+ = 刀尖抬高；只影响非攻击帧） */
+  bladePitchDeg?: number;
+  /** 副手刀身世界仰角偏移（度） */
+  bladePitchOffDeg?: number;
+  /** 切换到该姿态的过渡时长（s，缺省 0.22） */
+  blend?: number;
+};
+
+export type StanceArmOffset = {
+  pitch?: number;
+  yaw?: number;
+  roll?: number;
+  /** 肘部俯仰偏移（负 = 向前屈肘） */
+  elbow?: number;
 };
 
 /**

@@ -87,7 +87,7 @@ export type SceneView = {
   /** v9s.15：只关浮动标牌，保留地面盘 */
   setLabLabelsVisible(v: boolean): void;
   /** v9s.22：挥击拖尾读数（采样点数 / 是否可见），供验收与调试面板 */
-  trailDebug(): { count: number; visible: boolean };
+  trailDebug(): { count: number; visible: boolean; pulse?: number };
   /** v9s.22：角色本帧四肢形变读数（1 = 原长） */
   stretchDebug(): { arm: number; leg: number; torso: number; impact: number };
   /** v9s.24：腕部滞后读数（武器相对手的自由度），验收「剑不再焊在手上」 */
@@ -100,6 +100,18 @@ export type SceneView = {
     rootYaw: number; spinYaw: number; rootTurn: number;
     shoulderL: { x: number; y: number; z: number };
     shoulderR: { x: number; y: number; z: number };
+  };
+  /** v9s.32：当前武器的持械待机姿态读数（权重 / 双臂偏移 / 躯干扭转 / 刀身仰角） */
+  stanceDebug(): {
+    weapon: string;
+    weight: number;
+    armL: { pitch: number; yaw: number; roll: number; elbow: number };
+    armR: { pitch: number; yaw: number; roll: number; elbow: number };
+    torsoYaw: number;
+    torsoPitch: number;
+    bladePitchDeg: number;
+    bladePitchOffDeg: number;
+    armSwing: number;
   };
   /** v9s.26：刃身两端的世界坐标 —— 斜俯视截图会把「水平指向远方」看成「竖直」，
    *  验收横扫幅度 / 仰角必须读世界坐标，不能只看截图。纯观测。 */
@@ -657,6 +669,9 @@ export function createSceneView(
     swingDebug() {
       return voxel.swingDebug();
     },
+    stanceDebug() {
+      return voxel.stanceDebug();
+    },
     bladeWorld() {
       return voxel.weaponBlade();
     },
@@ -690,16 +705,16 @@ export function createSceneView(
 
       // v9s.31：关键帧事件 → 表现层一次性效果。
       // Core 保证「每条通知恰好一次」，这里只做映射，不再自己按进度猜时机。
-      //  - blade-air：挥出瞬间的风压。大剑给得更重，读得出「这把刀很沉」；
-      //  - foot-step：换步落地，一记极轻的震，纯粹为了让脚步有存在感。
+      // v9s.32：**空挥不再震屏**。镜头震动是「打实了」的反馈，只能由 Core 的
+      // hitstop 触发；blade-air 改成让刀光闪一下 —— 有挥击反馈，但不会让玩家
+      // 误以为命中了。foot-step 同理，只保留事件供后续音效 / 尘土使用。
       for (let i = 0; i < w.events.length; i++) {
         const e = w.events[i];
         if (e.type !== 'notify') continue;
         const v = Number.isFinite(e.value) ? e.value : 0;
         if (e.name === 'blade-air') {
-          cam.addShake((0.06 + 0.16 * Math.max(0, Math.min(1, v))) * (cb.weapon === 'greatsword' ? 1.5 : 1));
-        } else if (e.name === 'foot-step') {
-          cam.addShake(0.03 * Math.max(0, Math.min(1, v)));
+          const k = Math.max(0, Math.min(1, v));
+          playerTrail.pulse((cb.weapon === 'greatsword' ? 0.9 : 0.55) * (0.4 + 0.6 * k));
         }
       }
 
@@ -1053,6 +1068,9 @@ export function createSceneView(
       voxel = buildRig(bt);
       voxel.group.position.y = -ROLL_PIVOT_Y;
       rollPivot.add(voxel.group);
+      // 旧骨架的刀光采样还挂在上一副身体的刃尖坐标上：不清理会残留最多 life(0.11s)
+      // 一条「悬空划痕」，且新骨架第一帧的刃身位置差得很远，连起来像瞬移。
+      playerTrail.reset();
       bodyTypeId = id;
       // 身高 / 半径同步进 Core 配置：否则碰撞、眼睛高度、相机注视点还是旧体型的值。
       world.config.characterHeight = bt.height;
