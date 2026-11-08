@@ -803,6 +803,32 @@
       "legLength": 0.4,
       "armLength": 0.42
     },
+    "bodyTypes": {
+      "standard": {
+        "name": "标准",
+        "height": 1.2,
+        "radius": 0.3
+      },
+      "tall": {
+        "name": "瘦高",
+        "height": 1.32,
+        "radius": 0.26,
+        "voxel": {
+          "headSize": 0.36,
+          "bodyWidth": 0.34,
+          "bodyHeight": 0.28,
+          "limbThickness": 0.1,
+          "legLength": 0.68,
+          "armLength": 0.5
+        },
+        "colors": {
+          "body": "#58b39a",
+          "head": "#ffe0b2",
+          "limb": "#3f8f7c",
+          "shoe": "#24443c"
+        }
+      }
+    },
     "orientation": {
       "legYawScale": 0.35,
       "hipYawMaxDeg": 90,
@@ -1553,9 +1579,9 @@
     },
     "weaponTrail": {
       "enabled": true,
-      "maxSamples": 8,
-      "minStep": 0.04,
-      "life": 0.09,
+      "maxSamples": 30,
+      "minStep": 0.015,
+      "life": 0.11,
       "minSpeed": 5.5,
       "color": "#8fd0ff",
       "intensity": 0.42,

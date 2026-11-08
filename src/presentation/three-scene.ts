@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { GroundBasis } from '../adapters/input';
-import type { Box, StationSpec, ViewConfig, World } from '../core';
+import type { BodyTypeConfig, Box, StationSpec, ViewConfig, World } from '../core';
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
 import { createLabLayer } from './lab-scene';
@@ -23,6 +23,13 @@ export type SceneView = {
   setGridVisible(v: boolean): void;
   /** v8e：设置用户缩放目标倍率（1 = 基础距离），由组装层每帧喂入 */
   setZoom(next: number): void;
+  /**
+   * v9s.30：切换体型预设（`view.bodyTypes` 的 id）。返回切换后的 id（未知 id 原样返回）。
+   * 只重建骨架尺寸，不动 Core 状态 —— 用来观察同一套动画在长腿 / 长臂下的适配。
+   */
+  setBodyType(id: string): string;
+  /** v9s.30：当前体型 id 与可选列表（HUD / 自动化用） */
+  bodyTypes(): { id: string; ids: string[] };
   /** 屏幕坐标 → 被点中的假人 id（0 = 没点中）。表现层做射线拾取，Core 只收 id。 */
   pickDummy(clientX: number, clientY: number): number;
   /** 世界坐标 → 屏幕像素坐标，供自动化验收精确定位假人。 */
@@ -192,11 +199,18 @@ export function createSceneView(
   // ---- 体素角色 ----
   // playerRoot 承担「位置 + 身体平滑朝向」；rig 自身只承担翻滚旋转。
   // 这样绕 rig 局部 X 轴前滚时，滚动方向会随身体朝向一起转（不会锁死在世界 X 轴）。
-  const voxel = createVoxelRig(
-    view.voxel, view.colors, world.config.moveSpeed, view.orientation, view.gait,
+  // v9s.30：体型可切换 —— 只换骨架尺寸，动画数据与逻辑完全不变。
+  // rig 是纯表现层对象（自带 geometry / material），重建时先 dispose 再挂新的，
+  // 不会有泄漏；Core 状态、拖尾、假人都不受影响。
+  const buildRig = (bt?: BodyTypeConfig) => createVoxelRig(
+    bt?.voxel ?? view.voxel,
+    bt?.colors ? { ...view.colors, ...bt.colors } : view.colors,
+    world.config.moveSpeed, view.orientation, view.gait,
     view.weaponMount, view.lean, view.hurt, view.animation, view.ik, view.links,
     view.weaponWrist,
   );
+  let bodyTypeId = 'standard';
+  let voxel = buildRig(view.bodyTypes?.[bodyTypeId]);
   // v9s.22：挥击拖尾挂在场景根节点（世界坐标采样，不随角色层级变换）
   const playerTrail = createWeaponTrail(view.weaponTrail);
   scene.add(playerTrail.object);
@@ -1012,6 +1026,24 @@ export function createSceneView(
     },
     setZoom(next): void {
       cam.setZoom(next);
+    },
+    setBodyType(id: string): string {
+      const bt = view.bodyTypes?.[id];
+      if (!bt || id === bodyTypeId) return bodyTypeId;
+      // 先摘再销毁：销毁会 dispose 几何体，若还在场景图里，当帧渲染会拿到空几何。
+      rollPivot.remove(voxel.group);
+      voxel.dispose();
+      voxel = buildRig(bt);
+      voxel.group.position.y = -ROLL_PIVOT_Y;
+      rollPivot.add(voxel.group);
+      bodyTypeId = id;
+      // 身高 / 半径同步进 Core 配置：否则碰撞、眼睛高度、相机注视点还是旧体型的值。
+      world.config.characterHeight = bt.height;
+      if (bt.radius !== undefined) world.config.characterRadius = bt.radius;
+      return bodyTypeId;
+    },
+    bodyTypes() {
+      return { id: bodyTypeId, ids: Object.keys(view.bodyTypes ?? {}) };
     },
     pickDummy,
     projectToScreen,

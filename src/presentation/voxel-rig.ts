@@ -403,7 +403,9 @@ export function createVoxelRig(
   // v9s.18：先转头（yaw）再点头（pitch）—— 顺序反了的话，头转到侧面时
   // 俯仰会绕世界 X 轴，看起来像在歪头。
   headPivot.rotation.order = 'YXZ';
-  headPivot.position.y = ori.headPivotHeight;     // 相对骨盆（配置值 = bodyHeight）
+  // 头部枢轴 = 躯干高度（配置值按标准体型写的 0.4）。瘦高体型躯干只有 0.24，
+  // 直接沿用会让头飘在躯干上方 16cm，所以按 bodyHeight 夹一下。
+  headPivot.position.y = Math.min(ori.headPivotHeight, bodyH);
   upper.add(headPivot);
 
   const head = makeBox(H, H, H, colors.head);
@@ -754,7 +756,15 @@ export function createVoxelRig(
   let pulseCompress = 0.3;
   let lastImpactVy = 0;
 
-  /** 按武器设置握持挂点的 pitch（剑从 +Y 转向 +Z 前方）与 yaw（左右外张，刀锋朝外）。 */
+  /**
+   * 按武器设置握持挂点的 pitch（剑从 +Y 转向 +Z 前方）。
+   *
+   * v9s.30：**不再在挂点上写 yaw**。欧拉 XYZ 序下 rz 先把长轴从 Y 轴偏出去，
+   * 仰角变成 `asin(cos(z)·cos(θ))` —— 上限只有 90° − z，大剑举顶要 92.8° 时
+   * 永远差一截（实测 78°）。外张改由 grip 的 `swordCantDeg` 承担（那是刀身自己的
+   * 坐标系，只把刀尖推向体侧，不参与仰角），于是 `mount.rotation.x` 单轴即可
+   * 覆盖 −90°~+90° 以外的全部角度。
+   */
   function applyMountPose(w: WeaponId): void {
     const d = Math.PI / 180;
     const m = mountCfg;
@@ -763,15 +773,15 @@ export function createVoxelRig(
     let lp = 0;
     let lz = 0;
     if (w === 'sword-shield') {
-      rp = m.swordPitchDeg * d; rz = -m.swordYawDeg * d;
+      rp = m.swordPitchDeg * d;
       lp = m.shieldPitchDeg * d;
     } else if (w === 'dual-swords') {
-      rp = m.swordPitchDeg * d; rz = -m.swordYawDeg * d;
-      lp = m.swordPitchDeg * d; lz = m.swordYawDeg * d;
+      rp = m.swordPitchDeg * d;
+      lp = m.swordPitchDeg * d;
     } else if (w === 'greatsword') {
-      rp = m.greatswordPitchDeg * d; rz = -m.greatswordYawDeg * d;
-      // 左手握柄沿剑身方向（与右手同 pitch、反向 yaw），双手持握时左手套在下段柄上
-      lp = m.greatswordPitchDeg * d; lz = m.greatswordYawDeg * d;
+      rp = m.greatswordPitchDeg * d;
+      // 左手握柄沿剑身方向（与右手同 pitch），双手持握时左手套在下段柄上
+      lp = m.greatswordPitchDeg * d;
     } else if (w === 'staff') {
       rp = m.staffPitchDeg * d;
     } else {
@@ -1170,33 +1180,46 @@ export function createVoxelRig(
     const offArm = leadR ? armL : armR;
     const offMount = leadR ? mountL : mountR;
     const drag = w === 'greatsword' && leadR ? dragAngle : 0;
+    // 默认外张（与 applyMountPose 的 rotation.z 同号：右手 −、左手 +）
+    const yawDeg = w === 'greatsword' ? mountCfg.greatswordYawDeg : mountCfg.swordYawDeg;
+    const dDeg = Math.PI / 180;
+    const baseYawR = -yawDeg * dDeg;
+    const baseYawL = yawDeg * dDeg;
+
+    // 外张角度的上限：XYZ 序下 rz 先把长轴从 Y 轴偏出去，仰角变成
+    // `asin(cos(z)·cos(θ))` —— 上限只有 90° − |z|。大剑举顶要 92.8°，带 16° 外张
+    // 就永远差一截（实测 78°）。这里按当前仰角**收缩**外张：横扫（e≈0）时用满，
+    // 越接近竖直收得越小，举顶时正好归零，于是单轴俯仰就能覆盖全程。
+    // 收缩只影响「刀尖偏体侧多少」，不影响挥击平面，横扫段逐帧不变。
+    const zClamp = (zBase: number, e: number): number => {
+      const cap = Math.max(0, Math.PI / 2 - Math.abs(e));
+      return Math.sign(zBase) * Math.min(Math.abs(zBase), cap);
+    };
 
     // ---- 主手 ----
-    const e = swingBladePitch;
-    if (e === null) {
-      mount.rotation.x = mountBasePitch(w) + drag;
-    } else {
-      // 刻意**不**把腕角算进补偿链：腕滞后是「剑比手慢半拍」的那一层，
-      // 抵消掉它就等于把 v9s24 的白做了（实测剑尖相对手只差 1cm）。这里只抵消
-      // 躯干 + 肩 + 肘，让剑停在目标仰角附近，再叠加腕部的甩动。
-      const chain = torsoPitch + arm.root.rotation.x + arm.joint.rotation.x;
-      mount.rotation.x = Math.PI / 2 - e - chain;
-    }
+    const e = (swingBladePitch ?? mountBasePitch(w)) + drag;
+    // 刻意**不**把腕角算进补偿链：腕滞后是「剑比手慢半拍」的那一层，
+    // 抵消掉它就等于把 v9s24 的白做了（实测剑尖相对手只差 1cm）。这里只抵消
+    // 躯干 + 肩 + 肘，让剑停在目标仰角附近，再叠加腕部的甩动。
+    const chain = torsoPitch + arm.root.rotation.x + arm.joint.rotation.x;
+    mount.rotation.set(Math.PI / 2 - e - chain, 0, zClamp(leadR ? baseYawR : baseYawL, e));
 
     // ---- 副手（v9s.26）----
     // 每帧都写：镜头没给 bladePitchOff 时写回默认挂点，收招后不会残留上一击的翻腕。
     // 反解基准按武器几何区分：剑是「长轴 +Y」→ 基准 π/2（0 = 剑水平）；
     // 盾是「法线 +Z」的平板 → 基准 = 默认挂点角（0 = 盾面正对前方），
     // 于是盾猛顶时数据只要写 0，盾面就始终保持朝前，不管左臂前顶到哪个角度。
-    const eo = swingBladePitchOff;
-    if (eo === null) {
-      offMount.rotation.x = mountOffBasePitch(w);
-    } else {
-      const offBase = w === 'sword-shield'
+    const eo = swingBladePitchOff ?? (w === 'sword-shield' ? null : mountOffBasePitch(w));
+    const offChain = torsoPitch + offArm.root.rotation.x + offArm.joint.rotation.x;
+    if (w === 'sword-shield') {
+      offMount.rotation.x = eo === null
         ? mountOffBasePitch(w)
-        : Math.PI / 2;
-      const offChain = torsoPitch + offArm.root.rotation.x + offArm.joint.rotation.x;
-      offMount.rotation.x = offBase - eo - offChain;
+        : mountOffBasePitch(w) - eo - offChain;
+    } else {
+      offMount.rotation.set(
+        Math.PI / 2 - (eo ?? 0) - offChain, 0,
+        zClamp(leadR ? baseYawL : baseYawR, eo ?? 0),
+      );
     }
 
     // ---- v9s.29：刃身外撇 + 刃面滚转 ----
@@ -1419,7 +1442,11 @@ export function createVoxelRig(
     armR.root.rotation.y = mix(b.rry, armR.root.rotation.y);
     armR.root.rotation.z = mix(b.rrz, armR.root.rotation.z);
     armR.joint.rotation.x = mix(b.rj, armR.joint.rotation.x);
-    root.rotation.y = mix(b.rootY, root.rotation.y);
+    // v9s.30：整体转体是**整圈角**，必须走最短弧。
+    // 双持第三击原地转一圈（spinYaw 推到 2π），收招淡出时「待机姿态」的 rootY 是 0，
+    // 直接线性插值会从 6.28 一路减到 0 —— 画面上就是转过一圈后又倒着转回去一圈。
+    // 走最短弧时 2π 与 0 差 0，淡出对朝向零影响；半圈被打断才真的回正。
+    root.rotation.y = b.rootY + wrapAngle(root.rotation.y - b.rootY) * k;
     lastRootTurn = root.rotation.y;
   }
 

@@ -1324,6 +1324,29 @@ export type VoxelConfig = {
   armLength: number;
 };
 
+/**
+ * v9s.30 · 可切换的体型预设。
+ *
+ * 体型不是「换个模型」而是「换一套骨架尺寸」：腿长决定髋高与跨步、臂长决定握持
+ * 与 IK 臂展、躯干宽决定肩距。同一套动画数据在不同尺寸下会暴露不同的适配问题
+ *（握持够不到、跨步踩空、挂点角度偏），所以把它做成可切换的观测手段。
+ *
+ * `height` 必须等于 `legLength + bodyHeight + headSize`（三头身），切换时同步写进
+ * Core 的 `characterHeight`，否则碰撞 / 眼睛高度会和视觉对不上。
+ */
+export type BodyTypeConfig = {
+  /** 显示名（HUD / 切换提示用） */
+  name: string;
+  /** 总身高（米）= legLength + bodyHeight + headSize */
+  height: number;
+  /** 碰撞半径（米），缺省沿用 core.characterRadius */
+  radius?: number;
+  /** 骨架尺寸；缺省沿用 view.voxel */
+  voxel?: VoxelConfig;
+  /** 配色覆盖（缺省沿用 view.colors），用来一眼区分体型 */
+  colors?: Partial<ColorConfig>;
+};
+
 /** 表现层程序化朝向参数：只影响观感，不进入 Core 状态。 */
 /**
  * 程序化步态（v8）：把「移动方向 → 腿部姿态」的解算参数外置，供调试面板热调。
@@ -1997,6 +2020,8 @@ export type ViewConfig = {
   showGrid: boolean;
   showColliders: boolean;
   voxel: VoxelConfig;
+  /** v9s.30：可切换的体型预设（键 = id，顺序即切换顺序）；缺省只用 voxel */
+  bodyTypes?: Record<string, BodyTypeConfig>;
   orientation: OrientationViewConfig;
   gait: GaitViewConfig;
   /** v8c：攻击动画下半身权重过滤 + 跳跃 / 落地程序化蓄力缓冲 */

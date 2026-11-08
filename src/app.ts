@@ -164,6 +164,33 @@ export function startApp(): void {
 
   // 玩法实验台的调试钩子：浏览器控制台 / 自动化验收可直接读状态、投影坐标，
   // 以及热改表现层配置（相机、特效时长等），无需重编译
+  // v9s.30：体型切换（B 键）。放在 window 上而不是 InputFrame 里 —— 体型是纯表现层
+  // 选项，不该进 Core 的 intents / 快照；切换时只重建骨架，角色位置与状态都不动。
+  const bodyIds = view.bodyTypes().ids;
+  let bodyIdx = 0;
+  const toast = document.createElement('div');
+  toast.style.cssText = [
+    'position:fixed', 'left:50%', 'top:14px', 'transform:translateX(-50%)',
+    'padding:6px 14px', 'border-radius:999px', 'font:600 13px/1.4 system-ui,sans-serif',
+    'color:#0b1620', 'background:#8fd0ff', 'box-shadow:0 4px 16px rgba(0,0,0,.35)',
+    'opacity:0', 'transition:opacity .18s', 'pointer-events:none', 'z-index:99',
+  ].join(';');
+  document.body.appendChild(toast);
+  let toastTimer = 0;
+  const showToast = (text: string): void => {
+    toast.textContent = text;
+    toast.style.opacity = '1';
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => { toast.style.opacity = '0'; }, 1600);
+  };
+  window.addEventListener('keydown', (e) => {
+    if (e.repeat || e.code !== 'KeyB' || bodyIds.length < 2) return;
+    bodyIdx = (bodyIdx + 1) % bodyIds.length;
+    const next = view.setBodyType(bodyIds[bodyIdx]);
+    const cfg = VIEW_CONFIG.bodyTypes?.[next];
+    showToast(`体型：${cfg?.name ?? next}（B 切换）`);
+  });
+
   (window as unknown as { __harness?: unknown }).__harness = {
     world, view, clock, input, viewConfig: VIEW_CONFIG, debug,
     getUserZoom: () => userZoom,
@@ -187,6 +214,9 @@ export function startApp(): void {
     // v9s.26：刃身两端世界坐标（验收横扫仰角，避免被斜俯视截图误导）
     bladeWorld: () => view.bladeWorld(),
     projectPoint: (x: number, y: number, z: number) => view.projectPoint(x, y, z),
+    // v9s.30：体型切换（B 键同一入口），验收可直接看长腿 / 长臂下的姿态
+    setBodyType: (id: string) => view.setBodyType(id),
+    bodyTypes: () => view.bodyTypes(),
     bladesWorld: () => view.bladesWorld(),
     /**
      * v9s.27 clip 工具台：把表现层定格到「某武器 · 某连击段 · 某进度」。
