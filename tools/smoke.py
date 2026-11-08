@@ -210,6 +210,67 @@ def main() -> int:
                       f"最近 {crowd['minDist']:.2f}m")
                 check("玩家受击击退默认打开", crowd["knockDefault"], "")
 
+                # ---- v9s.39：陪练一轮打出多段连击（不是单发） ----
+                # 把大剑陪练摆到玩家面前并清掉冷却，然后真机等一轮：段号会走过 1→2→3，
+                # attackId 每段 +1（起手 / 接续段都会自增，是「这一轮打了几刀」的直接读数）。
+                page.evaluate(
+                    "() => {"
+                    "  const h = window.__harness, w = h.world;"
+                    "  const s = w.dummies[w.config.dummies.count + 2];"
+                    # 前面几条断言让玩家挥着大剑（击地那条直接改了 combat.weapon），
+                    # 不清掉的话摆位瞬间就会砍中陪练 → 受击打断连击，测的就不是连击了。
+                    "  w.combat.phase = 'idle'; w.combat.phaseTimer = 0; w.combat.comboIndex = 0;"
+                    # 只留这一个陪练：另外两个也在 spar，会把玩家围着推，
+                    # 距离一拉开连击必然断在第 1 段 —— 那是「混战里被打断」，不是机制没生效。
+                    "  for (const d of w.dummies) {"
+                    "    if (d.id === s.id) continue;"
+                    "    d.mode = 'idle'; d.position.x = 60; d.position.z = 60;"
+                    "  }"
+                    "  s.mode = 'attack'; s.attackCooldown = 0;"
+                    "  s.position.x = w.character.position.x;"
+                    "  s.position.z = w.character.position.z + 1.6;"
+                    # 工位跟着搬：否则它离 home 十几米，牵引半径会一路把它拽回工位，
+                    # 边打边退 → 距离拉开 → 自己把连击打断（这条断言就不是在测连击了）。
+                    "  s.homeX = s.position.x; s.homeZ = s.position.z;"
+                    "  s.velocity.x = 0; s.velocity.z = 0;"
+                    "  const cp = w.character.position;"
+                    "  window.__comboAnchor = { x: cp.x, z: cp.z };"
+                    "  window.__comboProbe = { id: s.id, startId: s.attackId, maxSeg: 0, minD: 99, maxHurt: 0,"
+                    "    t0: w.time };"
+                    "  window.__comboTimer = setInterval(() => {"
+                    "    const P = window.__comboProbe;"
+                    "    P.maxSeg = Math.max(P.maxSeg, s.attackComboIndex);"
+                    # 木桩玩家：连击的击退会把玩家越推越远，距离一超就断连 ——
+                    # 这条断言只问「陪练自己能不能连段」，所以把玩家钉住，别让变量互相干扰。
+                    "    cp.x = window.__comboAnchor.x; cp.z = window.__comboAnchor.z;"
+                    "    w.character.velocity.x = 0; w.character.velocity.z = 0;"
+                    "    w.playerHurt.knockX = 0; w.playerHurt.knockZ = 0;"
+                    "    P.minD = Math.min(P.minD, Math.hypot(cp.x - s.position.x, cp.z - s.position.z));"
+                    "    P.maxHurt = Math.max(P.maxHurt, s.hurt.timer);"
+                    "  }, 16);"
+                    "}"
+                )
+                # 等的是**游戏时间**不是墙钟：软件渲染下每秒只推进约 0.2s 游戏时间，
+                # 用 wait_for_timeout 会误判成「连击没接上」（实测 4s 墙钟只走了 0.87s 游戏时间）。
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__comboProbe.t0 + 3.0",
+                    timeout=90000,
+                )
+                combo = page.evaluate(
+                    "() => {"
+                    "  clearInterval(window.__comboTimer);"
+                    "  const w = window.__harness.world;"
+                    "  const p = window.__comboProbe;"
+                    "  const s = w.dummies.find((d) => d.id === p.id);"
+                    "  return { segs: s.attackId - p.startId, maxSeg: p.maxSeg,"
+                    "    left: s.attackComboLeft, gap: +s.comboGap.toFixed(3),"
+                    "    minD: +p.minD.toFixed(2), maxHurt: +p.maxHurt.toFixed(2),"
+                    "    weapon: s.weapon, mode: s.mode };"
+                    "}"
+                )
+                check("陪练一轮打出多段连击（≥3 刀，段号到 3）",
+                      combo["segs"] >= 3 and combo["maxSeg"] >= 3, str(combo))
+
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
                       f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}",
                       " 命中 progress", f"{hit_prog:.3f}" if hit_prog is not None else "-")

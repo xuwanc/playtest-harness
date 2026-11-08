@@ -29,7 +29,7 @@
 
 | 路径 | 放什么 | 命名 |
 |---|---|---|
-| `shots<版本两位>/` | 本轮验收截图（如 `shots38/`） | `NN-<主题>.png`，NN 从 01 递增 |
+| `shots<版本两位>/` | 本轮验收截图（如 `shots38/`、`shots39/`） | `NN-<主题>.png`，NN 从 01 递增 |
 | 仓库根 `preview-*.png` | 历史预览图，只读留档 | 不再新增（新图进 `shotsNN/`） |
 | `/tmp/*.py` | 一次性截图 / 探针脚本 | **不需要提交**；要留的写进 `tools/` |
 
@@ -37,9 +37,10 @@
 
 | 路径 | 用途 |
 |---|---|
-| `tools/smoke.py` | 真实浏览器跑 `dist/`，16 项断言 |
+| `tools/smoke.py` | 真实浏览器跑 `dist/`，17 项断言 |
 | `tools/clip-lab/` | 动作剪辑验证台（定格 / 扫角度 / 自动判定） |
-| `tools/v9s38-shot.py` | 本轮 5 张验收截图脚本 |
+| `tools/v9s38-shot.py` | v9s.38 的 5 张验收截图脚本（特效层级 / 陪练） |
+| `tools/v9s39-shot.py` | v9s.39：混战全景 + 同一轮连击的第 1/2/3 段 |
 | `tools/sweep.py` | 刃身扫掠采样，写回 `config.hitSweep.pts` |
 | `scripts/check-boundary.mjs` | Core 可移植边界守卫 |
 | `scripts/check-docs.mjs` | 文档规范守卫（README 行数 / INDEX 链接 / 单文件 300 行） |

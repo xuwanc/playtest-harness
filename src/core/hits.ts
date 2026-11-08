@@ -433,11 +433,15 @@ function dummyHits(world: World): void {
       ? Math.max(cfg.knockback[s.weapon] ?? 0, cfg.dummyKnockback)
       : cfg.dummyKnockback;
     const kb = kbBase * (s.weapon ? (fighters?.knockbackScale ?? 1) : 1);
+    // v9s.39：大剑的 `knock` 档只给**一轮连击的最后一段** —— 与主角第三击才是重击同构。
+    // 三段全按 knock 的话，0.42s 受击 × 3 会把玩家打得一拖一拖，读起来不是连击是「卡住」。
+    const heavy = s.weapon === 'greatsword' && s.attackComboLeft <= 0;
+    const type = heavy ? 'knock' : 'light';
     // 长期「无伤害契约」默认由 noDamageToPlayer 保证：只写受击动画，不推玩家位置 / 速度。
     // 关掉开关后按与假人完全相同的公式施加击退（dummyKnockback），机制本身是对称的。
     applyHit(world, { kind: 'player' }, {
-      type: s.weapon === 'greatsword' ? 'knock' : 'light',
-      duration: hurtDuration(world, s.weapon === 'greatsword' ? 'knock' : 'light'),
+      type,
+      duration: hurtDuration(world, type),
       dirX: nx,
       dirZ: nz,
       knockback: kb,

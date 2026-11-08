@@ -1,7 +1,7 @@
 # 假人与持械陪练
 
-> 最后更新：2026-11-08（v9s.38）。
-> 管什么：6 个普通假人的 5 种行为、3 个持械陪练（剑盾 / 双刀 / 大剑）的 `spar` 行为、点击轮转、牵引半径、复位。
+> 最后更新：2026-11-08（v9s.39）。
+> 管什么：6 个普通假人的 5 种行为、3 个持械陪练（剑盾 / 双刀 / 大剑）的 `spar` 行为与**一轮连击**、点击轮转、牵引半径、复位。
 > 代码：`src/core/dummies.ts`、`src/presentation/dummy-rig.ts`、`src/presentation/fighter-rig.ts`；参数 `config/game.json` → `core.dummies` + `view.dummies`。
 
 ## 场地上一共 9 个单位
@@ -46,7 +46,8 @@ s.combat: CombatState | null // 陪练每帧由 syncFighterCombat() 填入；普
 ```
 config/game.json  core.dummies.fighters
         │  { weapons, spawn, initialModes, moveSpeed, attackInterval,
-        │    attackRangeScale, knockbackScale, leashRadius }
+        │    attackRangeScale, knockbackScale, leashRadius,
+        │    comboCount (0=随武器), comboGap (0=用全局 settle) }
         ▼
 core/dummies.ts  createDummies()          ← 追加在普通假人之后，id 连续（7 / 8 / 9）
         │  makeDummy(id, mode, x, z, weapon)  →  s.weapon / s.combat
@@ -78,7 +79,10 @@ c.warp = 1;
 
 于是**同一副体素身体、同一套武器挂点、同一套挥击剪辑**，只是数据来源不同。陪练的剑盾会举盾、双刀一高一低、大剑双手抬起 —— 那是 `view.animation.stance.<weapon>` 在起作用，不是给陪练另写的数据。
 
-**刻意没做**：不做卡肉（玩家打中陪练时玩家自己会卡肉，陪练再卡一次就双倍顿帧）；不做连击（假人状态机只有单段三阶段，要连击得给 `DummyState` 加连段字段，另一轮的事）。
+**刻意没做**：不做卡肉（玩家打中陪练时玩家自己会卡肉，陪练再卡一次就双倍顿帧）。
+
+~~不做连击~~ → **v9s.39 已做**，见下一节。做法不是给 AI 开一条新状态机，而是在原来的
+三段循环外再套一层「本轮还剩几段」的计数。
 
 ### 「攻击欲望放低」怎么实现
 
@@ -95,9 +99,12 @@ c.warp = 1;
 ```ts
 const range = attackRangeFor(world, s, cfg);   // cfg.reach[weapon] × attackRangeScale
 const standoff = range * 1.7;
-const wantsAttack = s.attackPhase === 'idle' && s.attackCooldown <= 0;
 
-if (wantsAttack && dist > range)      { x = nx;  z = nz;  }   // 冷却好了 → 压上
+if (inComboRound(s)) {                        // v9s.39：一轮连击中间
+  if (dist > range * 1.3)      { x = nx;  z = nz;  }        // 够不着 → 压上
+  else if (dist < range * 0.55){ x = -nx * 0.6; z = -nz * 0.6; } // 贴太近 → 让一点
+}                                              // 其余情况站住（连击中间不退回 standoff）
+else if (idle && cooldown <= 0 && dist > range) { x = nx; z = nz; } // 冷却好了 → 压上
 else if (dist > standoff + 0.35)      { x = nx;  z = nz;  }   // 太远 → 靠近
 else if (dist < standoff - 0.45)      { x = -nx; z = -nz; }   // 太近 → 退开
 else                                  { x = -nz * strafe; z = nx * strafe; } // 刚好 → 绕
@@ -107,6 +114,52 @@ else                                  { x = -nz * strafe; z = nx * strafe; } // 
 
 调参入口：调试面板 →「假人 / 混战」→「持械陪练」，五个滑杆（移速 / 攻击间隔 / 起手距离 / 击退比例 / 牵引半径）+ 一个行为下拉。下拉读「第一个陪练当前的行为」，点单个陪练之后这里会跟着变。
 
+### 连击：一次冷却好 = 打一整轮（v9s.39）
+
+需求是「攻击欲望低」，但单发一刀在混战里读不出压迫感。所以把**两次起手的间隔**和
+**一次起手的段数**拆成两个旋钮：
+
+| 参数 | 管什么 | 默认 | 调大之后 |
+|---|---|---|---|
+| `fighters.attackInterval` | 多久来一轮 | 3.4s | 更懒（但每轮仍是 3 刀） |
+| `fighters.comboCount` | 一轮几刀（0 = 随武器 `comboCount`） | 0 → 3 | 一轮更密 |
+| `fighters.comboGap` | 段间缝隙（0 = 用全局 `combat.settle` = 0.16s） | 0 | 节奏更「一刀一顿」 |
+
+**冷却在整轮起手时就记满**，所以连击只改变「一轮之内的密度」，起手频率与单发时一致
+（`tests/v9s39-fighter-combo.test.ts` 有一条专门守这个：12s 内仍是 3~4 轮）。
+
+```
+起手 ── 第1段(0.46s) ── 缝隙(0.16s) ── 第2段 ── 缝隙 ── 第3段 ── idle ──(attackInterval 继续倒数)──▶ 下一轮
+     ↑ comboIndex 1        ↑ phase=settle, progress=1        ↑ 归 0
+```
+
+`DummyState` 上只有三个字段：
+
+```ts
+s.attackComboIndex  // 1..N，本轮段号（0 = 不在连击中）；直接抄进 combat.comboIndex
+s.attackComboLeft   // 本轮还剩几段；> 0 时 idle + comboGap>0 就是「缝隙中」
+s.comboGap          // 缝隙剩余秒数
+```
+
+四条规则（都在 `dummies.ts`，读之前先看这几条，比读代码快）：
+
+| 情形 | 行为 |
+|---|---|
+| 缝隙走完 + 目标还在 `range × 1.3` 内 | 接下一段，`attackComboLeft -= 1` |
+| 目标被推出 `range × 1.3` | **断连**：剩余段作废、段号归 0、补 `attackInterval × 0.4` 冷却 |
+| 受击（`hurt.timer > 0`） | **打断**：已挥出去的那一刀照常播完，但不接下一段 |
+| 最后一段播完 | 段号归 0；若冷却已归零（`attackInterval` 调得比一轮还短）补最小停顿 |
+
+- **为什么放宽到 1.3**：第一击命中会把玩家推开（大剑 0.45m），严格按 `reach` 判定的话，
+  「打中过的对局」里第二段永远接不上 —— 正好是最需要连击感的时候。放宽只用于「要不要接」，
+  真正结算命中仍走 `hits.reach`（打空就是打空）。
+- **表现层不用改**：`syncFighterCombat()` 把缝隙期写成 `phase='settle'` + `progress=1`
+  （而不是 idle），rig 的 `attacking = phase !== 'idle'` 自然保持收势姿势；
+  `comboIndex` 换段则触发 `swing-pose` 的段切换，第 1/2/3 段刀路方向不同。
+  写成 idle 的话，0.16s 里 rig 会把手放下再抬起 —— 读成「两刀之间发了个呆」。
+- **命中档位按段**：大剑的 `knock` 只给最后一段（`hits.ts` 里 `attackComboLeft <= 0`），
+  前两段是 `light`。三段全 knock 会把玩家打得一拖一拖，读起来不是连击是「卡住」。
+
 ### 和主角的差异（有意为之）
 
 | 项 | 主角 | 陪练 | 原因 |
@@ -115,7 +168,8 @@ else                                  { x = -nz * strafe; z = nx * strafe; } // 
 | 起手距离 | `hits.reach[w]` | `× attackRangeScale`（0.9） | 略短，混战时不会隔着 2m 砍到 |
 | 击退 | `hits.knockback[w]` | `× knockbackScale`（0.6） | 三个一起打时玩家不会被推得站不住 |
 | 受击档位 | 轻 / 重 / 击飞 | 大剑映射 `knock` | 与 `dummyHits` 一致，位置感可信 |
-| 卡肉 / 连击 | 有 | 无 | 见上 |
+| 连击 | 有（3 段，段间 settle） | **有（v9s.39）**，段数取同一份 `comboCount` | 挥击剪辑按段号出不同刀路，混战才有可读性 |
+| 卡肉 | 有 | 无 | 见上 |
 | 移速 | `core.moveSpeed` 系列 | `fighters.moveSpeed`（2.1） | 比玩家慢，方便绕后测试 |
 | 外观 | 蓝 | 红 / 金 / 紫 | 混战里必须一眼分得清哪个是自己 |
 
@@ -141,6 +195,16 @@ rig.update(cs, s.combat, s.hurt, frameDt, false, coreTime, s.link);
 
 **6. 测「正面命中」时会被扫掠门挡住** —— `weapons.*.hitSweep` 要求「本帧刃身扫过目标方位角」。单测里直接摆位置时角度可能不在扫掠区间内 → 命中不发生。做法是在该用例内 `delete w.config.combat.weapons.greatsword.hitSweep`（扫掠门本身由 v9s.36 专项覆盖）。
 
+**7. 自动化里测连击，最容易误判成「机制没生效」** —— 三件事都会让连击断在第 1 段，
+而现象完全一样（`segs=1`、`left=0`）：
+
+- 玩家被自己的击退推远（每段 0.45m，三段落差就能超出 `range × 1.3`）→ 把玩家钉成木桩；
+- 陪练被摆到离 `home` 十几米的地方 → 牵引半径一路把它拽回工位，边打边退 → **工位要跟着搬**；
+- 用墙钟等待（`wait_for_timeout`）→ 软件渲染下 4s 墙钟只推进约 0.87s 游戏时间
+  → 改成 `wait_for_function(world.time > t0 + 3.0)`。
+
+`tools/smoke.py` 的「陪练一轮打出多段连击」这三条都踩过，现在是钉玩家 + 搬工位 + 等游戏时间的写法。
+
 ### 加第四个陪练要改哪
 
 1. `config/game.json` → `core.dummies.fighters`：`weapons` 加武器（如 `'staff'`）、`spawn` 加坐标、`initialModes` 加一项；
@@ -159,3 +223,9 @@ rig.update(cs, s.combat, s.hurt, frameDt, false, coreTime, s.link);
 | 玩家打得到陪练 | `tests/v9s38-fighters.test.ts` | `hit` 事件、`hitCount` 增长 |
 | 陪练打得到玩家 | 同上（`noDamageToPlayer = false`） | `playerHurt` 写入 + 玩家被击退 |
 | 外观对称 | 截图 `shots38/09-fighters-closeup.png` | 三种武器挂点、配色可分辨 |
+| 一轮是 3 刀 | `tests/v9s39-fighter-combo.test.ts` | 段号 1→2→3，3 次 `dummy-attack` / 3 次 `dummy-hit` |
+| 段间有停顿 | 同上 | 缝隙期 `combat.phase === 'settle'`、`progress === 1` |
+| 起手频率不变 | 同上 | 12s 内 3~4 轮（不是 3 倍） |
+| 连击能被拆掉 | 同上 | 受击 / 目标跑远 → 剩余段作废、段号归 0 |
+| 真机打得出来 | `npm run smoke`「陪练一轮打出多段连击」 | `segs ≥ 3` 且段号到 3 |
+| 三段刀路不同 | 截图 `shots39/02~04-combo-seg{1,2,3}.png` | 剑盾：右下 → 左上 → 横胸 |

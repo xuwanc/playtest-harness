@@ -459,6 +459,9 @@ export function createDebugPanel(
     fr.add(fg, 'attackRangeScale', 0.5, 1.2, 0.02).name('起手距离 / 武器 reach');
     fr.add(fg, 'knockbackScale', 0, 2, 0.05).name('击退比例');
     fr.add(fg, 'leashRadius', 0, 14, 0.5).name('牵引半径 (m)');
+    // v9s.39：两个旋钮分开 —— 间隔控制「多久来一轮」，段数控制「一轮几刀」
+    fr.add(fg, 'comboCount', 0, 3, 1).name('连击段数 (0=随武器)');
+    fr.add(fg, 'comboGap', 0, 0.6, 0.01).name('段间缝隙 (s, 0=用全局)');
     // 混战调试：下拉一次把三个陪练切到同一个行为，不必逐个点。
     // 读的是「第一个陪练当前的行为」，所以点单个陪练之后这里也会跟着变。
     const firstFighter = () => world.dummies.find((d) => d.weapon !== null);

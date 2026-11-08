@@ -1,6 +1,6 @@
 # 文档索引（唯一入口）
 
-> 先在这里找位置，再去读那一份。**不要通读 README，也不要通读 `three-scene.ts`（1432 行）或 `voxel-rig.ts`（2829 行）。**
+> 先在这里找位置，再去读那一份。**不要通读 README，也不要通读 `three-scene.ts`（1283 行）或 `voxel-rig.ts`（2737 行）。**
 > 维护约定：新增 / 改名 / 删除任何文档，必须同步本页；**新增一个机制 = 在 §2 或 §3 加一行**。表里没有的东西，就是没人会找到的东西。
 
 ## 1. 三条阅读路径
@@ -23,6 +23,8 @@
 | 要三个（或更多）会和玩家一样挥刀的 AI | `core/dummies.ts`、`presentation/fighter-rig.ts` | `createDummies`、`syncFighterCombat`、`createFighterRig` | [systems/dummies-fighters.md](systems/dummies-fighters.md) | `npm run smoke`「三个持械陪练」 |
 | 陪练不挥刀 / 挥刀没姿势 / 贴着玩家不动 | 同上 + `desiredDirection` | `s.mode === 'spar'`、`standoff`、`attackIntervalFor` | 同上「攻击欲望放低」 | `tests/v9s38-fighters.test.ts` |
 | 陪练站在原点 / 画面里只有一个 | `presentation/fighter-rig.ts` | `group.position.set(s.position…)` | 同上「踩过的坑」1 | 截图 `shots38/01` |
+| 陪练只会单发一刀 / 想加连击 | `core/dummies.ts` | `attackComboLeft`、`comboTotalFor`、`inComboRound` | [systems/dummies-fighters.md](systems/dummies-fighters.md)「连击」 | `tests/v9s39-fighter-combo.test.ts` |
+| 连击接不上第二段 | 同上 + `desiredDirection` | `COMBO_CHASE`、`comboGap`、`hits.reach` | 同上「连击」四条规则 | `npm run smoke`「陪练一轮打出多段连击」 |
 | 刀光 / 斩击弧不出现 | `presentation/three-scene.ts` | `weapon-trail.ts`、`FX_ORDER.trail / slash` | [systems/presentation-fx.md](systems/presentation-fx.md) | `__harness.fxDebug()` |
 | 调试面板某项不知道去哪了 | `presentation/debug-panel.ts` | 7 个 `top()` 一级分类 | 本页 §3.4 | 截图 `shots38/07,08` |
 | 攻击卡肉时机 / 卡肉太长 | `core/hits.ts`、`config.combat.weapons.*.hitSweep` | `hitSweep`、`hitstop` 三段式 | [systems/animation-notes-3.md](systems/animation-notes-3.md) | `npm run sweep -- --check`、`npm run smoke` |
@@ -43,7 +45,7 @@
 | `collision.ts` | 白盒碰撞、台阶、地形高度查询 | `resolveHorizontal`、`groundHeightAt` |
 | `combat.ts` | 攻击状态机（windup/active/recovery）、连击、武器切换 | `combatUpdate`、`hitstop` |
 | `hits.ts` | 命中结算总出口、击地、派生招扫掠、假人反打 | `applyHit`、`playerHits`、`playerGroundSlam`、`dummyHits` |
-| `dummies.ts` | 假人 AI（含持械陪练）、挥砍三阶段、牵引 | `createDummies`、`desiredDirection`、`syncFighterCombat` |
+| `dummies.ts` | 假人 AI（含持械陪练）、挥砍三阶段 + 一轮连击、牵引 | `createDummies`、`desiredDirection`、`syncFighterCombat`、`comboTotalFor` |
 | `separation.ts` | 角色间分离、挤人阻力 | `separationUpdate`、`crowdResistance` |
 | `orientation.ts` / `gaze.ts` / `turn-in-place.ts` | 面朝向 / 两级注视 / 原地转身 | `orientationUpdate`、`gazeUpdate` |
 | `abilities.ts` / `skills/*` / `arrows.ts` | 技能、投射物 | `abilitiesUpdate`、`channelVolley` |
@@ -53,9 +55,11 @@
 
 | 文件 | 职责 | 关键符号 |
 |---|---|---|
-| `three-scene.ts` | **唯一场景组装点**：所有 mesh / 特效生成与每帧更新 | `createSceneView`、`groundFxY`、`fxDebug` |
+| `three-scene.ts` | **唯一场景组装点**：装配 + 每帧渲染（白盒 / 角色 / 环 / 刀光 / 箭），不含特效生命周期 | `createSceneView`、`groundFxY`、`fxDebug` |
+| `scene-burst-fx.ts` | 一次性贴地光环：冲刺尘环 / 派生招 / 击地冲击的池化与触发 | `createBurstFx`、`slamDebug` |
 | `fx-layer.ts` | **特效层级唯一来源** | `FX_ORDER`、`setFxOrder` |
-| `voxel-rig.ts` | 体素角色骨架 + 全套程序动画 | `createVoxelRig`、`rig.update`、`bladeWorld` |
+| `voxel-rig.ts` | 主角骨架装配 + 逐帧姿态解算 | `createVoxelRig`、`rig.update`、`bladeWorld` |
+| `rig-parts.ts` | 体素零件几何（剑 / 大剑 / 盾 / 杖 / 弓 / 箭），无状态 | `makeSword`、`makeBow`、`makeArrow` |
 | `fighter-rig.ts` / `dummy-rig.ts` | 陪练适配（复用 `voxel-rig`）/ 普通假人轻量骨架 | `createFighterRig`、`createDummyRig` |
 | `debug-panel.ts` | lil-gui 调试面板（7 个一级分类） | `createDebugPanel`、`DebugActions` |
 | `weapon-trail.ts` / `ground-ring.ts` | 刀光 ribbon / 脚下环与进度弧 | `pulse()`、`groundRingRadius` |
@@ -82,7 +86,7 @@
 | 动作 / 步态 | 程序化步态、停步 / 收相 / 惯性、足部 IK、惯性倾斜 / 盆骨、朝向 / 接敌注视 / 原地转身 |
 | 战斗 / 命中 | 连击 / 武器时序、卡肉节奏、命中 / 受击 / 击退、受击分层、派生招、目标辅助 |
 | 表现 / 特效 | 挥击幅度 / 刀光、夸张化 / 四肢伸缩、武器握持 / 腕部 |
-| 假人 / 混战 | 普通假人 AI、**持械陪练（剑盾 / 双刀 / 大剑）** |
+| 假人 / 混战 | 普通假人 AI、**持械陪练（剑盾 / 双刀 / 大剑）+ 一轮连击** |
 | 相机 | 基础、智能构图、缩放 |
 
 ## 4. 命令地图
@@ -147,4 +151,4 @@ telemetry()   最近 20 秒输入 / 位移 / 事件诊断
 | [`decisions/ADR-005`](decisions/ADR-005-ground-height.md) | 贴地高度查询放 Core |
 | [`decisions/ADR-006`](decisions/ADR-006-fixed-step-events.md) | 固定步长 + 显式事件队列 |
 | [`decisions/ADR-007`](decisions/ADR-007-knockback-default.md) | 默认配置反映真实手感 |
-| [`journal/`](journal/) | 按日期的迭代记录（19 份，2026-11-05 起；`-00` 是功能总表，`2026-11-08-07` 是文档重构；`2026-11-08-06` 是 v9s.38） |
+| [`journal/`](journal/) | 按日期的迭代记录（21 份，2026-11-05 起；`-00` 是功能总表，`-06` 是 v9s.38，`-07` 是文档重构，`-08` 是大文件职责梳理，`-09` 是陪练连击） |

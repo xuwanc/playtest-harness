@@ -6,6 +6,14 @@
  *  2. World 必须可 JSON 序列化，不得存放函数、类实例、闭包或渲染对象。
  *  3. 所有状态集中在 World，状态转移是确定性的 step(world, dt, intents)。
  *  4. 不出现 window / document / Math.random / Date.now / performance。
+ *
+ * 规模：2700 行、80+ 个类型，按「场景 → 武器 → 战斗 → 派生 / 冲刺 → 目标 → 投射物 →
+ * 技能 → 假人 → 世界 → 表现配置」分域排列。**刻意不拆成多文件**：
+ * 这是唯一需要"一眼读全"的契约面，拆开后每个类型的字段约束散落各处，
+ * 对照 Unity / Godot 重写时反而更难核对。定位类型用 IDE 的「转到符号」。
+ *
+ * 只有一处运行时值（`WEAPON_ORDER`），其余全是 type；新增字段时同步更新
+ * `docs/systems/core-contract.md` 的字段表与确定性快照测试。
  */
 
 import type { PoseClip } from './pose-clip';
@@ -1206,6 +1214,21 @@ export type DummyFighterConfig = {
   knockbackScale: number;
   /** 牵引半径（米）：陪练要比普通假人跟得远一点，才测得到「被追着打」 */
   leashRadius: number;
+  /**
+   * v9s.39 · 一轮连击的段数：**0 = 跟随武器**（`combat.weapons[weapon].comboCount`，
+   * 剑盾 / 双刀 / 大剑都是 3 段），1 = 退回单发。
+   *
+   * 为什么不直接写死成武器的段数：混战压力需要单独调。`attackInterval` 控制
+   * 「多久来一轮」，这个控制「一轮几段」，两个旋钮分开才能既保持攻击欲望低、
+   * 又让单轮有连击的压迫感。
+   */
+  comboCount?: number;
+  /**
+   * v9s.39 · 段间缝隙（秒），0 = 用全局 `combat.settle`（0.16s）。
+   * 缝隙期间表现层停在收势姿势（`combat.phase = 'settle'`），所以读起来是
+   * 「一刀收住 → 再一刀」，而不是三段无停顿地连划。
+   */
+  comboGap?: number;
 };
 
 export type DummyConfig = {
@@ -1272,6 +1295,17 @@ export type DummyState = {
   attackProgress: number;
   /** 每次起手递增，表现层据此触发一次性特效 */
   attackId: number;
+  /**
+   * v9s.39 · 本次连击的段号（1..N，0 = 不在连击中）。
+   *
+   * 只对持械陪练有意义，直接抄进 `combat.comboIndex` 驱动主角同款挥击剪辑 ——
+   * 所以第 1/2/3 段的刀路方向不同，混战时不会三个陪练永远打同一个方向。
+   */
+  attackComboIndex: number;
+  /** v9s.39 · 本次连击还剩几段没打（0 = 本轮已打完 / 没有连击） */
+  attackComboLeft: number;
+  /** v9s.39 · 段间缝隙剩余（秒）：> 0 时停在收势姿势等下一段，不接新轮 */
+  comboGap: number;
   /** 受击僵直：timer > 0 期间假人不主动移动、不发起新攻击 */
   hurt: HurtState;
   /** v9a：与主角完全同构的派生招运行时状态（对称机制，当前 AI 不主动起手） */

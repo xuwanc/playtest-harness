@@ -22,6 +22,19 @@ const TAU = Math.PI * 2;
 const DUMMY_BODY_TURN = 7;
 const DUMMY_HEAD_TURN = 18;
 
+/**
+ * v9s.39 · 连击接续的距离放宽系数。
+ *
+ * 第一击命中会把玩家推开（大剑 0.45m），收招那一瞬距离就超出 reach 了。
+ * 严格按 reach 判定的话，连击第二段在「打中过的对局」里永远接不上 ——
+ * 正好是最需要连击感的时候。放宽 30% 只用于「要不要接下一段」，
+ * 真正结算命中仍然走 `hits.reach`（打空就是打空）。
+ */
+const COMBO_CHASE = 1.3;
+
+/** 一轮打完后至少歇这么久（秒，× fighters.attackInterval）：防止把它调到很小时变成无限连。 */
+const ROUND_GAP_SCALE = 0.4;
+
 /** 角度归一化到 (-π, π]，走最短弧。 */
 function wrapAngle(a: number): number {
   return Math.atan2(Math.sin(a), Math.cos(a));
@@ -92,6 +105,9 @@ function makeDummy(
     attackPhaseTimer: 0,
     attackProgress: 0,
     attackId: 0,
+    attackComboIndex: 0,
+    attackComboLeft: 0,
+    comboGap: 0,
     hurt: initialHurt(),
     link: initialLinkState(), // v9a：与主角完全同构的派生招状态
     weapon,
@@ -141,6 +157,9 @@ export function resetDummies(world: World): void {
     s.attackPhase = 'idle';
     s.attackPhaseTimer = 0;
     s.attackProgress = 0;
+    s.attackComboIndex = 0;
+    s.attackComboLeft = 0;
+    s.comboGap = 0;
     const h = s.hurt;
     h.type = 'none';
     h.timer = 0;
@@ -224,6 +243,35 @@ function attackDuration(s: DummyState, cfg: DummyConfig, w: World): number {
   return 0;
 }
 
+/**
+ * v9s.39 · 一轮连击的段数。
+ *
+ * 普通假人恒为 1（它们只有单次挥砍的简化 rig，没有连击段的概念）。
+ * 持械陪练默认跟随武器的 `comboCount`（3 段）—— 与主角同名武器同一套段数，
+ * 挥击剪辑才会按 1/2/3 段出不同的刀路。`fighters.comboCount > 0` 时覆盖它。
+ */
+function comboTotalFor(world: World, s: DummyState, cfg: DummyConfig): number {
+  if (!s.weapon) return 1;
+  const forced = cfg.fighters?.comboCount ?? 0;
+  if (forced > 0) return Math.max(1, Math.round(forced));
+  const p = world.config.combat.weapons[s.weapon];
+  return Math.max(1, Math.round(p?.comboCount ?? 1));
+}
+
+/** 段间缝隙：0 = 用全局 settle（主角收招停顿同源），让连击有节奏而不是无停顿连划。 */
+function comboGapFor(world: World, cfg: DummyConfig): number {
+  const forced = cfg.fighters?.comboGap ?? 0;
+  return forced > 0 ? forced : Math.max(0, world.config.combat.settle);
+}
+
+/**
+ * v9s.39 · 连击是否还在进行（本轮到段间缝隙为止都算）。
+ * 站位逻辑用它区分「打完一轮在歇」与「一轮中间」——前者该退回 standoff，后者该压住。
+ */
+function inComboRound(s: DummyState): boolean {
+  return s.attackPhase !== 'idle' || s.attackComboLeft > 0;
+}
+
 /** 假人挥砍三段状态机；无伤害，只驱动表现层与事件。active 进入时发 dummy-hit 供命中模块消费。 */
 function advanceAttack(world: World, s: DummyState, dt: number, cfg: DummyConfig): void {
   if (s.attackPhase === 'idle') {
@@ -244,6 +292,21 @@ function advanceAttack(world: World, s: DummyState, dt: number, cfg: DummyConfig
     else {
       s.attackPhase = 'idle';
       s.attackPhaseTimer = 0;
+      if (s.attackComboLeft > 0) {
+        // v9s.39：还有段没打 —— 进「收势停顿」，缝隙走完由 updateOne 接下一段。
+        // 段号**保留**：缝隙期表现层要继续用这一段的收势姿势，归零会让 rig 闪到别的段。
+        s.comboGap = comboGapFor(world, cfg);
+      } else {
+        // 本轮真的结束（打完 / 断连 / 受击打断）→ 段号归零
+        s.attackComboIndex = 0;
+        // 兜底只对持械陪练生效：普通假人只有 1 段，不存在「无限连」，
+        // 保持它们「播完即受 attackInterval 支配」的旧行为逐帧不变。
+        if (s.weapon && s.attackCooldown <= 0) {
+          // 一轮打完但冷却已归零（attackInterval 被调得比一轮还短）：
+          // 补一个最小停顿，否则读起来是「永不收手的连击机器」
+          s.attackCooldown = attackIntervalFor(s, cfg) * ROUND_GAP_SCALE;
+        }
+      }
     }
   }
   const t = attackTiming(world, s, cfg);
@@ -268,11 +331,15 @@ function syncFighterCombat(world: World, s: DummyState, cfg: DummyConfig): void 
   const c = s.combat;
   if (!c) return;
   const t = attackTiming(world, s, cfg);
+  // v9s.39：段间缝隙在表现层写成 settle（收势定格，attackProgress = 1），不是 idle。
+  // 写成 idle 的话，0.16s 里 rig 会把手放下再抬起 —— 读成「两刀之间发了个呆」，
+  // 而 settle 与主角收招走的是同一条路径（`attacking = phase !== 'idle'`），自然保持姿势。
+  const gap = s.attackPhase === 'idle' && s.attackComboLeft > 0 && s.comboGap > 0;
   c.weapon = s.weapon ?? c.weapon;
-  c.phase = s.attackPhase;
-  c.comboIndex = s.attackPhase === 'idle' ? 0 : 1;
+  c.phase = gap ? 'settle' : s.attackPhase;
+  c.comboIndex = s.attackComboIndex;
   c.phaseTimer = s.attackPhaseTimer;
-  c.attackProgress = s.attackProgress;
+  c.attackProgress = gap ? 1 : s.attackProgress;
   c.attackFacing = s.facing;
   c.timings = { windup: t.windup, active: t.active, recovery: t.recovery, settle: 0, lunge: 0 };
   // AI 不参与卡肉 / 连击缓冲：这些字段保持中性，避免表现层读到上一帧的残留
@@ -342,11 +409,22 @@ function desiredDirection(
     //  - 冷却期间只在死区外做径向修正，死区内沿切线游走（时间正弦，不存状态）；
     //  - 冷却结束且还没进范围 → 主动压上，进入范围就出手，出手后 cooldown 重置又退回。
     // 三条叠起来才是「攻击欲望低」：大部分时间在走位，而不是贴着人连打。
+    //
+    // v9s.39：**一轮连击中间不退**。上面那套「打完就退回 standoff」说的是两轮之间；
+    // 一刀与下一刀之间退开会把连击拆散（玩家被第一击推开 → 陪练自己再退 → 必然打空）。
+    // 连击里只做两件事：够不着就压上，贴太近就稍微让开一点。
     const range = attackRangeFor(world, s, cfg);
     const standoff = range * 1.7;
     const strafe = Math.sin(world.time * 0.55 + s.id * 1.9) * 0.55;
-    const wantsAttack = s.attackPhase === 'idle' && s.attackCooldown <= 0;
-    if (wantsAttack && dist > range) {
+    if (inComboRound(s)) {
+      if (dist > range * COMBO_CHASE) {
+        x = nx;
+        z = nz;
+      } else if (dist < range * 0.55) {
+        x = -nx * 0.6;
+        z = -nz * 0.6;
+      }
+    } else if (s.attackPhase === 'idle' && s.attackCooldown <= 0 && dist > range) {
       x = nx;
       z = nz;
     } else if (dist > standoff + 0.35) {
@@ -395,14 +473,45 @@ function desiredDirection(
 function updateOne(world: World, dt: number, s: DummyState, cfg: DummyConfig): void {
   s.wanderTimer -= dt;
   s.attackCooldown = Math.max(0, s.attackCooldown - dt);
+  s.comboGap = Math.max(0, s.comboGap - dt);
+  // v9s.39：受击打断连击 —— 已经挥出去的那一刀照常播完（既有契约），
+  // 但不再接下一段。玩家因此有「打中就能拆掉一套连招」的反馈。
+  if (s.hurt.timer > 0) {
+    s.attackComboLeft = 0;
+    s.comboGap = 0;
+  }
 
-  // 攻击起手：只在攻击 / 陪练模式、冷却结束、未处于受击僵直、玩家进入范围时触发，
-  // 且不写玩家任何状态。v9s.38：持械陪练用自己武器的 reach 与更长的间隔（攻击欲望低）。
-  if ((s.mode === 'attack' || s.mode === 'spar')
-      && s.attackPhase === 'idle' && s.attackCooldown <= 0 && s.hurt.timer <= 0) {
+  // 攻击起手：只在攻击 / 陪练模式、未处于受击僵直、玩家在范围内时触发，且不写玩家任何状态。
+  // v9s.39：一次冷却好 = 打**一整轮连击**（段数由武器 comboCount 决定），
+  // 冷却在整轮起手时就记满，所以连击只改变「一轮里的密度」，不提高起手频率。
+  if ((s.mode === 'attack' || s.mode === 'spar') && s.attackPhase === 'idle' && s.hurt.timer <= 0) {
     const p = world.character.position;
     const dist = Math.hypot(p.x - s.position.x, p.z - s.position.z);
-    if (dist <= attackRangeFor(world, s, cfg) + EPS) {
+    const range = attackRangeFor(world, s, cfg);
+    if (s.attackComboLeft > 0) {
+      // 接下一段：缝隙走完 + 目标没被推得太远（放宽 COMBO_CHASE，见常量注释）
+      if (s.comboGap <= 0) {
+        if (dist <= range * COMBO_CHASE + EPS) {
+          s.attackComboIndex += 1;
+          s.attackComboLeft -= 1;
+          s.attackPhase = 'windup';
+          s.attackPhaseTimer = 0;
+          s.attackId += 1;
+          world.dummyAttackCount += 1;
+          emitDummy(world, 'dummy-attack', s);
+        } else {
+          // 追不上就断连：剩余段作废，并把冷却补回来 ——
+          // 否则「一套打空」接「立刻重开」会比连续命中的压迫感还强。
+          s.attackComboLeft = 0;
+          s.attackComboIndex = 0;
+          s.attackCooldown = Math.max(s.attackCooldown, attackIntervalFor(s, cfg) * ROUND_GAP_SCALE);
+        }
+      }
+    } else if (s.attackCooldown <= 0 && dist <= range + EPS) {
+      const total = comboTotalFor(world, s, cfg);
+      s.attackComboIndex = 1;
+      s.attackComboLeft = Math.max(0, total - 1);
+      s.comboGap = 0;
       s.attackPhase = 'windup';
       s.attackPhaseTimer = 0;
       s.attackId += 1;
@@ -520,6 +629,9 @@ export function dummiesUpdate(world: World, dt: number, intents: Intents): void 
     s.attackPhase = 'idle';
     s.attackPhaseTimer = 0;
     s.attackProgress = 0;
+    s.attackComboIndex = 0;
+    s.attackComboLeft = 0;
+    s.comboGap = 0;
     if (s.combat) {
       s.combat.phase = 'idle';
       s.combat.attackProgress = 0;
