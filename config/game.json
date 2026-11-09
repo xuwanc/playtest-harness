@@ -971,7 +971,7 @@
       },
       "elder": {
         "name": "驼背老人",
-        "height": 1.4,
+        "height": 1.46,
         "radius": 0.26,
         "moveSpeed": 3.6,
         "voxel": {
@@ -979,8 +979,8 @@
           "bodyWidth": 0.44,
           "bodyHeight": 0.34,
           "limbThickness": 0.125,
-          "legLength": 0.68,
-          "armLength": 0.64,
+          "legLength": 0.74,
+          "armLength": 0.68,
           "style": {
             "hunch": 0.32,
             "kneeSink": 0.05,
