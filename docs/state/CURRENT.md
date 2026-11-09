@@ -1,75 +1,53 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-09 16:10。
+> 最后更新：2026-11-09 17:05。
 
 ## 一句话
 
-v0.9.66 已发布：**慢放回看时下盘不再抖那一下** —— v9s.44 把朝向切换时下盘自己拧的问题
-修好了，但闸门用的是「渲染帧 dt」算身体角速度，0.25× 慢放下角速度只剩 1/4、闸门半开
-（限速率 `free·3400°/s` 又在这时等于放行），单帧 18.6°、摆幅 25°。现在角速度走**游戏
-时间**、闸门是一阶状态、限速率线性挂钩、前 / 后相位各一档上限（240 / 150 °/s），
-单帧 18.6° → 1.4°、摆幅 25° → 4.5°。
+v0.9.67：**草地 + 动态地块拼合分支已并入主线**（v9s.46）。草地缓慢生长、枢轴顶点风、
+一地块一文件拼合、地块测试按钮全部进主干的同时，下盘转向那套（v9s.41~45）没有回退 ——
+合并后 99 文件 / 977 例、smoke 41/41 全绿。同时把多 agent 协作规范升到 v2：
+**版本号统一领、发布收敛成一条链接、合并闸门写死在「合并结果」上跑**。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.66` |
-| 线上徽标 | `v0.9.66`（构建时间随发布变化） |
-| 发布方式 | `npm run build` → `node /root/.codebuddy/skills/sites/scripts/publish.js --dir dist --language static`（覆盖更新，不换链接） |
-| 线上链接 | 通过项目内部渠道获取（仓库不存凭据） |
+| `package.json` 版本 | `0.9.67`（内部代号 v9s.46） |
+| 线上徽标 | `v0.9.67`（构建时间随发布变化） |
+| 发布方式 | `npm run build` → `npm run publish:preview`（唯一通道） |
+| 线上链接 | <https://aef42c265bdddcf97.app.workbuddy.host/?sharecode=2FOZ6AI6QC> |
 
 ## 验证基线（改完必须复跑）
 
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 95 文件 / 922 例全绿 |
-| `npm run verify:portable` | PASS（Core 25 文件边界未破） |
-| `npm run smoke` | 27/27 PASS |
+| `npx vitest run` | 99 文件 / 977 例全绿 |
+| `npm run verify:portable` | PASS（Core 边界未破） |
+| `npm run smoke` | 41/41 PASS |
 | `npm run docs:check` | PASS |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 
 ## 正在做
 
-- 无。v9s.45 已完成（`docs/journal/2026-11-09-06.md`）。
-- 规则写在 [`../systems/animation.md`](../systems/animation.md) §1.7 与
-  [`../systems/animation-notes-4.md`](../systems/animation-notes-4.md) §20：
-  **任何跟手感有关的时间常数都吃「游戏时间」**（`ΔbodyYaw / Δworld.time`），
-  渲染帧 dt 只许用于「这一帧画成什么样」；**限速率必须和放行程度线性挂钩**，
-  不能留「半开 ≈ 不限速」的逃生口。
-- 读数接口：`__harness.gaitDebug()` 新增 `spin`（转身闸门状态 0..1）；调试面板
-  「程序化步态」新增「后退相位上限 (°/s)」滑杆（默认 150，拉 0 = 关掉限速）。
+- 分支 `feat/integration-grass-wind`（6 个提交）已合入，**尚未 push 到 GitHub**
+  （本沙箱 `git push` 无写凭证，需要用户给 PAT）。
+- 待推：`v9s.41` ~ `v9s.46` 共 7 个提交。
 
-## 下一步（按投入产出排序）
+## 下一步
 
-1. **`spar` 站位带感知空间**（约 1 小时）。大剑 standoff 3.4m，而「地形 / 门洞」工位宽 2.4m，
-   陪练会顶墙（顶墙时径向持续朝外、被边界清掉 → 仍有空踩风险）。做法：起手前查背后 0.8m
-   是否有墙，有就收缩 standoff。
-2. **陪练按武器给不同攻击间隔**（约半天）。现在三个都是 3.4s，混战读起来节奏一样。
-   目标：双刀 2.4s / 剑盾 3.2s / 大剑 4.2s。**注意**：一轮 3 刀，改间隔前先按
-   `attackInterval + 一轮时长` 算总占空比。
-3. **`renderOrder` 收成编译期约束**（约半天）。`FX_ORDER` 目前只是约定。
-4. 陪练卡肉（只给**玩家受击**短卡肉，别给 AI —— 三个互相拖慢会变成慢动作）。
-5. `groundHeightAt` 只按中心点取高，环跨台阶边缘会一半埋进去（低优先）。
-6. 面板相位图例可以再明确一点（现在只有左边缘 L / R 小字，没有「L = 左脚踩地」的说明）。
+1. **推远端**：拿到 PAT 后 `git push origin main`（`backup/pre-merge-*` 先留着）。
+2. **`dist/` 的策略**：当前有意入库供 Pages 部署，代价是每次 build 产生大 diff、
+   合并必冲突。规范已写「不手解、只 rebuild」；若不再用 Pages，优先 `.gitignore` 掉。
+3. **`config/game.json` 拆分**：2000+ 行、所有 agent 的唯一热点。可参考地块的做法，
+   按模块拆 `config/gait.json` / `config/grass.json`，由 loader 合并 —— 从根上消除冲突。
+4. 手感待调项：`view.gait.hipYawTrackRateDeg`（240）/ `hipYawBackRateDeg`（150）/ `dirFlipSec`（0.16）。
 
-## 已知未关闭的结构性风险
+## 已知风险
 
-见 [`../risk-review.md`](../risk-review.md) 的「当前活跃风险」。摘要：
-
-- `transparent` 是编译期属性，改它不 `needsUpdate` 会静默无效；
-- `FX_ORDER` 无强制入口，裸数字可绕过；
-- `spar` 站位带在窄地形顶墙（v9s.40 的连续径向缓解了「抽搐」，但空踩风险还在）；
-- 连击让单轮伤害事件 ×3，混战占空比要按「轮」而不是「刀」评估；
-- 收势淡出会把相位「扫回」真实步态（最多 π；静止收招看不出来，边走边收招 0.28 rad/帧）；
-- 面板的「踩地」是**相位判据**不是脚的真实高度（极端姿态下可能不一致）；
-- 换向融合有 0.16s 的「收腿窗」（已知取舍，`dirFlipSec` 可调，拉 0 回到硬符号）；
-- 下盘偏转的时间常数全部吃游戏时间：**暂停（timeScale = 0）时它们会冻住**（想要），
-  但新加骨架必须传 `coreTime`，漏传不会崩、只是那个单位慢放仍会抖；
-- 速度 < 0.5 m/s 时偏转目标按比例淡出 ——「贴墙慢慢蹭」的下盘观感变了；
-- 前后相位两档限速（240 / 150 °/s）是手调值，后退档偏低会让「斜后快切正后」晚 0.2s 对轴；
-- 下盘转向对策只认「身体角速度」一个信号：极慢地原地画圈（< 30°/s）仍会跟着 θ 走；
-- `groundHeightAt` 只按中心点取高。
+见 [`../risk-review.md`](../risk-review.md)。本轮新增两条：
+- **双发布通道已收敛**，但历史链接（`aac01946…`）可能还有人收藏 —— 打开会是 0.9.63 的旧版本。
+- **`push-branch.py` 之前没有 main 保护**，只靠注释约定；已加硬护栏（`main` / `master` / `backup/*` 拒绝写入）。

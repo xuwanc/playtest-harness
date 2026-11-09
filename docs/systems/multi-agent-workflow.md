@@ -1,17 +1,39 @@
-# 多 agent 协作：分支、契约与冲突（v9s.42）
+# 多 agent 协作：分支、契约与冲突（v9s.46）
 
 > 本文是给后续多个 agent 同时开发用的**操作约定**，不是提交记录。
 > 3 分钟入口：[`../../AGENTS.md`](../../AGENTS.md)（拉下 git 先读它）；
 > 测试场景规则正本：[`test-scene-policy.md`](test-scene-policy.md)。
 
+## 0. 版本号：功能分支不占号，合并时统一领
+
+`package.json` 的 `version`（线上徽标）与内部代号 `v9s.NN` 是**同一条序列**，只能有一处发号。
+
+| 阶段 | 谁定 | 规则 |
+|---|---|---|
+| 开功能分支 | 不用管 | 分支名 `feat/<主题>`；commit 里可以写「待定号」，**不要**写 `v9s.NN` |
+| 合并进 main | integrator | `version` +1，宣布 `v9s.NN`；同一次提交更新 `CURRENT.md` 的徽标 |
+| 合并之后 | — | 删分支；tag `v<version>` 打在 merge commit 上 |
+
+**为什么要写这条**：2026-11-09 两个 agent 各自把工作命名为 `v9s.43` / `v9s.44`
+（一边是下盘转向，一边是草地 + 地块拼合），合并后两个 `v9s.44` 指向完全不同的东西，
+journal 也各有一份 `2026-11-09-02.md`（add/add 冲突），只能事后补解释。
+
+**分支里的写法**：主题用 `feat(grass): …` / `fix(gait): …`，body 写
+`Release-Note: 待定（合并时领号）`；非要写号就写 `v9s.x`。
+
 ## 1. 通道：读用标准 git，写走 GitHub MCP 网关
 
-2026-11-09 实测：`github.com:443` **读**可用（`fetch` / `clone` / `ls-remote`），
-但 `git push` **没有写凭证**，报 `could not read Username for 'https://github.com'`。
-凭证助手（`git-credential-helper`）只覆盖读，`gh` 未登录、环境里也没有 `GITHUB_TOKEN`。
+**先测再选通道**（结论随环境变，别照抄）：
 
-所以协同推送走本会话已授权的 **GitHub MCP 网关**（`~/.codebuddy/.mcp.json` 的 `github` connector，
-`http://github.agent-gateway.auth-proxy.local/mcp`）。固化脚本 `tools/push-branch.py`：
+```bash
+git ls-remote --heads origin >/dev/null && echo 读 OK
+git push --dry-run origin HEAD:refs/heads/__probe 2>&1 | tail -1   # 能写会打印 "Everything up-to-date"
+```
+
+2026-11-09 实测：`github.com:443` **读**可用（`fetch` / `clone` / `ls-remote`），
+但 `git push` **没有写凭证**（`could not read Username for 'https://github.com'`），
+`gh` 未登录、环境里也没有 `GITHUB_TOKEN`。此时写操作走已授权的 **GitHub MCP 网关**
+（`~/.codebuddy/.mcp.json` 的 `github` connector），固化脚本 `tools/push-branch.py`：
 
 ```bash
 python3.11 tools/push-branch.py --dry         # 先看计划
@@ -48,6 +70,7 @@ git add -A && git commit -m "..."
 
 - 每天 rebase 一次 `origin/main`，别攒几十个文件再合。
 - **GitHub push / 网关 `--apply` 需用户明确通知**；本地功能分支 commit 不受此限。
+- 通道优先级：标准 `git push` 能写就用它（历史线性、SHA 稳定）；不能写才走网关（commit 由 API 重建，需 `diff` + `reset --hard` 对齐）。
 
 ## 2. 三条铁律（测试场景 + 发布，正本见 [`test-scene-policy.md`](test-scene-policy.md) / [`plot-assembly.md`](plot-assembly.md)）
 
@@ -58,8 +81,8 @@ git add -A && git commit -m "..."
    `config/game.json` 的 `scene.stations` / `scene.grass.plots` **已删除**，不要再往回加。
    这样多个 agent 同时加同一个位置也不会 git 冲突、也不会叠放；地块可带 `testSpawn`
    自动生成测试按钮（就地摆假人 / 陪练）。任一 agent 都遵守，别人拉下 git 就能直接复现。
-3. **每次完成一次任务都要更新线上并贴链接**：`npm run publish:preview` 同步静态预览
-   并打印公网链接，把两条链接贴进任务回复。这是预览同步，**不是 GitHub push**。
+3. **每次完成一次任务都要更新线上并贴链接**：`npm run publish:preview` 发布 `dist/`
+   并打印**唯一**公网链接（见 §9），把链接贴进任务回复。这是发布，**不是 GitHub push**。
 
 ## 3. 令牌（安全红线，仅 REST 兜底时需要）
 
@@ -112,7 +135,7 @@ git add -A && git commit -m "..."
 
 | 类型 | 文件 | 解法 |
 |---|---|---|
-| **各自新建 · 不会冲突** | `config/plots/<id>.json` | 一地块一文件、无世界坐标，拼合器按 id 排序；两边同时加也不叠放 → 全部保留（v9s.43 起的新规则） |
+| **各自新建 · 不会冲突** | `config/plots/<id>.json` | 一地块一文件、无世界坐标，拼合器按 id 排序；两边同时加也不叠放 → 全部保留（v9s.46 起的新规则） |
 | **生成物 · 必须重生成** | `tests/__snapshots__/determinism.test.ts.snap`、`dist/*` | 两边都改了 `World` 结构，合并后 golden 会是**第三个值**（本次 `5562e496…`），选任何一边都永久漂移 → `npx vitest run tests/determinism.test.ts -u` + `npm run build` |
 | **追加型 · 取并集** | `tools/smoke.py`、`three-scene.ts`、`.gitignore`、`README.md`、`docs/INDEX.md` | 两边新增都保留 |
 | **单调 / 覆盖写 · integrator 定值** | `package.json`（版本）、`docs/state/CURRENT.md` | 取较大版本 / 按当前状态重写 |
@@ -150,7 +173,7 @@ GITHUB_TOKEN=xxx node tools/gh-commit.mjs --apply -m "..." \
 8. 效果类改动给可复现入口（主场景按钮 / 快捷键 / `__harness.*` / 截图脚本），别只靠文字。
 9. **任务收尾跑 `npm run publish:preview` 并把公网链接贴进回复**（见 §9）。
 
-## 9. 每次任务完成的发布闸门（v9s.43）
+## 9. 发布闸门：一条通道、一个链接（v9s.46）
 
 **与 GitHub push 解耦**：用户要求「每次 agent 完成一次任务都要更新一次线上，贴出链接」，
 指的是**线上静态预览**，不是往 `origin` 推代码。
@@ -160,14 +183,35 @@ npm run verify            # build → 全量单测 → 可移植边界 → docs 
 npm run publish:preview   # tools/publish-preview.mjs
 ```
 
-脚本做四件事：
+`tools/publish-preview.mjs` 只做三件事：
 
-1. `npm run build`（`SKIP_BUILD=1` 可跳过，供 verify 之后复用）；
-2. 同步 `dist/` 到 `/workspace/grass-preview/`：清旧 hash、删历史独立演示页，
-   `index.html` / `main.html` 都指向唯一主场景；
-3. 校验 HTML 的 `./assets/*` 引用存在、公网 root / main 均 200；
-4. 打印可直接粘贴的公网链接（含 sharecode）。
+1. 调发布服务（`sites/scripts/publish.js --dir dist`），把 `dist/` 整体替换上线；
+2. 解析返回的 `shareLink` / `verified`，未 verified 就非零退出；
+3. 打印**唯一**公网链接。
 
-服务由 `/workspace/.cloudstudio` 提供（端口 / 目录固定），脚本只换文件不换端口，
-链接长期不变。**把打印出的两条链接贴进任务回复**，用户 / 别的 agent 手机即可验证。
+链接只认 [`../state/CURRENT.md`](../state/CURRENT.md) 里那一条；换域名要同时改 CURRENT 与本文。
+2026-11-09 曾并行两套通道（`/workspace/grass-preview` + `aac01946…` 与 `dist` + `aef42c…`），
+用户手机打开两个链接看到两个版本（0.9.63 / 0.9.66）—— 已收敛为一套。
+
 push / `--apply` 仍按 §1 / §7，需用户明确通知。
+
+## 10. 合并闸门：合的是「合并结果」，不是分支
+
+顺序固定，缺一步都不算完成：
+
+| # | 动作 | 判定 |
+|---|---|---|
+| 1 | `git fetch`，确认 main 没有再动 | 分支基于最新 main |
+| 2 | `git merge --no-ff`（或 rebase 后 ff） | 冲突按 §6 分类解 |
+| 3 | `dist/`：`rm -rf dist && npm run build` | **不许手解**构建产物 |
+| 4 | 在**合并结果**上跑 `npm run verify` | tsc 0 / 测试全绿 / smoke 全过 / docs:check PASS |
+| 5 | 文件数 / 用例数 / smoke 项数抄进 journal | 留痕，下次对比 |
+| 6 | tag `v<version>`、删功能分支、发一条链接 | 主干可整体 revert 这次 merge |
+
+**为什么 `--no-ff`**：分支里常混着「搬构建产物」这类噪声提交（本次 5 个提交里约 1.3 万行
+增删只是同一个 `dist` 产物在来回搬），rebase 会把同一处冲突解 N 遍；保留 merge commit
+之后出问题可以 `git revert -m 1 <merge>` 整体回滚。
+
+**合并后必查三件事**：`config/game.json` 的 key 集合（自动合并也要比对）、
+`tests/__snapshots__/determinism.test.ts.snap` 是否需 `-u`（只有契约变了才需要）、
+构建产物入口名是否换了（v9s.46 从 `index-*.js` 改成 `main-*.js`，旧缓存会 404）。

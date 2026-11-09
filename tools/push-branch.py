@@ -138,6 +138,20 @@ def main():
     branch = args.branch or git('rev-parse', '--abbrev-ref', 'HEAD')
     message = args.message or git('log', '-1', '--format=%B')
 
+    # 硬护栏：绝不写受保护分支；源文件未提交就先停下（推完要 reset --hard，会吞掉改动）
+    PROTECTED = {'main', 'master', 'HEAD'}
+    if branch in PROTECTED or branch.startswith('backup/'):
+        sys.exit(f'[push-branch] 拒绝写入受保护分支 "{branch}"：只允许推 feat/* / fix/* 等功能分支')
+    dirty = [
+        line for line in git('status', '--porcelain').splitlines()
+        if len(line) > 3 and not line[3:].split(' -> ')[-1].startswith('dist/')
+    ]
+    if dirty:
+        sys.exit(
+            '[push-branch] 有未提交的源码改动，先 git add -A && git commit；\n  '
+            + '\n  '.join(dirty[:8])
+        )
+
     # 基线：远端已有同名分支 → 增量；没有 → 相对 origin/main 全量
     if args.base:
         base = args.base

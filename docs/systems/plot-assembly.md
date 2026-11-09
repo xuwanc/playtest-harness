@@ -1,4 +1,4 @@
-# 动态地块拼合（v9s.43）
+# 动态地块拼合（v9s.46）
 
 > **规则正本**。用户 2026-11-09 定的新约定：两边同时加同一个位置的地块不能冲突，
 > 场景改成动态拼合；工位传送按拼合后的实际位置；地块带测试按钮就地生成假人 / 陪练；
@@ -101,16 +101,14 @@ __harness.lab.goto(id)     // 传送（读拼合后 spawnX/spawnZ）
 
 ## 6. 每次任务完成更新线上并贴链接
 
-`npm run publish:preview` → `tools/publish-preview.mjs` 固化四步：
+`npm run build && npm run publish:preview` → `tools/publish-preview.mjs` 只做三件事：
 
-1. `npm run build`（`SKIP_BUILD=1` 可跳过）；
-2. 把 `dist/` 同步到 `/workspace/grass-preview/`：清旧 hash 资源、删历史独立演示页，
-   `index.html` 与 `main.html` **都指向唯一主场景**；
-3. 校验 HTML 引用的 `./assets/*` 全部存在、公网 root / main 均 200；
-4. 打印可直接粘贴的公网链接。
+1. 确认 `dist/index.html` 存在（没有就提示先 build）；
+2. 调沙箱发布服务把 `dist/` 整体替换上线（同一站点覆盖，链接不变）；
+3. 解析 `shareLink` / `verified`，未通过校验就非零退出，通过则打印**唯一**链接。
 
-服务由 `/workspace/.cloudstudio` 提供（端口 / 目录固定），脚本只换文件不换端口，
-所以**公网链接长期不变**。这同步的是线上静态预览，**不是 GitHub push**；
+链接只认 [`../state/CURRENT.md`](../state/CURRENT.md) 里那一条（v9s.46 起收敛，
+不再有第二条 `main.html` 域名）。这是发布，**不是 GitHub push**；
 push / `gh-commit.mjs --apply` 仍需用户明确通知，见 [`multi-agent-workflow.md`](multi-agent-workflow.md)。
 
 ## 7. 新 agent 加一块地（3 步）
@@ -122,7 +120,7 @@ cat > config/plots/my-feature.json <<'JSON'
   "id": "my-feature",
   "name": "我的功能试炼场",
   "hint": "点生成按钮摆出陪练，测 XX 手感",
-  "owner": "agent-A / v9s.44",
+  "owner": "agent-A / v9s.46",
   "testSpawn": { "label": "生成 3 人", "dummies": 1, "fighters": 2 }
 }
 JSON

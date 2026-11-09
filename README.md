@@ -19,7 +19,7 @@
 npm install
 npm run dev          # http://localhost:5173（绑定 0.0.0.0，手机可用同网络的 Network 地址）
 npm run verify       # 发布前必跑：build → 全量单测 → 可移植 → docs → smoke
-npm run publish:preview  # 每次任务完成必跑：同步线上预览 + 打印公网链接
+npm run publish:preview  # 每次任务完成必跑：发布 dist + 打印唯一公网链接
 ```
 
 **只有 `index.html` 一个测试场景**。草块（压开 / 割断 / 风吹麦浪）与顶部「风：开」开关都在主场景里，
@@ -82,7 +82,7 @@ docs/               INDEX 索引 + systems / state / decisions / journal / check
 - 每批改动通过验收后**直接覆盖发布**，不再二次确认；小改动合并发布，大调整阶段性发布。
 - **测试场景只保留主场景**：新需求在主场景新建地块文件（`config/plots/*.json`），由动态拼合
   自动分配位置与工位，不新建演示页、不手写绝对坐标（见 `AGENTS.md`）。
-- **每次任务完成都要更新线上并贴链接**：`npm run publish:preview` 同步静态预览 + 打印公网地址；
+- **每次任务完成都要更新线上并贴链接**：`npm run publish:preview` 发布 `dist/` + 打印唯一公网地址；
   这与 GitHub push 是两回事（push 仍需用户明确通知）。
 - **协同推送**：本沙箱 `git push` 无写凭证（读可用），用户通知后跑
   `python3.11 tools/push-branch.py` 走已授权的 GitHub MCP 网关推到**同名功能分支**（不动 main），

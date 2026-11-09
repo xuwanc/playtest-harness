@@ -54,7 +54,7 @@
 | 两边同时加同一位置地块 / 不想写绝对坐标 | `core/plot-assembly.ts`、`src/config.ts` | `assemblePlots`、`PLOT_ASSEMBLY`、`plotDebug()` | [systems/plot-assembly.md](systems/plot-assembly.md) §2/§4 | `tests/plot-assembly.test.ts`、`__harness.plotDebug()` |
 | 工位传送没跟着地块走 / 拼合后坐标不对 | `lab-panel.ts` 的 `goto()` | `StationSpec.spawnX/spawnZ` | 同上 §4 | `__harness.lab.goto(id)` + `plotDebug()` |
 | 地块测试按钮生成 / 清除假人陪练 | `core/plot-spawn.ts`、`presentation/three-scene.ts` | `spawnPlotTestUnits`、`syncDummyCapacity`、`dummyRenderCount` | 同上 §5 | `tests/plot-spawn.test.ts`、`__harness.spawnAt()` |
-| 每次任务完成怎么更新线上 / 贴链接 | `tools/publish-preview.mjs` | `publish:preview` | 同上 §6 | `npm run publish:preview` 打印两条公网链接 |
+| 每次任务完成怎么更新线上 / 贴链接 | `tools/publish-preview.mjs` | `publish:preview` | 同上 §6 | `npm run publish:preview` 打印唯一公网链接 |
 
 ## 3. 按模块查
 
@@ -123,7 +123,7 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（95 文件 / 922 例） | 提交前 |
+| `npm test` | vitest 全量（99 文件 / 977 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
 | `npm run smoke` | 起 `dist/`，跑 41 项画面层 + 契约自检 | 发布前 |
@@ -195,4 +195,5 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`decisions/ADR-005`](decisions/ADR-005-ground-height.md) | 贴地高度查询放 Core |
 | [`decisions/ADR-006`](decisions/ADR-006-fixed-step-events.md) | 固定步长 + 显式事件队列 |
 | [`decisions/ADR-007`](decisions/ADR-007-knockback-default.md) | 默认配置反映真实手感 |
+| [`decisions/ADR-008`](decisions/ADR-008-grass.md) | 草块状态在 Core、几何在表现层、判定复用 hits |
 | [`journal/`](journal/) | 按日期的迭代记录（32 份，2026-11-05 起；`-00` 是功能总表，`-02` 是 v9s.41 换腿、`-06` 是 v9s.45 慢放；带 `<主题>` 后缀的按内容命名） |

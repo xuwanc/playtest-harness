@@ -21,8 +21,8 @@
 
 3. **每次完成一次任务都要更新线上并贴链接**（方便快速验证）：
    - 跑 `npm run verify` → `npm run publish:preview`（`tools/publish-preview.mjs`）；
-   - 脚本 build → 同步 `dist/` 到线上目录 → 校验资源 → 打印公网链接；
-   - **把打印出的两条链接贴进任务回复**（主场景 / 根地址）；
+   - 脚本发布 `dist/` → 校验 `verified` → 打印**唯一**公网链接（不再有第二条）；
+   - **把这条链接贴进任务回复**；
    - 这是「线上静态预览同步」，**不是 GitHub push**；push / `--apply` 仍需用户明确通知。
 
 > 为什么：多套场景让「看到的」≠「主线接入的」；手写绝对坐标 + 共改一个数组是多 agent
@@ -30,9 +30,8 @@
 
 ## 二、开工标准流程（读通 / 写走 MCP 网关）
 
-2026-11-09 实测：`github.com:443` **读**可用（`fetch` / `clone` / `ls-remote`），
-但**写没有 git 凭证**——`git push` 会报 `could not read Username for 'https://github.com'`。
-因此读操作用标准 git，**协同推送走已授权的 GitHub MCP 网关**：
+读用标准 git；**能不能 push 先测**（`git push --dry-run origin HEAD:refs/heads/__probe`）。
+2026-11-09 本沙箱写没有凭证，此时走已授权的 GitHub MCP 网关（细节见规范 §1）：
 
 ```bash
 git fetch origin
@@ -62,6 +61,9 @@ git reset --hard origin/<分支>               # 本地与远端对齐（远端 
 `config/game.json`、`src/core/{types,world,step,index,hits}.ts`、`src/app.ts`、
 `src/presentation/three-scene.ts`、`docs/INDEX.md`、`docs/state/CURRENT.md`、
 `package.json`、`dist/` —— 这些**由 integrator 独占或排队改**，各 agent 只新建自己的文件。
+
+**版本号是热点的热点**：功能分支**不占** `v9s.NN`（写 `v9s.x` 或留空），
+合并时由 integrator 统一 `version` +1 并宣布号（规范 §0）。两个分支各写 v9s.44 的坑踩过一次。
 契约（类型 / 事件 / config schema / `World` 字段 / 模块顺序）由 integrator 一次性定完再并行。
 
 `config/plots/*.json` **不是热点**：每个 agent 只新建自己的那一个文件（这正是动态拼合
@@ -69,22 +71,19 @@ git reset --hard origin/<分支>               # 本地与远端对齐（远端 
 
 文件名带归属：`docs/journal/YYYY-MM-DD-NN-<主题>.md`，别用纯编号，避免 add/add 撞车。
 
-## 四、合并冲突怎么解（本次实测的分类）
+## 四、合并冲突怎么解
 
-| 类型 | 文件 | 解法 |
-|---|---|---|
-| **生成物 · 必须重生成** | `tests/__snapshots__/determinism.test.ts.snap`、`dist/*` | 两边都改了 `World` 结构，合并后 golden 会是**第三个值**；选任何一边都永久漂移 → `npx vitest run tests/determinism.test.ts -u` + `npm run build` |
-| **追加型 · 取并集** | `tools/smoke.py`、`three-scene.ts`、`.gitignore`、`README.md`、`docs/INDEX.md` | 两边新增都保留 |
-| **单调 / 覆盖写 · integrator 定值** | `package.json`（版本）、`docs/state/CURRENT.md` | 取较大版本 / 按当前状态重写 |
-| **同路径不同内容 add/add** | `docs/journal/*` | 远端占原路径，本地另存带主题的文件名 |
-| **自动合并也要验语义** | `config/game.json`、`app.ts`、`types.ts`、`hits.ts` | git 说 auto-merge 不等于逻辑正确 → 跑 `tsc` + `verify` |
+按 **生成物重生成 / 追加取并集 / 单调取较大 / add-add 改名** 四类处理，
+完整分类表与本次实测（含 `dist` 不许手解）见
+[`docs/systems/multi-agent-workflow.md`](docs/systems/multi-agent-workflow.md) §6 + §10。
+一句话：**git 说 auto-merge 不等于逻辑正确**，解完必须在合并结果上跑 `tsc` + `verify`。
 
 ## 五、提交前必跑
 
 ```bash
 npm run verify              # build → 全量单测 → Core 可移植边界 → docs:check → smoke
 npm run verify:portable     # 改了 src/core/ 时必跑
-npm run publish:preview     # 每次任务完成必跑：同步线上 + 打印公网链接
+npm run publish:preview     # 每次任务完成必跑：发布 dist + 打印唯一公网链接（见规范 §9）
 ```
 
 改了 `World` 结构 → golden hash 必变，用 `-u` 更新并在 journal 记一笔「契约变更」。

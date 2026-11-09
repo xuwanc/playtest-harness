@@ -1,8 +1,8 @@
-# 体素草块：压开 / 割断 / 风吹麦浪 / 缓慢生长（v9s.39 → v9s.44）
+# 体素草块：压开 / 割断 / 风吹麦浪 / 缓慢生长（v9s.39 → v9s.46）
 
 > 周边功能验证稿。**状态：已实现、已验证、未推送**（用户要求先看效果，提交时机另行通知）。
 > v9s.41 新增 GPU 风场（第 12 节），兑现了下面「Phase 2：把摆动放进 vertex shader」的预留。
-> **v9s.44**：再生改为「缓慢连续长回」、GPU 风改为**枢轴顶点动画**（每节 box 刚体旋转、
+> **v9s.46**：再生改为「缓慢连续长回」、GPU 风改为**枢轴顶点动画**（每节 box 刚体旋转、
 > 保持完整立方体），实现正本见 [grass-growth-pivot.md](grass-growth-pivot.md)。
 > 决策背景见 [ADR-008](../decisions/ADR-008-grass.md)，多 agent 分工见
 > [multi-agent-workflow.md](multi-agent-workflow.md)。
@@ -15,9 +15,9 @@
 | 高度 | 1~2 格 = 0.5~1.0 m，连续随机，参次不齐 |
 | 几何 | 每根草 = **2 段 BoxGeometry**（下段恒在、上段决定 1~2 格高），`THREE.InstancedMesh` |
 | 压开 | 角色走近 → 草绕根部朝「角色→草」方向倾倒，离开后弹性恢复 |
-| 割断 / 再生 | 攻击刀风扫过 → 上段消失、下段留 34% 断茬、抛出碎片；6s 内按 smoothstep + 逐根错峰**平滑长回**（v9s.44，不再瞬间弹满） |
+| 割断 / 再生 | 攻击刀风扫过 → 上段消失、下段留 34% 断茬、抛出碎片；6s 内按 smoothstep + 逐根错峰**平滑长回**（v9s.46，不再瞬间弹满） |
 | 体素风 | 不透明 `MeshLambertMaterial`、无贴图、`instanceColor` 色阶、关阴影 |
-| 风吹麦浪 | v9s.41 双正弦 GPU 行波；**v9s.44 改枢轴顶点动画**：每节 box 绕底部枢轴刚体旋转、节间折线、保持完整立方体（第 12 节 + [实现正本](grass-growth-pivot.md)） |
+| 风吹麦浪 | 旧版双正弦 GPU 行波；**v9s.46 改枢轴顶点动画**：每节 box 绕底部枢轴刚体旋转、节间折线、保持完整立方体（第 12 节 + [实现正本](grass-growth-pivot.md)） |
 
 ## 2. 分层（ADR-002 单向依赖）
 
@@ -106,7 +106,7 @@ config/game.json
 割断后：`cut = regrowSec`（或 `-1` 永久）、断茬朝外倒、发一条
 `grass-cut` 事件（`value` = 本次根数）。已断的草不重复计数。
 
-**v9s.44**：`cut` 递减的整段时间由 Core 的 `grassGrowth()` 派生连续生长进度
+**v9s.46**：`cut` 递减的整段时间由 Core 的 `grassGrowth()` 派生连续生长进度
 （smoothstep + 逐根错峰），表现层据此连续插值高度与颜色；`cut` 归零前已长到 ≈1，
 不再「瞬间弹满」。Core **不新增 World 字段、不改配置数值** → golden 不变、暂停 / 回放成立。
 详见 [grass-growth-pivot.md](grass-growth-pivot.md) §1。
@@ -126,7 +126,7 @@ config/game.json
 | **风放 GPU** | v9s.41：风是全局持续动画，若走 CPU 每帧全量重算会一直吃满带宽；改为 `onBeforeCompile` 注入顶点位移，CPU 每帧只改 8 个 uniform，实例矩阵上传量仍为 0 |
 
 矩阵：下段与上段共用「绕根部水平轴旋转」的四元数（`qBend`）+ 初始轻微倾斜（`qLean`）。
-**v9s.44**：按 `grow` 从断茬高连续插值出「当前总高」`curH`，再重新分配下段
+**v9s.46**：按 `grow` 从断茬高连续插值出「当前总高」`curH`，再重新分配下段
 （`min(seg, curH)`）/ 上段（`curH - seg`）——矮草先长下段，长过一格后上段才出现并逐渐变高；
 颜色从 `stumpColor` 随 `grow` 淡回本色。生长中只有这批草 dirty（稀疏）。
 
@@ -209,7 +209,7 @@ compose + 上传约 100 KB，移动端会一直吃满带宽（正是第 8 节点
 | Core（公式唯一来源） | `windPhase()` 静态相位、`windShaderParams()` 两波频率/幅度、`windSample()` CPU 参考实现、`windAdvance()` 固定步长推进 `time` 与阵风 |
 | 静态实例属性 | `aWindPhase`(vec2)：`k·(位置·风向) + 抖动`；`aWindData`(vec4)：段底/段顶相对高度、设计段高、高度增益。**创建时上传一次** |
 | 每帧 uniform | `uWindTime / uWindDir / uWindOmega / uWindAmp / uWindGust / uWindShade / uWindOn` |
-| 顶点位移 | **v9s.44 已替换**：旧为逐顶点 `h²` 加权 shear（box 被拉成斜平行四边形）；现为 `<project_vertex>` 世界空间**两级枢轴刚体旋转**（每节 box 保持完整立方体），见 [grass-growth-pivot.md](grass-growth-pivot.md) §2 |
+| 顶点位移 | **v9s.46 已替换**：旧为逐顶点 `h²` 加权 shear（box 被拉成斜平行四边形）；现为 `<project_vertex>` 世界空间**两级枢轴刚体旋转**（每节 box 保持完整立方体），见 [grass-growth-pivot.md](grass-growth-pivot.md) §2 |
 | 割断抑制 | `alive = 当前段高 / 设计段高`，断茬变矮自动减弱摆幅，上段 `scale=0` 自动不摆——零额外上传 |
 | 明暗浪带 | fragment：`diffuseColor.rgb *= 1 − shade·(0.5+0.5·s₁)`，波峰亮、波谷暗，形成斜向带 |
 | 注入方式 | `MeshLambertMaterial.onBeforeCompile` 替换 `<common>` / `<begin_vertex>` / `<color_fragment>`；`customProgramCacheKey` 隔离编译缓存 |
@@ -223,7 +223,7 @@ k₁  = 2π / wavelength,      ω₁ = k₁·speed
 k₂  = 2π / secondWave.wavelength, ω₂ = k₂·speed·speedScale
 phase = [k₁p + jitter, k₂p + 1.7·jitter]
 sway  = gust · (amplitude·sin(phase₁ − ω₁t) + amp₂·sin(phase₂ − ω₂t))
-θ     = atan2(sway, LOW·hBase + hTip)                 // v9s.44：有效力臂换算倾角
+θ     = atan2(sway, LOW·hBase + hTip)                 // v9s.46：有效力臂换算倾角
 下段绕草根转 LOW·θ，上段绕下段顶端再转 UP·θ          // 节间无缝、每节 box 刚体
 ```
 
@@ -250,5 +250,5 @@ sway  = gust · (amplitude·sin(phase₁ − ω₁t) + amp₂·sin(phase₂ − 
 演示页的「风：开」按钮 / `W` 键 / `?wind=0` 可实时对照；`?view=3` 是迎风低机位，
 最容易读出一条条推进的浪带。
 
-> **v9s.44**：风的顶点变换已改为枢轴刚体旋转、再生已改为缓慢连续长回，
+> **v9s.46**：风的顶点变换已改为枢轴刚体旋转、再生已改为缓慢连续长回，
 > 实现正本（公式 / 单测 / 浏览器读数）见 [`grass-growth-pivot.md`](grass-growth-pivot.md)。

@@ -1,4 +1,4 @@
-# 测试场景约定：单一主场景 + 动态拼合（v9s.43）
+# 测试场景约定：单一主场景 + 动态拼合（v9s.46）
 
 > **规则正本**。用户在 2026-11-09 定的三条规则，别的 agent 拉下 git 后按此执行。
 > 3 分钟快速入口：[`../../AGENTS.md`](../../AGENTS.md)。
@@ -15,7 +15,7 @@
 
 ## 规则 2：新测试需求 = 新建一个地块文件，绝不写世界坐标
 
-v9s.43 起，**取代**旧的「往 `config/game.json` 的 `scene.stations[]` 追加一条 + 手写绝对坐标」。
+v9s.46 起，**取代**旧的「往 `config/game.json` 的 `scene.stations[]` 追加一条 + 手写绝对坐标」。
 
 - 一地块一文件 `config/plots/<id>.json`，只写 `id/name/hint` 与相对布局意图；
 - `config/game.json` 里**已删除** `scene.stations` 与 `scene.grass.plots`，不要再往回加；
@@ -48,11 +48,11 @@ npm run publish:preview        # 更新线上 + 打印链接，贴进任务回�
 
 ## 规则 3：每次任务完成更新线上并贴链接
 
-- 跑 `npm run publish:preview`（`tools/publish-preview.mjs`）：build → 同步 `dist/` 到线上
-  静态目录 → 清旧 hash / 历史演示页 → 校验资源引用 → 打印公网链接；
-- `index.html` 与 `main.html` 都指向唯一主场景；服务目录 / 端口固定，链接长期不变；
-- **把打印出的两条链接贴进任务回复**（手机可直接打开）；
-- 这是「线上静态预览同步」，**不是 GitHub push**；push / `gh-commit.mjs --apply`
+- 跑 `npm run publish:preview`（`tools/publish-preview.mjs`）：把 `dist/` 整体发布上线
+  → 校验 `verified` → 打印**唯一**公网链接；
+- 链接长期不变，权威记录在 [`../state/CURRENT.md`](../state/CURRENT.md)；
+- **把打印出的链接贴进任务回复**（手机可直接打开）；
+- 这是发布，**不是 GitHub push**；push / `gh-commit.mjs --apply`
   仍需用户明确通知，见 [`multi-agent-workflow.md`](multi-agent-workflow.md)。
 
 ## 复现与验收
