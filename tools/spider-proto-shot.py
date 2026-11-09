@@ -64,15 +64,16 @@ def main() -> int:
              "() => { window.__spider.reset(); window.__spider.set({speed: 1.4, turn: 0, stride: 0.42}); }",
              "() => { window.__spider.advance(2.6); window.__spider.advance(0.22); }")
 
-        # 3) 高速：验证支撑脚在最大伸展时是否被 clamp
+        # 3) 高速：验证支撑脚在最大伸展时是否被 clamp（stride 0.78 会 clamp 2 条腿，见 ADR §10）
         shot('03-fast.png',
-             "() => { window.__spider.reset(); window.__spider.set({speed: 3.0, turn: 0, stride: 0.78}); }",
+             "() => { window.__spider.reset(); window.__spider.set({speed: 3.0, turn: 0, stride: 0.62}); }",
              "() => window.__spider.advance(3.2)")
 
-        # 4) 原地转向：脚要重新落位，不能靠身体硬拧
+        # 4) 原地转向：脚要重新落位，不能靠身体硬拧。
+        #    转角控制在 ~40°：再大相机（固定世界偏移）就变成侧面了，看不出腿的同侧/异侧关系
         shot('04-turn.png',
-             "() => { window.__spider.reset(); window.__spider.set({speed: 0.25, turn: 1.2, stride: 0.36}); }",
-             "() => window.__spider.advance(2.0)")
+             "() => { window.__spider.reset(); window.__spider.set({speed: 0.25, turn: 0.7, stride: 0.36}); }",
+             "() => window.__spider.advance(1.0)")
 
         # 5) 低体高 + 大抬腿：看膝盖是否会撞地、IK 是否 clamped
         shot('05-low.png',
