@@ -84,8 +84,11 @@ git add -A && git commit -m "..."
    `config/game.json` 的 `scene.stations` / `scene.grass.plots` **已删除**，不要再往回加。
    这样多个 agent 同时加同一个位置也不会 git 冲突、也不会叠放；地块可带 `testSpawn`
    自动生成测试按钮（就地摆假人 / 陪练）。任一 agent 都遵守，别人拉下 git 就能直接复现。
-3. **每次完成一次任务都要更新线上并贴链接**：`npm run publish:preview` 发布 `dist/`
-   并打印**唯一**公网链接（见 §9），把链接贴进任务回复。这是发布，**不是 GitHub push**。
+3. **合并闸门负责更新线上并贴链接（feature agent 不发布）**：由 `agent-sync.py finish`
+   在合并结果上跑 `publish:pages`（GitHub Pages，权威、沙盒无关）产出**唯一**公网链接（见 §9），
+   未开启 Pages 时以 `publish:preview` 隧道兜底；链接贴进任务回复。这是发布，**不是 GitHub push**。
+   feature agent 收尾只做 `verify` + `smoke`，**绝不自己调发布**——否则每个 agent 各发各的，
+   又会出现多条按沙盒派生的隧道链接（§9.1）。
 
 ## 3. 令牌（安全红线，仅 REST 兜底时需要）
 
@@ -176,29 +179,47 @@ GITHUB_TOKEN=xxx node tools/gh-commit.mjs --apply -m "..." \
 8. 效果类改动给可复现入口（主场景按钮 / 快捷键 / `__harness.*` / 截图脚本），别只靠文字。
 9. **任务收尾跑 `npm run publish:preview` 并把公网链接贴进回复**（见 §9）。
 
-## 9. 发布闸门：一条通道、一个链接（v9s.46）
+## 9. 发布闸门：一条通道、一个链接（v9s.46 → v9s.x 统一链接）
 
 **与 GitHub push 解耦**：用户要求「每次 agent 完成一次任务都要更新一次线上，贴出链接」，
 指的是**线上静态预览**，不是往 `origin` 推代码。
 
+### 9.1 为什么之前会出两条链接（根因）
+
+不是谁记错链接，是**架构必然**：「发布」= 把**本沙盒正在跑的进程**经 `auth-proxy` 暴露成子域名 `a<md5(runtimeId)>.app.workbuddy.host` 的**实时隧道**；站点名由**沙盒 runtimeId** 派生
+（`sites/scripts/lib.js`），每个沙盒各一份状态文件。两个 agent 在**两个沙盒**各自发布 →
+必然两条互不相关的隧道，且沙盒休眠即断。**两个 agent 之间没有任何共享的 Web 服务器。**
+完整复盘见 [`../journal/2026-11-09-08-unified-preview-link.md`](../journal/2026-11-09-08-unified-preview-link.md)。
+
+### 9.2 唯一权威链接：GitHub Pages（推荐，沙盒无关）
+
+把 `dist/` 当静态资源部署到仓库 `preview` 分支，由 GitHub 静态托管：
+
 ```bash
-npm run verify            # build → 全量单测 → 可移植边界 → docs → smoke
-npm run publish:preview   # tools/publish-preview.mjs
+npm run publish:pages     # tools/publish-pages.py → 部署 dist/ 到 preview 分支
 ```
 
-`tools/publish-preview.mjs` 只做三件事：
+URL 完全由**仓库身份**决定：`https://<user>.github.io/<repo>/`（index.html 根路径）。
+它**与任何沙盒无关**：哪个 agent 发、发几次都是同一站点、同一条链接；沙盒休眠不影响；
+多 agent 并发也只产生一条链接（后发覆盖前发）。
 
-1. 调发布服务（`sites/scripts/publish.js --dir dist`），把 `dist/` 整体替换上线；
-2. 解析返回的 `shareLink` / `verified`，未 verified 就非零退出；
-3. 打印**唯一**公网链接。
+**一次性前置（用户做，非每次任务）**：仓库 `Settings → Pages → Build from a branch` 选 `preview` / `/(root)`，约 1 分钟生效（开启前 `publish:pages` 仍会把 `dist/` 推到 `preview` 分支）。
 
-链接只认 [`../state/CURRENT.md`](../state/CURRENT.md) 里那一条；换域名要同时改 CURRENT 与本文。
-2026-11-09 复核：发布脚本实际返回 `aac01946…`（v0.9.68 / 9 地块 / 可破坏物件在正确坐标），
-而 `aef42c…` 仍停在旧站点 v0.9.67 —— CURRENT 曾误记后者，已统一到脚本真正更新的那条。
-**判据永远是 `npm run publish:preview` 打印的 shareLink**，不要凭历史记录抄域名；
-换发布服务导致域名变化时，同一提交里改 `CURRENT.md` + 本文，并用浏览器实测徽标。
+### 9.3 单一发布者（铁律 3 的硬执行）
 
-代码推送与合并按 §11 自动执行，不再逐次请示用户。
+> **只有合并闸门（`agent-sync.py finish`）可以发布；feature agent 绝对不发布。**
+
+两个 agent 都去调 `publish:preview` 正是之前出两条链接的直接原因。feature agent 收尾只做
+`verify` + `smoke`，把分支交给闸门；闸门闭环里统一发布（先 Pages、隧道兜底）并打印唯一链接。
+
+### 9.4 兜底：实时隧道（仅即时预览，非权威）
+
+```bash
+npm run publish:preview   # tools/publish-preview.mjs（站点 skill 实时隧道）
+```
+
+仅当 Pages 尚未开启时给「马上能看」的窗口。**该链接按沙盒派生、跨 agent 不统一，不得作为
+权威链接记入 CURRENT.md 或任务回复。** 判据永远以 `publish:pages` 产出的 GitHub Pages URL 为准。
 
 ## 10. 合并闸门：合的是「合并结果」，不是分支
 
@@ -247,7 +268,7 @@ npm run publish:preview   # tools/publish-preview.mjs
 7. `create_pull_request` → `merge_pull_request(merge_method=merge, expectedHeadSha=…)`：
    main 的写入只发生在 GitHub 端，天然带冲突检测与乐观锁，merge commit 可整体 revert。
 8. `fetch` + `git branch -f main origin/main`（只更新引用、**不切工作区**，共享工作区安全）。
-9. 清队列；`npm run publish:preview`（§9 唯一通道）。
+9. 清队列；`npm run publish:pages`（§9.2 权威链接，沙盒无关）失败告警不阻断，隧道 `publish:preview` 兜底（§9.4）。
 10. 打印版本 / 链接；把链接贴进任务回复（铁律 3）。
 
 ### 自动解冲突（§6 的可执行版）
@@ -265,7 +286,8 @@ npm run publish:preview   # tools/publish-preview.mjs
   **远端同名分支有本地没有的提交时拒绝覆盖**（防两个 agent 互推覆盖）。
 - `agent-sync.py`：只在 `feat/*` / `fix/*` 上跑；合并前必须 verify 通过；
   PR 合并带 `expectedHeadSha`；不切工作区、不碰别人的分支。
-- 发布永远只有 `publish:preview` 一条通道、一条链接。
+- 发布只有合并闸门能触发；权威链接是 `publish:pages`（GitHub Pages，沙盒无关），
+  `publish:preview` 仅作未开启 Pages 时的即时兜底、不得作为权威链接记录。
 - 失败不静默：[`../state/MERGE_QUEUE.md`](../state/MERGE_QUEUE.md) 留痕，`status` 可见，
   重跑带 `--pr-number` 断点续跑。
 
