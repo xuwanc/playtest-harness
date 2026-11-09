@@ -1079,7 +1079,16 @@ export function createSceneView(
     deathDebug(id) {
       const i = world.dummies.findIndex((d) => d.id === id);
       if (i < 0) return null;
-      return deathState[i] ?? null;
+      const st = deathState[i];
+      // `dead` 读 Core 的真值，不从缓存对象读 —— 缓存是「上一帧渲染时算的」，
+      // 手动 step 不 render 时它会落后，调试时容易误判「还活着」。
+      return {
+        dead: world.dummies[i].health.dead,
+        fall: st ? st.fall : 0,
+        sink: st ? st.sink : 0,
+        rise: st ? st.rise : 1,
+        y: dummyRigs[i] ? dummyRigs[i].group.position.y : world.dummies[i].position.y,
+      };
     },
     yawDebug() {
       return { target: yawTarget, shown: yawSmoother.value, tauMs: view.renderInterp?.yawSmoothMs ?? 0 };
