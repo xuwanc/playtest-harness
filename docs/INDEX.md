@@ -37,6 +37,9 @@
 | 前进切后退（或左右换向）时腿抽一下 | `presentation/gait.ts` | `slewDirSign`、`dirDrive`、`GaitInput.dirF` | [systems/animation-notes-4.md](systems/animation-notes-4.md) §18 | `tests/v9s43-reverse-blend.test.ts`、`npm run smoke`「换向不抽腿」 |
 | 截图放哪 / 能不能入库 | `shots/`（`.gitignore` 已挡） | — | [assets/conventions.md](assets/conventions.md) | `git status` 里不该出现 png |
 | 刀光 / 斩击弧不出现 | `presentation/three-scene.ts` | `weapon-trail.ts`、`FX_ORDER.trail / slash` | [systems/presentation-fx.md](systems/presentation-fx.md) | `__harness.fxDebug()` |
+| 角色造型要加驼背 / 屈膝 / 发型 / 胡子 | `core/types.ts` → `CharacterStyle`、`presentation/voxel-rig.ts`、`presentation/beard.ts` | `style.hunch`、`kneeSink`、`balding`、`beard` | [systems/character-style.md](systems/character-style.md) | `tests/v9s52-elder-style.test.ts`、`python3 tools/elder-shot.py` |
+| 胡子看不见了 | `presentation/voxel-rig.ts` 胡子挂点 z | 必须 `max(HS×0.5, 0.135)`（躯干半深 0.14） | 同上 §2 | 截图 `shots/elder/01-front.png` |
+| 驼背体型头颈之间有缝 | `voxel-rig.ts` `hunch > 0` 的脖子块 | `headPivot` 下的 `0.46H` 方块 | 同上 §1 | `tests/v9s52-elder-style.test.ts`「盒子增量 10」 |
 | 调试面板某项不知道去哪了 | `presentation/debug-panel.ts` | 7 个 `top()` 一级分类 | 本页 §3.4 | 截图 `shots/v9s38/07,08` |
 | 攻击卡肉时机 / 卡肉太长 | `core/hits.ts`、`config.combat.weapons.*.hitSweep` | `hitSweep`、`hitstop` 三段式 | [systems/animation-notes-3.md](systems/animation-notes-3.md) | `npm run sweep -- --check`、`npm run smoke` |
 | 动作姿势不对 / 换段跳变 | `presentation/swing-pose.ts`、`config.view.animation.swing.clips` | `PoseClip`、`samplePoseClip`、`blendCombatPose` | [systems/animation.md](systems/animation.md) | `npm run clip:lab:check` |
@@ -93,6 +96,7 @@
 | `fx-layer.ts` | **特效层级唯一来源** | `FX_ORDER`、`setFxOrder` |
 | `voxel-rig.ts` | 人形主角骨架装配 + 逐帧姿态解算 | `createVoxelRig`、`rig.update`、`bladeWorld` |
 | `spider-rig.ts` | **8 腿主角骨架**：两节身体 + 三角步态 + 每腿两骨闭式解（按 `bodyTypes.rig` 切换） | `createSpiderRig`、`solveLeg`、`debug()`、`legs()` |
+| `beard.ts` / `voxel-rig.ts` 的 `style` 段 | **造型特征**：驼背 / 屈膝 / 地中海 / 长白胡子（三节二阶弹簧） | `CharacterStyle`、`solveBeard`、`createBeardState` |
 | `rig-parts.ts` | 体素零件几何（剑 / 大剑 / 盾 / 杖 / 弓 / 箭），无状态 | `makeSword`、`makeBow`、`makeArrow` |
 | `fighter-rig.ts` / `dummy-rig.ts` | 陪练适配（复用 `voxel-rig`）/ 普通假人轻量骨架 | `createFighterRig`、`createDummyRig` |
 | `debug-panel.ts` | lil-gui 调试面板（7 个一级分类） | `createDebugPanel`、`DebugActions` |

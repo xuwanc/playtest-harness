@@ -1,39 +1,41 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-09 22:25。
+> 最后更新：2026-11-09 23:55。
 
 ## 一句话
 
-v0.9.72：**蜘蛛主角造型定稿** —— 简化到 35 个 mesh（原 128）、步幅 0.45 → 0.66 m、
-身体加了二阶弹簧惯性（俯仰 / 侧倾 / 纵向滞后 / 腹部甩动）。
-同批交付**造型工坊** `tools/voxel-forge/`：写 JSON → 3D 预览 → 导出 TS 片段。
+v0.9.73：**个性化造型** —— `VoxelConfig.style` 新增体态与配饰（驼背 / 屈膝 / 地中海 /
+长白胡子 + 二阶弹簧摆动）。首个用例「驼背老人」：比标准高 6%（1.28m），因弓腰视觉反而略矮，
+盒子预算只多 10 个。同时补上一条命令发布 `npm run ship` 与固定链接。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.72`（内部代号 v9s.51） |
-| 线上徽标 | `v0.9.72`（构建时间随发布变化） |
-| 发布方式 | `npm run publish:preview`（隧道兜底）；Pages 仍未在仓库开启，见下 |
-| 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— **仍 404**，需在仓库 `Settings → Pages` → Build from a branch → 选 `preview` / `/(root)`（PAT 无 `Pages: write`） |
-| 蜘蛛开局链接 | <https://aef42c265bdddcf97.app.workbuddy.host/?sharecode=2FOZ6AI6QC&hero=spider> |
+| `package.json` 版本 | `0.9.73`（内部代号 v9s.52） |
+| 线上徽标 | `v0.9.73`（构建时间随发布变化） |
+| 发布方式 | `npm run ship`（构建 → 推 main → 重建 `preview` 产物；带凭证自恢复与推送重试） |
+| 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— **已开启且 200**（Pages: branch `preview` / `(root)`），此链接固定不变 |
+| 蜘蛛开局 | <https://xuwanc.github.io/playtest-harness/?hero=spider> |
+| 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
+| 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
 
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 101 文件 / 1013 例全绿 |
+| `npx vitest run` | 102 文件 / 1021 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
 | `npm run smoke` | 53/53 PASS |
-| `npm run docs:check` | PASS（79 份文档 ≤300 行，README 97 行） |
+| `npm run docs:check` | PASS（82 份文档 ≤300 行，README 97 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 
 ## 正在做
 
-- 无。v9s.51（v0.9.72）已合入 main。
+- 无。v9s.52（v0.9.73）已合入 main。
 
 ## 蜘蛛主角的几个关键数（改之前先读）
 

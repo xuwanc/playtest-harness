@@ -19,15 +19,11 @@
    - **不要再往 `config/game.json` 里加 `scene.stations` / `scene.grass.plots`**（已删除）；
    - 规则正本见 [`docs/systems/plot-assembly.md`](docs/systems/plot-assembly.md)。
 
-3. **合并闸门负责更新线上并贴链接；feature agent 不发布**（避免每个 agent 各发一条隧道链接）：
-   - 由 `agent-sync.py finish` 在合并结果上跑 `npm run publish:pages`（GitHub Pages，权威、沙盒无关）
-     产出**唯一**公网链接（`https://<user>.github.io/<repo>/main.html`）；未开启 Pages 时
-     `npm run publish:preview` 隧道兜底；
-   - **把这条链接贴进任务回复**；
-   - 这是「线上静态预览同步」，**不是 GitHub push**；代码推送与合并由
-     `tools/agent-sync.py finish` 自动完成（用户已授权，见规范 §11）。
-   - 关键根因见规范 §9.1：站点 skill 的链接按**沙盒 runtimeId** 派生，两个沙盒必然出两条隧道；
-     统一链接只能靠 GitHub Pages（按仓库身份定址，与沙盒无关）。
+3. **发布只有一个入口，链接只有一条**：`npm run ship`（= build → 推 main → 重建 `preview` 产物）。
+   - 对外只贴固定链接 `https://<user>.github.io/<repo>/`（根路径，Pages 已开启，branch `preview`）；
+   - `npm run publish:preview` 走沙盒隧道（`*.app.workbuddy.host`），**只用于自己临时调试**，
+     按 runtimeId 定址、沙盒重建即失效，不要贴给用户；
+   - feature agent 不发布，由合并闸门在 main 上跑一次 `npm run ship`；
 
 > 为什么：多套场景让「看到的」≠「主线接入的」；手写绝对坐标 + 共改一个数组是多 agent
 > 冲突的根源；只 commit 不同步线上，别人和用户没法快速验证。
@@ -35,7 +31,8 @@
 ## 二、开工标准流程（读通 / 写走 MCP 网关）
 
 读用标准 git；**能不能 push 先测**（`GIT_TERMINAL_PROMPT=0 git push --dry-run origin HEAD:refs/heads/__probe`；不加这个变量会挂住等输入）。
-2026-11-09 本沙箱写没有凭证，此时走已授权的 GitHub MCP 网关（细节见规范 §1）：
+2026-11-09 起本沙箱已配置写凭证（`~/.config/workbuddy/github.token`，600，不入库）；
+凭证丢失时 `npm run ship` 会自动恢复，无需手工登录。
 
 ```bash
 git fetch origin
@@ -45,7 +42,7 @@ npm run verify
 git add -A && git commit -m "..."
 python3.11 tools/agent-sync.py finish        # 收尾闭环（详见规范 §11）：
 #   fetch → 必要时 merge main 并按 §6 解冲突 → 领号 → build/golden → verify
-#   → 推自己的分支 → 建 PR → GitHub 端自动 merge → 对齐 → publish:pages（权威链接，沙盒无关）
+#   → 推自己的分支 → 建 PR → GitHub 端自动 merge → 对齐 → ship（固定链接，沙盒无关）
 ```
 
 - `tools/push-branch.py`：走 MCP `create_branch` / `push_files` / `delete_file`，
@@ -59,8 +56,8 @@ python3.11 tools/agent-sync.py finish        # 收尾闭环（详见规范 §11�
 - **2026-11-09 用户已授权「不需要我参与」**：push / 合并不再逐次请示，
   统一由 `tools/agent-sync.py finish` 按硬护栏自动完成（规范 §11）。
   边界没变：只写自己的 `feat/*` 分支，main 的写入只由 GitHub 端 PR merge 完成，
-  发布只由合并闸门触发：权威链接走 `publish:pages`（GitHub Pages，沙盒无关），
-  `publish:preview` 仅作未开启 Pages 时的即时兜底。
+  发布只由合并闸门触发：`npm run ship` 推到 GitHub Pages（沙盒无关），
+  `publish:preview` 隧道只做自己临时调试。
 
 ## 三、共享热点文件：单一写入方
 
@@ -92,7 +89,7 @@ python3.11 tools/agent-sync.py finish        # 收尾闭环（详见规范 §11�
 npm run verify              # build → 全量单测 → Core 可移植边界 → docs:check → smoke
 npm run verify:portable     # 改了 src/core/ 时必跑
 python3.11 tools/agent-sync.py status     # 开工 / 收尾先看：main 有没有前进、合并队列有没有待办
-python3.11 tools/agent-sync.py finish     # 收尾：自动验证 → 推送 → 合并 → 发布（含 publish:preview）
+python3.11 tools/agent-sync.py finish     # 收尾：自动验证 → 推送 → 合并 → 发布（ship → 固定 Pages 链接）
 ```
 
 改了 `World` 结构 → golden hash 必变，用 `-u` 更新并在 journal 记一笔「契约变更」。

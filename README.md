@@ -2,14 +2,14 @@
 
 用来**测试玩法与模块功能**的网页版 3D 实验台。核心目标是「核心逻辑可移植」：玩法规则放在纯 TypeScript、零依赖、不碰 DOM 与渲染库的 Core 里，Web 表现层只负责展示。
 
-当前版本 **v0.9.66**。线上地址通过项目内部渠道获取（仓库不收录访问链接与凭据）。
+当前版本 **v0.9.73**。线上固定地址：<https://xuwanc.github.io/playtest-harness/>（由仓库身份定址，换沙盒、换 agent、发多少次都不变）。
 
 > **新加入的 agent：先读 [`AGENTS.md`](AGENTS.md)。** 三条铁律——
 > ① 只保留**主测试场景 `index.html`**（独立演示页已删除，不要再新建第二个场景 / 演示页）；
 > ② 新测试需求 = **新建 `config/plots/<id>.json` 一个地块文件、不写世界坐标**，由 `assemblePlots()`
 >    动态拼合（工位传送自动读拼合位置，地块可带测试按钮就地生成假人 / 陪练），
 >    **不要再改 `config/game.json` 的 `scene.stations`**；
-> ③ **每次任务完成跑 `npm run publish:preview` 更新线上，把打印的公网链接贴进回复**。
+> ③ **每次任务完成跑 `npm run ship` 发布，把那条固定链接贴进回复**（链接不会变，不必重新收集）。
 > 规则正本见 [`docs/systems/plot-assembly.md`](docs/systems/plot-assembly.md)、
 > [`docs/systems/test-scene-policy.md`](docs/systems/test-scene-policy.md)。
 
@@ -19,7 +19,7 @@
 npm install
 npm run dev          # http://localhost:5173（绑定 0.0.0.0，手机可用同网络的 Network 地址）
 npm run verify       # 发布前必跑：build → 全量单测 → 可移植 → docs → smoke
-npm run publish:preview  # 每次任务完成必跑：发布 dist + 打印唯一公网链接
+npm run ship         # 每次任务完成必跑：构建 → 推 main → 重建 preview 产物，固定链接自动更新
 ```
 
 **只有 `index.html` 一个测试场景**。草块（压开 / 割断 / 风吹麦浪）与顶部「风：开」开关都在主场景里，
@@ -73,7 +73,7 @@ config/game.json    可调数值（core.* 逻辑 / view.* 表现 / scene.* 关�
 config/plots/*.json 一地块一文件（不写世界坐标，assemblePlots 动态拼合）
 index.html          唯一主测试场景（单入口）
 tests/              vitest：100 文件 / 1007 例
-tools/              smoke.py（53 项自检）、clip-lab（动作验证台）、publish-preview.mjs（线上发布）
+tools/              smoke.py（53 项自检）、clip-lab（动作验证台）、ship.sh（一条命令发布）、voxel-forge（造型工坊）
 shots/              截图（唯一存放处，整目录不入库；见 docs/assets/conventions.md）
 docs/               INDEX 索引 + systems / state / decisions / journal / checklists / assets
 ```
@@ -85,11 +85,11 @@ docs/               INDEX 索引 + systems / state / decisions / journal / check
 - 每批改动通过验收后**直接覆盖发布**，不再二次确认；小改动合并发布，大调整阶段性发布。
 - **测试场景只保留主场景**：新需求在主场景新建地块文件（`config/plots/*.json`），由动态拼合
   自动分配位置与工位，不新建演示页、不手写绝对坐标（见 `AGENTS.md`）。
-- **每次任务完成都要更新线上并贴链接**：`npm run publish:preview` 发布 `dist/` + 打印唯一公网地址；
-  这与 GitHub push 是两回事（push 仍需用户明确通知）。
-- **协同推送**：本沙箱 `git push` 无写凭证（读可用），用户通知后跑
-  `python3.11 tools/push-branch.py` 走已授权的 GitHub MCP 网关推到**同名功能分支**（不动 main），
-  再 `git fetch` → `git diff --stat`（应为空）→ `git reset --hard` 对齐。详见
+- **每次任务完成都要更新线上并贴链接**：`npm run ship` 一条命令完成「构建 → 推 main → 重建 `preview`
+  分支产物」，线上固定地址 <https://xuwanc.github.io/playtest-harness/> 随之更新，**链接永远是同一条**。
+  沙盒隧道（`*.app.workbuddy.host`）只用于本地临时调试，不作为对外链接。
+- **协同推送**：沙箱重建后 git 凭证会丢，`ship.sh` 会自动从 `~/.config/workbuddy/github.token` 恢复；
+  多 agent 场景下各自推**同名功能分支**、经合并闸门并 main，再由闸门跑一次 `npm run ship` 发布。详见
   [`docs/systems/multi-agent-workflow.md`](docs/systems/multi-agent-workflow.md) §1。
 - 每批交付都给「框架风险 + 优化方向」，滚动记录在 [`docs/risk-review.md`](docs/risk-review.md)。
 - 版本号由 integrator 统一改 `package.json`；发布产物只看 `dist/`（`npm run build` 单入口）。

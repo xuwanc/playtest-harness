@@ -2093,6 +2093,31 @@ export type LinkViewConfig = {
   pelvisReach: number;
 };
 
+/**
+ * v9s.52 · 造型特征（可选）。只决定「长什么样」，不改骨架尺寸、不改动画数据。
+ *
+ * 与 `VoxelConfig` 的分工：那六个数值是**骨架尺寸**（决定髋高、臂展、跨步），
+ * 会被 Core 的身高 / 碰撞半径间接依赖；这里只加**体态与配饰**，全部是纯表现，
+ * 不进 Core、不进快照。
+ *
+ * 缺省（整体 undefined）时骨架与旧版逐字节一致 —— 这是能安全修改 voxel-rig 的前提。
+ */
+export type CharacterStyle = {
+  /** 基础驼背角（弧度，正 = 上半身前倾）。走路 / 攻击的前倾在它之上继续叠加。 */
+  hunch?: number;
+  /** 屈膝下沉（米）：骨盆整体降低，足部 IK 把脚钉回地面 → 膝盖自然前屈。 */
+  kneeSink?: number;
+  /** 头部视觉缩放（1 = 原尺寸）。<1 显头小；不影响碰撞身高。 */
+  headScale?: number;
+  /** 地中海：头顶留空，两侧鬓角 + 后脑一圈。 */
+  balding?: boolean;
+  /** 头发颜色（缺省灰白） */
+  hairColor?: string;
+  /** 胡子长度（米），0 / 缺省 = 无。3 节链，带二阶弹簧摆动。 */
+  beard?: number;
+  beardColor?: string;
+};
+
 export type VoxelConfig = {
   headSize: number;
   bodyWidth: number;
@@ -2100,6 +2125,8 @@ export type VoxelConfig = {
   limbThickness: number;
   legLength: number;
   armLength: number;
+  /** v9s.52：可选体态 / 配饰（驼背、屈膝、发型、胡子）。 */
+  style?: CharacterStyle;
 };
 
 /**

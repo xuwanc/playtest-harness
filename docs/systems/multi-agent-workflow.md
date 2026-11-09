@@ -177,7 +177,7 @@ GITHUB_TOKEN=xxx node tools/gh-commit.mjs --apply -m "..." \
 6. 改了 `World` 结构 → golden hash 必变，`-u` 更新并在 journal 记一笔「契约变更」。
 7. 新增机制在 `docs/INDEX.md` 登记（§2 / §3 / §6），单份文档 ≤300 行。
 8. 效果类改动给可复现入口（主场景按钮 / 快捷键 / `__harness.*` / 截图脚本），别只靠文字。
-9. **任务收尾跑 `npm run publish:preview` 并把公网链接贴进回复**（见 §9）。
+9. **任务收尾跑 `npm run ship` 并把固定链接贴进回复**（见 §9）。
 
 ## 9. 发布闸门：一条通道、一个链接（v9s.46 → v9s.x 统一链接）
 
@@ -191,26 +191,26 @@ GITHUB_TOKEN=xxx node tools/gh-commit.mjs --apply -m "..." \
 必然两条互不相关的隧道，且沙盒休眠即断。**两个 agent 之间没有任何共享的 Web 服务器。**
 完整复盘见 [`../journal/2026-11-09-08-unified-preview-link.md`](../journal/2026-11-09-08-unified-preview-link.md)。
 
-### 9.2 唯一权威链接：GitHub Pages（推荐，沙盒无关）
+### 9.2 唯一权威链接：GitHub Pages（已开启，沙盒无关）
 
-把 `dist/` 当静态资源部署到仓库 `preview` 分支，由 GitHub 静态托管：
+把 `dist/` 当静态资源部署到仓库 `preview` 分支（该分支只存构建产物，不含源码），由 GitHub 静态托管：
 
 ```bash
-npm run publish:pages     # tools/publish-pages.py → 部署 dist/ 到 preview 分支
+npm run ship              # tools/ship.sh：build → 推 main → 整棵重建 preview 产物 → 打印链接
 ```
 
-URL 完全由**仓库身份**决定：`https://<user>.github.io/<repo>/`（index.html 根路径）。
+URL 完全由**仓库身份**决定：`https://xuwanc.github.io/playtest-harness/`（根路径 `index.html`）。
 它**与任何沙盒无关**：哪个 agent 发、发几次都是同一站点、同一条链接；沙盒休眠不影响；
 多 agent 并发也只产生一条链接（后发覆盖前发）。
 
-**一次性前置（用户做，非每次任务）**：仓库 `Settings → Pages → Build from a branch` 选 `preview` / `/(root)`，约 1 分钟生效（开启前 `publish:pages` 仍会把 `dist/` 推到 `preview` 分支）。
+前置（已于 2026-11-09 完成）：`Settings → Pages` → branch `preview` / `/(root)`。`ship.sh` 另外接管三件手工活：凭证自恢复、push 超时重试、旧哈希产物清理。
 
 ### 9.3 单一发布者（铁律 3 的硬执行）
 
 > **只有合并闸门（`agent-sync.py finish`）可以发布；feature agent 绝对不发布。**
 
-两个 agent 都去调 `publish:preview` 正是之前出两条链接的直接原因。feature agent 收尾只做
-`verify` + `smoke`，把分支交给闸门；闸门闭环里统一发布（先 Pages、隧道兜底）并打印唯一链接。
+两个 agent 都去调 `publish:preview` 正是之前出两条链接的直接原因。feature agent 收尾只做 `verify` + `smoke`，
+把分支交给闸门；闸门闭环里统一跑 `ship` 并打印唯一链接。
 
 ### 9.4 兜底：实时隧道（仅即时预览，非权威）
 
@@ -218,8 +218,8 @@ URL 完全由**仓库身份**决定：`https://<user>.github.io/<repo>/`（index
 npm run publish:preview   # tools/publish-preview.mjs（站点 skill 实时隧道）
 ```
 
-仅当 Pages 尚未开启时给「马上能看」的窗口。**该链接按沙盒派生、跨 agent 不统一，不得作为
-权威链接记入 CURRENT.md 或任务回复。** 判据永远以 `publish:pages` 产出的 GitHub Pages URL 为准。
+只给自己在本沙盒里临时看一眼。**该链接按沙盒派生、跨 agent 不统一，不得作为权威链接记入 CURRENT.md
+或任务回复。** 对外判据永远只有 `ship` 产出的 Pages URL。
 
 ## 10. 合并闸门：合的是「合并结果」，不是分支
 

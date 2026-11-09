@@ -968,6 +968,35 @@
         "height": 0.7,
         "radius": 0.42,
         "moveSpeed": 2.6
+      },
+      "elder": {
+        "name": "驼背老人",
+        "height": 1.28,
+        "radius": 0.24,
+        "moveSpeed": 3.6,
+        "voxel": {
+          "headSize": 0.28,
+          "bodyWidth": 0.3,
+          "bodyHeight": 0.3,
+          "limbThickness": 0.095,
+          "legLength": 0.7,
+          "armLength": 0.56,
+          "style": {
+            "hunch": 0.32,
+            "kneeSink": 0.05,
+            "headScale": 0.8,
+            "balding": true,
+            "hairColor": "#e9e9e9",
+            "beard": 0.46,
+            "beardColor": "#f4f4f4"
+          }
+        },
+        "colors": {
+          "body": "#6b7a8f",
+          "head": "#f0d3ae",
+          "limb": "#5a6878",
+          "shoe": "#2a2f38"
+        }
       }
     },
     "orientation": {

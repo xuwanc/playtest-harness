@@ -52,6 +52,8 @@ import {
 import type { StretchConfig, StretchPose } from './limb-stretch';
 import { autoSegBlend, blendSwingPose, segEase, solveSwingPose } from './swing-pose';
 import type { SwingPose } from './swing-pose';
+import { createBeardState, solveBeard } from './beard';
+import type { BeardState } from './beard';
 
 export type VoxelRig = {
   group: THREE.Group;
@@ -346,6 +348,14 @@ export function createVoxelRig(
   pelvis.add(upper);
 
   const H = v.headSize;
+  // v9s.52：造型特征（可选）。所有相关改动都乘一个「默认 1」的比例或走 `if (style)` 分支，
+  // 保证不传 style 时几何 / 逐帧姿态与旧版逐字节一致（全部既有快照测试因此不用改）。
+  const style = v.style;
+  const headScale = style?.headScale && style.headScale > 0 ? style.headScale : 1;
+  const HS = H * headScale;            // 视觉头边长（headScale = 1 时数值与 H 相同）
+  const beardLen = Math.max(0, style?.beard ?? 0);
+  const hunch = Math.max(0, style?.hunch ?? 0);
+  const kneeSink = Math.max(0, style?.kneeSink ?? 0);
   const legLen = v.legLength;
   const armLen = v.armLength;
   const t = v.limbThickness;
@@ -402,16 +412,77 @@ export function createVoxelRig(
   headPivot.position.y = Math.min(ori.headPivotHeight, bodyH) - chestPivotY;
   torsoRoot.add(headPivot);
 
-  const head = makeBox(H, H, H, colors.head);
-  head.position.y = H / 2;
+  const head = makeBox(HS, HS, HS, colors.head);
+  head.position.y = HS / 2;
   headPivot.add(head);
 
   // 眼睛：贴在 +Z 面，跟随头部枢轴，用于验收「面朝向」是否正确
   const eyeMat = new THREE.MeshLambertMaterial({ color: '#1b2733' });
   for (const sx of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.07, 0.02), eyeMat);
-    eye.position.set(sx * 0.09, H / 2 + 0.03, H / 2 + 0.011);
+    const eye = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06 * headScale, 0.07 * headScale, 0.02 * headScale), eyeMat,
+    );
+    eye.position.set(
+      sx * 0.09 * headScale, (H / 2 + 0.03) * headScale, (H / 2 + 0.011) * headScale,
+    );
     headPivot.add(eye);
+  }
+
+  // ---- v9s.52 造型特征：地中海发型 / 长白胡子（盒数刻意压到 6 个） ----
+  // 「抓特征」而不是「堆细节」：头顶一圈留白 + 两侧一片鬓角 = 一眼读出地中海；
+  // 胡子只用 3 节锥形盒，靠物理摆动而不是分节数量传达「长」。
+  const beardPivots: THREE.Object3D[] = [];
+  let beardState: BeardState | null = null;
+  if (style?.balding) {
+    const hairColor = style.hairColor ?? '#e8e8e8';
+    const hairMat = new THREE.MeshLambertMaterial({ color: hairColor });
+    const addHair = (w: number, h: number, d: number, x: number, y: number, z: number): void => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), hairMat);
+      m.position.set(x, y, z);
+      headPivot.add(m);
+    };
+    // 两鬓：贴 ±X 面，只盖住耳朵高度那一圈（上方是秃的）
+    for (const sx of [-1, 1]) {
+      addHair(HS * 0.06, HS * 0.62, HS * 0.52, sx * (HS / 2 + 0.003), HS * 0.50, -HS * 0.02);
+    }
+    // 后脑：一片薄的，让「有头发」从背面也成立
+    addHair(HS * 0.70, HS * 0.42, HS * 0.09, 0, HS * 0.50, -(HS / 2 + 0.004));
+    // 顶后「半圈」：只盖后半头顶，前半留空 → M 形发际线 / 地中海
+    addHair(HS * 0.70, HS * 0.06, HS * 0.36, 0, HS * 0.965, -HS * 0.14);
+    // 白眉：两个薄片，比眼睛高一点、宽一点 —— 方块脸靠这一笔才有「老」
+    for (const sx of [-1, 1]) {
+      addHair(HS * 0.24, HS * 0.035, HS * 0.03, sx * HS * 0.20, HS * 0.655, HS / 2 + 0.006);
+    }
+  }
+  // 驼背时头会前伸、抬头补偿，头底和肩线之间会裂一道缝 —— 补一小块「脖子」。
+  // 只在 hunch > 0 时创建，默认体型盒子数不变。
+  if (hunch > 0) {
+    const neck = makeBox(HS * 0.46, HS * 0.30, HS * 0.46, colors.head);
+    neck.position.set(0, -HS * 0.12, -HS * 0.04);
+    headPivot.add(neck);
+  }
+  if (beardLen > 0) {
+    const beardColor = style?.beardColor ?? '#f2f2f2';
+    const beardMat = new THREE.MeshLambertMaterial({ color: beardColor });
+    const segLen = beardLen / 3;
+    let parent: THREE.Object3D = headPivot;
+    for (let i = 0; i < 3; i++) {
+      const pivot = group();
+      pivot.name = `beard${i}`;
+      // 第 1 节挂在下巴（头底前缘）；后面每节挂在上一节末端。
+      // z 不能只贴着脸：躯干半深 0.14，胡子若挂在 0.10 会整条埋进胸腔里（实测就是「看不见」）。
+      pivot.position.set(0, i === 0 ? HS * 0.02 : -segLen, i === 0 ? Math.max(HS * 0.5, 0.135) : 0);
+      parent.add(pivot);
+      const w = HS * [0.52, 0.44, 0.36][i];
+      const seg = new THREE.Mesh(
+        new THREE.BoxGeometry(w, segLen * 1.06, HS * (0.20 - i * 0.04)), beardMat,
+      );
+      seg.position.y = -segLen / 2;
+      pivot.add(seg);
+      beardPivots.push(pivot);
+      parent = pivot;
+    }
+    beardState = createBeardState();
   }
 
   const makeLeg = (sx: number): Leg => {
@@ -684,6 +755,8 @@ export function createVoxelRig(
   let lastGateResume = false;
   let lastSpeed = 0;
   let lastPrevSpeed = 0;
+  /** v9s.52：胡子驱动用的上一帧速度（仅带胡子造型时有意义） */
+  let lastBeardSpeed = 0;
   /** v9s：本帧原地转身踏步脉冲强度（诊断用） */
   let lastTurnStep = 0;
 
@@ -2482,6 +2555,13 @@ export function createVoxelRig(
       pelvis.position.y -= inertia.crouch;
       // IK 关闭时把下沉量补偿回下盘，脚不穿地；IK 开启时由锚定层吸收（腿自然屈膝）。
       lower.position.y += inertia.crouch * (1 - clamp(ikW, 0, 1));
+      // v9s.52：驼背体型的**常驻屈膝**。和 crouch 同一套机制 —— 骨盆整体下沉，
+      // 足部 IK 把脚钉回地面，膝盖就被「压」出一个固定前屈角。
+      // 不用额外写膝角：IK 已经知道脚该在哪，写死角度反而会跟步态 / 受击打架。
+      if (kneeSink > 0) {
+        pelvis.position.y -= kneeSink;
+        lower.position.y += kneeSink * (1 - clamp(ikW, 0, 1));
+      }
 
       // 2) 战斗姿态覆盖（只在攻击 / 蓄力 / 停顿期间生效）
       //    v9s.29：进出战斗各有一段交叉淡入淡出 —— 先记下「不打这一击时的待机姿态」，
@@ -2638,6 +2718,15 @@ export function createVoxelRig(
       // 叠加在上面的惯性前倾之上 —— 「整个人抬眼看」，而不是头单独在脖子上折。
       headPivot.rotation.x = -clamp(c.headPitch ?? 0, -0.7, 0.7);
       upper.rotation.x += -clamp(c.bodyPitch ?? 0, -0.4, 0.4);
+      // v9s.52：驼背是**体态的基准**，不是动作 —— 叠加在所有动态层之后、脊柱拆分之前，
+      // 于是它会被 splitSpine 按腰 / 胸权重拆成两段弯折（看起来是「弓着」而不是「整根斜」）。
+      // 头再反向抬起来一点：驼背 18° 时脸会朝地，老人是「弓着腰但抬眼看人」。
+      if (hunch > 0) {
+        upper.rotation.x += hunch;
+        headPivot.rotation.x -= hunch * 0.55;
+        // 头前伸：驼背的人脖子会往前探，不是原地低头（下面归零区每帧复位）
+        headPivot.position.z = hunch * 0.10;
+      }
 
       // v9s.33：躯干总角在此刻已经写完（步态 / 受击 / 惯性 / 持械 / 朝向）。
       // 拆分必须早于腕部与剑身反解 —— 它们读的是「躯干实际朝到哪」。
@@ -2687,6 +2776,15 @@ export function createVoxelRig(
 
       // 5) v9s.33：平衡读数放在最后 —— 质点位置要读 IK 之后的真实脚位 / 手位。
       updateBalance(c, dt);
+
+      // 5.5) v9s.52：胡子摆动（仅带胡子造型）。驱动量是**本帧速度差分**，
+      //      与步态 / 攻击解耦：加速时整条胡子往后甩，站住后自动回正。
+      if (beardState && beardPivots.length === 3) {
+        const accel = (speed - lastBeardSpeed) / Math.max(dt, 1e-4);
+        const ang = solveBeard(beardState, dt, clamp(accel * 0.3, -9, 9));
+        for (let i = 0; i < 3; i++) beardPivots[i].rotation.x = ang[i];
+      }
+      lastBeardSpeed = speed;
 
       // 6) v9s.34：脊柱拆分一致性守卫。
       //    splitSpine() 之后任何一层再把 `upper` 当总角写（少 42%）都会被这里抓到：
