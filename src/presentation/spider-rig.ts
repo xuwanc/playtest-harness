@@ -539,11 +539,24 @@ export function createSpiderRig(
      * 标准取舍，8 条腿同时在动，注意力在整体节奏上，看不出打滑。
      */
     const CAP_HZ = 6.4;
-    const gaitSpeed = Math.min(effSpeed, CAP_HZ * strideUsed);
+    /**
+     * 推进量按**帧**夹住，不按秒。原因是 `dt` 上面已被截断到 1/20：
+     * 8 fps 的真实帧间隔是 0.125s，若照「每帧推进 0.125s 的位移对应相位」走，
+     * 一帧就是 0.52 个周期 —— 摆动相（0.45 周期）连一帧都占不到，脚在两帧之间
+     * 瞬移半米，IK 目标点直接跳出腿长（线上实测 reach 1.48 / 腿长 0.93）。
+     * 所以取两个上限的较小者：
+     *   - `CAP_HZ × dt`：常规步频上限（60 fps 下 0.107，等效 6.4 Hz）
+     *   - `(1 − duty) / 1.5`：摆动相至少 1.5 帧（0.30）
+     * 低帧率下被后者夹住，欠下的位移由 `slideStep` 让支撑脚滑着补 ——
+     * 8 fps 本来就看不清，打滑比抽腿好。
+     */
+    const maxAdvance = Math.min(CAP_HZ * dt, (1 - cfg.duty) / 1.5);
+    const advanceWant = effSpeed * dt;
+    const advanceUsed = Math.min(advanceWant, maxAdvance * strideUsed);
     if (effSpeed > 0.02) {
-      phase = (phase + (gaitSpeed / Math.max(strideUsed, 0.15)) * dt) % 1;
+      phase = (phase + advanceUsed / Math.max(strideUsed, 0.15)) % 1;
     }
-    const slideStep = Math.max(0, effSpeed - gaitSpeed) * dt;
+    const slideStep = advanceWant - advanceUsed;
 
     // ---- 2) 惯性：加速度 → 二阶弹簧 ----
     const axRaw = (c.velocity.x - prevVx) / dt;
@@ -653,7 +666,8 @@ export function createSpiderRig(
 
     stats = {
       maxReach, clamped: clampedCount, phase,
-      strideUsed, gaitSpeed, effSpeed, slide: slideStep / Math.max(dt, 1e-6), dt,
+      strideUsed, gaitSpeed: advanceUsed / Math.max(dt, 1e-6), effSpeed,
+      slide: slideStep / Math.max(dt, 1e-6), dt,
       pitch: springs.pitch.x, roll: springs.roll.x,
       leanZ: springs.lean.x, abdomen: springs.abdom.x,
       meshes, triangles,

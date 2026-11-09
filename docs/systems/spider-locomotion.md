@@ -148,9 +148,25 @@ const moved = Math.hypot(c.position.x - lastPX, c.position.z - lastPZ);
 const planarSpeed = moved / dt;      // 不是 hypot(velocity.x, velocity.z)
 ```
 
-这样无论多少 fps，相位与「身体走了多远」严格同源；超出步频上限的部分照旧转成脚滑。
+这样无论多少 fps，相位与「身体走了多远」严格同源。
 同一个修法顺带给「传送」加了保护：单帧位移 > 0.8 m 判定为传送（工位跳转 / 复位 / 调试），
 本帧不推进相位、脚由站定分支 lerp 回静止落点 —— 否则传送会把相位在一帧里跳几十个周期。
+
+但**光换数据源不够**：`dt` 截断之后，`速度 × dt` 本身就偏小，推进量还是不足。
+所以推进量要按**帧**夹：
+
+```ts
+const maxAdvance = Math.min(CAP_HZ * dt, (1 - cfg.duty) / 1.5);  // 摆动相至少 1.5 帧
+const advanceUsed = Math.min(effSpeed * dt, maxAdvance * strideUsed);
+```
+
+60 fps 下第一项生效（0.107 周期/帧，等效 6.4 Hz），行为与以前完全一致；
+低帧率下第二项生效（0.30 周期/帧），欠下的位移由 `slideStep` 让支撑脚滑着补。
+
+> **低帧率的硬边界**：8 fps 时 2.6 m/s 每帧走 0.33 m，而步幅只有 0.62 m —— 一帧就吃掉
+> 半个周期。再怎么夹都做不到「摆动相 ≥ 2 帧」。这类设备上 `reach` 会到 1.0~1.4
+> （腿被伸到接近极限），但不会崩：`solveLeg` 的 clamp 保证腿永远不超出腿长。
+> 60 fps 下 `reach ≤ 0.91`、`clamp = 0`，单测锁的就是这个。
 
 ## 5. 参数表
 
