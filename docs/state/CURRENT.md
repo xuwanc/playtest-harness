@@ -1,19 +1,19 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-09 03:40。
+> 最后更新：2026-11-09 12:05。
 
 ## 一句话
 
-v0.9.61 已发布：陪练在对峙距离上改成**走走停停**（时间门控踱步 + 连续径向纠偏），
-不再原地碎步绕圈；截图统一收进 `shots/` 且整个目录不入库。
+v0.9.62 已发布：连击的下盘改成**一段 = 迈一步**（相位单向推进、段间接续），
+连着打几刀会左右换腿，换段也不再「脚被拽回去」（腿角单帧跳变 0.82 → 0.003 rad）。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.61` |
-| 线上徽标 | `v0.9.61`（构建时间随发布变化） |
+| `package.json` 版本 | `0.9.62` |
+| 线上徽标 | `v0.9.62`（构建时间随发布变化） |
 | 发布方式 | `npm run build` → `node /root/.codebuddy/skills/sites/scripts/publish.js --dir dist --language static`（覆盖更新，不换链接） |
 | 线上链接 | 通过项目内部渠道获取（仓库不存凭据） |
 
@@ -22,20 +22,20 @@ v0.9.61 已发布：陪练在对峙距离上改成**走走停停**（时间门�
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 90 文件 / 893 例全绿 |
+| `npx vitest run` | 91 文件 / 899 例全绿 |
 | `npm run verify:portable` | PASS（Core 25 文件边界未破） |
-| `npm run smoke` | 19/19 PASS |
-| `npm run docs:check` | PASS |
+| `npm run smoke` | 21/21 PASS |
+| `npm run docs:check` | PASS（50 份文档，单份 ≤300 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 
 ## 正在做
 
-- 无。v9s.40 已完成（`docs/journal/2026-11-09-01.md`）。
-- **截图策略变了**：所有截图进 `shots/<批次>/`，整个 `shots/` 在 `.gitignore` 里；
-  41 张历史 `preview-*.png` 已 `git rm --cached`。要看图请在本机跑 `tools/*-shot.py`。
-- 陪练骨架多了 `__harness.dummyRigDebug(id)`（腿角 / stopT / gaitSpeed），
-  与玩家的 `gaitDebug()` 同构。
+- 无。v9s.41 已完成（`docs/journal/2026-11-09-02.md`）。
+- 攻击跨步的新契约写在 [`../systems/animation.md`](../systems/animation.md) §1.4；
+  验收接口 `__harness.gaitDebug()`（腿角）+ `attackWeights().strideBase / stepIndex`（段起始相位）。
+- 风险历史（v9s.37 及更早）已归档到 [`../risk-history.md`](../risk-history.md)，
+  `risk-review.md` 只留当前风险。
 
 ## 下一步（按投入产出排序）
 
@@ -57,4 +57,5 @@ v0.9.61 已发布：陪练在对峙距离上改成**走走停停**（时间门�
 - `FX_ORDER` 无强制入口，裸数字可绕过；
 - `spar` 站位带在窄地形顶墙（v9s.40 的连续径向缓解了「抽搐」，但空踩风险还在）；
 - 连击让单轮伤害事件 ×3，混战占空比要按「轮」而不是「刀」评估；
+- 收势淡出会把相位「扫回」真实步态（最多 π；静止收招看不出来，边走边收招 0.28 rad/帧）；
 - `groundHeightAt` 只按中心点取高。

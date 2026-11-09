@@ -85,6 +85,9 @@ export type VoxelRig = {
     driveSpeed: number;
     /** 本帧喂给 solveGait 的相位 */
     stridePhase: number;
+    /** v9s.41：本段跨步的起始相位（连段时接上一段停下的相位）/ 单调步序（奇偶决定哪条腿领先） */
+    strideBase: number;
+    stepIndex: number;
   };
   /** v8f：本帧分层受击姿态的诊断读数（不进 Core / 快照）。 */
   hurt(): HurtPose;
@@ -622,8 +625,21 @@ export function createVoxelRig(
   let chestYaw = 0;
 
   // ---- v9p：停步惯性 / 攻击相位基准（全部纯表现，不进 Core / 快照）----
-  /** 进入攻击那一帧锁定的 Core gaitPhase，避免 lunge 位移造成双重相位推进 */
+  /** 本段攻击跨步的起始相位（v9s.41：连段时接上一段停下的相位，不再每段重置） */
   let attackPhaseBase = 0;
+  /** 上一帧实际输出的攻击相位：换段 / 换次攻击时用它接续，保证腿不跳 */
+  let attackPhasePrev = 0;
+  /** 是否已经有过一次攻击（第一刀没有「上一段」可接，对齐真实步态相位） */
+  let attackPhaseSeen = false;
+  /** 单调步序：每次起手 / 每段连击 +1。奇偶决定这一刀哪条腿领先。
+   *  不能用 comboIndex —— 3 连击后它回到 1，第 3 段与下一轮第 1 段同奇偶。 */
+  let attackStepIndex = 0;
+  /** 已处理的 Core attackId，用于识别「新的一段」（连击取消窗口提前接续也算新段） */
+  let lastAttackId = -1;
+  /** v9s.41：跨步偏移量的平滑值（前 / 侧 / 下沉）。段间靠它连续，段内包络不变。 */
+  let stepZ = 0;
+  let stepX = 0;
+  let stepDip = 0;
   let wasAttacking = false;
   /** 本帧停步惯性脉冲：前脚额外前伸量 / 身体前移量 / 骨盆下沉量（诊断用） */
   let lastStopStep = 0;
@@ -1384,14 +1400,18 @@ export function createVoxelRig(
     lastShoulder = { lx, ly, lz, rx, ry, rz };
   }
 
-  /** 攻击跨步：每段攻击在挥出时向前跨一步，连击左右腿交替（combo 段奇偶决定方向），
+  /** 攻击跨步：每段攻击在挥出时向前跨一步，连击左右腿交替（单调步序的奇偶决定方向），
    * 同时重心下沉，让「每一次前移动画都表现出一个跨步」，且连击节奏连贯而非原地比划。 */
-  function applyStep(combat: CombatState): void {
-    if (combat.phase === 'idle' || combat.charging) return;
+  function applyStep(combat: CombatState, stepDir: number, dt: number): void {
+    if (combat.phase === 'idle' || combat.charging) {
+      stepZ = 0; stepX = 0; stepDip = 0;
+      return;
+    }
     const p = combat.attackProgress;
     const swing = swingCurve(p);
     const forth = Math.max(0, swing);
-    const stepDir = combat.comboIndex % 2 === 0 ? 1 : -1; // 偶数段向右跨、奇数段向左跨
+    // v9s.41：方向由 attackStepIndex 的奇偶给（每段 +1），不再用 comboIndex ——
+    // 后者 3 连击后会回到 1，第 3 段与下一轮第 1 段同向跨步，看着像「同一个方向连跨两次」。
     // v8g：幅度外置 + 收敛（旧版硬编码 0.17 / 0.14 / 0.05 在重击时推得过远）。
     // 大剑额外乘 heavyScale：双手大抡配小跨步，脚由 IK 钉地、身体只小幅前移，
     // 不会再出现「身体离开腿」。数值缺省时回落到旧值，兼容外部构造的配置对象。
@@ -1401,9 +1421,17 @@ export function createVoxelRig(
     const dip = Number.isFinite(cfg.stepDipReach) ? cfg.stepDipReach : 0.05;
     const heavy = combat.weapon === 'greatsword'
       ? clamp(Number.isFinite(cfg.heavyScale) ? cfg.heavyScale : 1, 0, 1) : 1;
-    pelvis.position.z += reach * forth * heavy;                    // 向前跨步（+Z = 前）
-    pelvis.position.x += stepDir * side * forth * heavy;           // 左右交替跨步
-    pelvis.position.y -= dip * Math.sin(Math.PI * p) * heavy;      // 重心下沉
+    // v9s.41：段间连续。连击在 recovery 中途接续时 progress 归零，`swingCurve` 从
+    // 0.6 直接掉到 0（|swing|≤1 的蓄势段）—— 骨盆一帧内退回 8.7cm、下沉 4cm、
+    // 侧跨方向直接翻号，读起来是「人被打回原地重新起步」。
+    // 段内包络不动，只把三个偏移量做指数趋近（τ≈85ms），换段变成 0.2 秒的体重转移。
+    const k = 1 - Math.exp(-12 * Math.max(0, dt));
+    stepZ += (reach * forth * heavy - stepZ) * k;
+    stepX += (stepDir * side * forth * heavy - stepX) * k;
+    stepDip += (dip * Math.sin(Math.PI * p) * heavy - stepDip) * k;
+    pelvis.position.z += stepZ;                                    // 向前跨步（+Z = 前）
+    pelvis.position.x += stepX;                                    // 左右交替跨步
+    pelvis.position.y -= stepDip;                                  // 重心下沉
   }
 
   // v8d：攻击姿态对腿的写入不再零散塞在各武器分支里（旧版只有大剑 / 三连击第 3 段
@@ -1763,7 +1791,7 @@ export function createVoxelRig(
     }
 
     // 各武器统一的跨步覆盖（在武器姿态之上再叠加前向 / 左右步幅）
-    applyStep(combat);
+    applyStep(combat, attackStepIndex % 2 === 0 ? 1 : -1, dt);
   }
 
   /**
@@ -2048,22 +2076,38 @@ export function createVoxelRig(
         localRight: gaitVX * rightX + gaitVZ * rightZ,
         stride: c.stride,
       };
-      // v9p：相位基准只在「刚进入攻击」那一帧锁定，攻击主体（含连击段切换、
-      // 淡出期）始终保持不变 —— 若退出时把它改成实时 c.gaitPhase，基准本身会
-      // 瞬跳（起手 0 → 结束 2.9 rad），腿就跟着跳一下。相位差改由 attackGaitDrive
-      // 内部的最短弧插值吸收，基准无需再对齐。
-      if (attacking && !wasAttacking) attackPhaseBase = c.gaitPhase;
+      // v9s.41：每段攻击 = 迈一步，腿要左右交替。
+      // 旧版只在「刚进入攻击」那一帧锁相位、连段沿用同一基准，于是每段都从同一姿态
+      // 摆出去再摆回来 —— 连段时第二刀与第一刀的腿完全重合（「没有换腿跨步」）。
+      // 现在：
+      //   · 每识别到一个新段（Core attackId 变了）就把步序 +1（决定哪条腿领先）；
+      //   · 起点相位接「上一帧实际输出的相位」→ 段间零跳变（哪怕在 recovery 中途取消）；
+      //   · 只有全新一次攻击、且玩家在移动时，才对真实 gaitPhase —— 否则接着上一刀的
+      //     收尾相位走，站着连点也能交替（站着不动时 Core 的 gaitPhase 是冻住的，
+      //     用它当基准等于永远同一条腿）。
+      if (attacking && combat.attackId !== lastAttackId) {
+        const freshAttack = !wasAttacking;
+        lastAttackId = combat.attackId;
+        attackStepIndex += 1;
+        // 走动中起手 / 第一次起手 → 对齐真实步态相位；站着连点 → 接上一刀的收尾相位
+        const alignReal = freshAttack && (!attackPhaseSeen || realDrive.speed > 0.05);
+        attackPhaseBase = alignReal ? realDrive.phase : attackPhasePrev;
+        attackPhaseSeen = true;
+      }
       wasAttacking = attacking;
       // v9p：淡出期（attacking=false 但 attackBlend>0）也继续走等效驱动，让相位 /
       // 摆幅按 blend 平滑回落到真实步态；旧版在收势那一帧直接切回 realDrive
       // （speed=0 → idle），步幅放大后这个单帧弹回会非常明显。
       const drive = attackBlend > 0
         ? attackGaitDrive(
-          realDrive, combat.attackProgress, combat.comboIndex, attackBlend,
+          realDrive, combat.attackProgress, attackStepIndex, attackBlend,
           animCfg.stride, attackPhaseBase,
         )
         : realDrive;
       lastDrive = drive;
+      // 只在攻击进行中记录「本段实际相位」，淡出期不记（那时 drive.phase 正在往
+      // real.phase 上靠，记进去会把下一段的起点拽回去）。
+      if (attacking) attackPhasePrev = drive.phase;
 
       // ---- v9n 停步收相 ----
       // Core 的 gaitPhase 只在有位移时推进；松手后位移趋零 → 相位冻结，而 solveGait
@@ -2431,7 +2475,7 @@ export function createVoxelRig(
       //  由 attackProgress 派生、连击左右脚交替领先，两端自动归零不残留；
       //  只写腿与骨盆（下盘），上半身跨步仍由 applyStep 负责，避免重心重复下沉。
       if (attackLegWeight > 0 && c.grounded) {
-        const stride = attackStridePose(combat.attackProgress, combat.comboIndex, animCfg.stride);
+        const stride = attackStridePose(combat.attackProgress, attackStepIndex, animCfg.stride);
         const s = attackLegWeight;
         legL.root.rotation.x += stride.legL.pitchX * s;
         legR.root.rotation.x += stride.legR.pitchX * s;
@@ -2651,12 +2695,16 @@ export function createVoxelRig(
     },
     attackWeights(): {
       gaitScale: number; attackLegWeight: number; driveSpeed: number; stridePhase: number;
+      /** v9s.41：本段跨步的起始相位 / 单调步序（验收「连段换腿」用） */
+      strideBase: number; stepIndex: number;
     } {
       return {
         gaitScale: lastGaitScale,
         attackLegWeight,
         driveSpeed: lastDrive.speed,
         stridePhase: lastDrive.phase,
+        strideBase: attackPhaseBase,
+        stepIndex: attackStepIndex,
       };
     },
     hipYaw(): number {

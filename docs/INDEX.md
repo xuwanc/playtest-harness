@@ -27,6 +27,8 @@
 | 连击接不上第二段 | 同上 + `desiredDirection` | `COMBO_CHASE`、`comboGap`、`hits.reach` | 同上「连击」四条规则 | `npm run smoke`「陪练一轮打出多段连击」 |
 | 陪练「保持距离」时疯狂碎步 / 磨脚 | `core/dummies.ts` | `strafeGate`、`SPAR_STRAFE`、`RADIAL_GAIN` | [systems/dummies-fighters.md](systems/dummies-fighters.md)「对峙时走走停停」 | `tests/v9s40-standoff-gait.test.ts`、`npm run smoke`「对峙时走走停停」 |
 | 陪练挨打时腿抽风（步频翻倍） | `presentation/fighter-rig.ts` | `cs.velocity` 不叠 knock | 同上「踩过的坑」8 | `__harness.dummyRigDebug(id).gaitSpeed` |
+| 连击每一刀都迈同一条腿 / 换段时脚被拽回去 | `presentation/program-anim.ts`、`voxel-rig.ts` | `attackGaitDrive`、`attackPhaseBase`、`attackStepIndex` | [systems/animation.md](systems/animation.md) §1.4 | `tests/v9s41-attack-step-legs.test.ts`、`npm run smoke`「连击跨步左右换腿」 |
+| 连击换段时身体往回弹一下 | `voxel-rig.ts` | `applyStep`、`stepZ/stepX/stepDip` | 同上 §1.4 末段 | `tests/v9s41-attack-step-legs.test.ts`「换段不推人」 |
 | 截图放哪 / 能不能入库 | `shots/`（`.gitignore` 已挡） | — | [assets/conventions.md](assets/conventions.md) | `git status` 里不该出现 png |
 | 刀光 / 斩击弧不出现 | `presentation/three-scene.ts` | `weapon-trail.ts`、`FX_ORDER.trail / slash` | [systems/presentation-fx.md](systems/presentation-fx.md) | `__harness.fxDebug()` |
 | 调试面板某项不知道去哪了 | `presentation/debug-panel.ts` | 7 个 `top()` 一级分类 | 本页 §3.4 | 截图 `shots/v9s38/07,08` |
@@ -76,7 +78,7 @@
 | `config/game.json` | 所有可调数值（`core.*` 逻辑 / `view.*` 表现 / `scene.*` 关卡） |
 | `src/app.ts` | 组装层 + `window.__harness`（所有 `*Debug()` 验收接口在这里暴露） |
 | `tests/` | vitest；`tests/helpers.ts` 的 `FIXTURE_CORE_PATCH` 是**冻结夹具** |
-| `tools/smoke.py` | 线上自检（16 项）；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样 |
+| `tools/smoke.py` | 线上自检（21 项）；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样 |
 
 ### 3.4 调试面板分组
 
@@ -145,7 +147,8 @@ telemetry()   最近 20 秒输入 / 位移 / 事件诊断
 | [`systems/known-limits.md`](systems/known-limits.md) | 已知限制（现状，不是待办） |
 | [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 89 步手动验收 |
 | [`state/CURRENT.md`](state/CURRENT.md) | 当前状态 + 下一步（覆盖写） |
-| [`risk-review.md`](risk-review.md) | 活跃风险 + 历史关闭记录 |
+| [`risk-review.md`](risk-review.md) | **当前**活跃风险 + 处置优先级 |
+| [`risk-history.md`](risk-history.md) | 已关闭风险的归档（按版本） |
 | [`assets/conventions.md`](assets/conventions.md) | 路径与命名规范 |
 | [`decisions/ADR-001`](decisions/ADR-001-docs-layout.md) | 文档分层：README 只当地图 |
 | [`decisions/ADR-002`](decisions/ADR-002-core-boundary.md) | Core 与表现层单向依赖 |
@@ -154,4 +157,4 @@ telemetry()   最近 20 秒输入 / 位移 / 事件诊断
 | [`decisions/ADR-005`](decisions/ADR-005-ground-height.md) | 贴地高度查询放 Core |
 | [`decisions/ADR-006`](decisions/ADR-006-fixed-step-events.md) | 固定步长 + 显式事件队列 |
 | [`decisions/ADR-007`](decisions/ADR-007-knockback-default.md) | 默认配置反映真实手感 |
-| [`journal/`](journal/) | 按日期的迭代记录（21 份，2026-11-05 起；`-00` 是功能总表，`-06` 是 v9s.38，`-07` 是文档重构，`-08` 是大文件职责梳理，`-09` 是陪练连击） |
+| [`journal/`](journal/) | 按日期的迭代记录（22 份，2026-11-05 起；`-00` 是功能总表，`-06` 是 v9s.38，`-07` 是文档重构，`-08` 是大文件职责梳理，`-09` 是陪练连击，`-10` 是连击换腿） |

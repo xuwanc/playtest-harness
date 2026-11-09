@@ -319,6 +319,76 @@ def main() -> int:
                 check("对峙时走走停停（移动时间 ≤ 60%，不再一直磨脚）", drift["moveRatio"] <= 0.60, str(drift))
                 check("踱步是大步（移动时均速 ≥ 1.2 m/s）", drift["avgMoveSpeed"] >= 1.2, str(drift))
 
+                # ---- v9s.41：连击跨步换腿（第 1/2/3 段跨出去的是不同的腿）----
+                # 旧行为：攻击相位是「0→π→0 往返」，每段都从同一姿态摆出去再摆回来，
+                # 连段时第二刀与第一刀的腿完全重合；且在 recovery 中途接续那一帧，
+                # 相位被硬拽回基准，实测腿角单帧跳 0.82 rad（脚像被拽回去）。
+                # 现在相位「每段单向推进 π = 迈一步」，起点接上一段停下的相位。
+                page.evaluate(
+                    "() => {"
+                    "  const h = window.__harness, w = h.world, c = w.character;"
+                    "  for (const d of w.dummies) { d.mode = 'idle'; d.position.x = 60; d.position.z = 60; }"
+                    "  w.combat.phase = 'idle'; w.combat.phaseTimer = 0; w.combat.comboIndex = 0;"
+                    "  w.combat.comboWindow = 0; w.combat.queued = false;"
+                    "  w.combat.weapon = 'sword-shield';"
+                    # 记「每段起手时的跨步相位」：一段 = 迈一步（+π），下一段从上一段停下的相位
+                    # 接着走 —— 所以相邻段的起始相位差应该 ≈π；旧版每段都回到同一基准（差 0）。
+                    "  window.__legProbe = { base: {}, boundary: 0, prevSeg: 0, prevL: null, frames: 0, t0: w.time };"
+                    "  const tick = () => {"
+                    "    const g = h.gaitDebug();"
+                    "    const k = w.combat;"
+                    "    const P = window.__legProbe;"
+                    "    if (k.phase !== 'idle') {"
+                    # 段边界那一帧：换腿如果靠「硬切」，这里会跳出一大截
+                    "      if (P.prevSeg !== 0 && k.comboIndex !== P.prevSeg && P.prevL !== null) {"
+                    "        P.boundary = Math.max(P.boundary, Math.abs(g.legLPitch - P.prevL));"
+                    "      }"
+                    "      if (k.comboIndex !== P.prevSeg) {"
+                    "        P.base[k.comboIndex] = h.view.diagnostics().attackWeights.strideBase;"
+                    "      }"
+                    "      P.prevSeg = k.comboIndex; P.prevL = g.legLPitch; P.frames += 1;"
+                    "    }"
+                    "    P.raf = requestAnimationFrame(tick);"
+                    "  };"
+                    "  tick();"
+                    "  const j = (type) => window.dispatchEvent(new KeyboardEvent(type, { key: 'j', code: 'KeyJ', bubbles: true }));"
+                    "  window.__legMash = setInterval(() => { j('keydown'); j('keyup'); }, 80);"
+                    "}"
+                )
+                page.wait_for_function(
+                    "() => Object.keys(window.__legProbe.base).length >= 3"
+                    " && window.__harness.world.time > window.__legProbe.t0 + 2.0",
+                    timeout=90000,
+                )
+                legs = page.evaluate(
+                    "() => {"
+                    "  clearInterval(window.__legMash);"
+                    "  cancelAnimationFrame(window.__legProbe.raf);"
+                    "  const B = window.__legProbe.base;"
+                    "  const wrap = (a) => { const T = Math.PI * 2; return ((a + Math.PI) % T + T) % T - Math.PI; };"
+                    "  return { bases: [1, 2, 3].map((i) => (B[i] === undefined ? null : +B[i].toFixed(2))),"
+                    "    d12: B[1] !== undefined && B[2] !== undefined ? +wrap(B[2] - B[1]).toFixed(2) : null,"
+                    "    d23: B[2] !== undefined && B[3] !== undefined ? +wrap(B[3] - B[2]).toFixed(2) : null,"
+                    "    boundary: +window.__legProbe.boundary.toFixed(3),"
+                    "    frames: window.__legProbe.frames };"
+                    "}"
+                )
+                lo, hi = math.pi * 0.5, math.pi * 1.2
+                steps_ok = all(
+                    v is not None and lo < abs(v) < hi for v in (legs["d12"], legs["d23"])
+                )
+                check(
+                    "连击跨步左右换腿（相邻段起始相位差 ≈π = 迈一步）",
+                    steps_ok,
+                    f"bases={legs['bases']} d12={legs['d12']} d23={legs['d23']}",
+                )
+                check(
+                    "换段不拽腿（段边界单帧腿角跳变 ≤ 0.12 rad）",
+                    legs["boundary"] <= 0.12,
+                    f"boundary={legs['boundary']} rad",
+                )
+                page.evaluate("() => { window.__harness.world.combat.phase = 'idle'; }")
+
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
                       f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}",
                       " 命中 progress", f"{hit_prog:.3f}" if hit_prog is not None else "-")

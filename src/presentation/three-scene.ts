@@ -100,6 +100,8 @@ export type SceneView = {
     /** v8d：两个下半身权重与本帧步态等效驱动，供验收「权重是否真的生效」 */
     attackWeights: {
       gaitScale: number; attackLegWeight: number; driveSpeed: number; stridePhase: number;
+      /** v9s.41：本段跨步的起始相位 / 单调步序 */
+      strideBase: number; stepIndex: number;
     };
     /** v8c：跳跃 / 落地蓄力缓冲脉冲读数（纯表现，不进 Core） */
     landing: {
@@ -1181,6 +1183,7 @@ export function createSceneView(
       attackBlend: number;
       attackWeights: {
         gaitScale: number; attackLegWeight: number; driveSpeed: number; stridePhase: number;
+        strideBase: number; stepIndex: number;
       };
       landing: {
         pulse: number; remaining: number; kind: 'none' | 'land' | 'jump'; impactVy: number;
