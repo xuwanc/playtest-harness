@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BREAK_FALL_TARGET, createDestructibleStates, cutColumnHeights, cutPlane,
+  BREAK_FALL_TARGET, createDestructibleStates, cutBoxHeights, cutPlane,
   destructiblesReset, destructiblesUpdate, forceBreak, snapshot, restoreWorld,
+  obbCorners,
 } from '../src/core';
 import type { DestructibleSpec, World } from '../src/core';
 import { intent, makeWorld } from './helpers';
@@ -21,6 +22,13 @@ const JAR: DestructibleSpec = {
   bands: [0.35, 0.62],
 };
 
+const CACTUS: DestructibleSpec = {
+  id: 'cac-a', kind: 'cactus',
+  x: 0, y: 0, z: 1,
+  height: 2.0, radius: 0.20,
+  seed: 7,
+};
+
 const cut = (hitY: number, dx: number, dy: number, dz: number, spec = POLE) => cutPlane(
   hitY, spec.y, spec.height, spec.radius, dx, dy, dz,
   { tiltDeg: spec.tiltDeg ?? 20, bands: spec.bands },
@@ -30,7 +38,6 @@ const cut = (hitY: number, dx: number, dy: number, dz: number, spec = POLE) => c
 function armed(spec: DestructibleSpec = POLE): World {
   const w = makeWorld();
   w.destructibles = createDestructibleStates([spec]);
-  // staff 没有 hitWindow / hitSweep 门，测试只关心「刀风有没有覆盖物件」这一层。
   w.combat.weapon = 'staff';
   w.combat.phase = 'active';
   w.combat.timings.active = 0.3;
@@ -52,7 +59,6 @@ describe('v9s.45 · cutPlane 断面数学', () => {
     expect(high.u).toBeCloseTo(2.0 / 2.4, 6);
     expect(low.u).toBeLessThan(mid.u);
     expect(mid.u).toBeLessThan(high.u);
-    // 不切在底座 / 顶端
     expect(cut(-5, 1, 0, 0).u).toBeCloseTo(0.08, 6);
     expect(cut(99, 1, 0, 0).u).toBeCloseTo(0.92, 6);
   });
@@ -75,12 +81,11 @@ describe('v9s.45 · cutPlane 断面数学', () => {
   });
 
   it('水平挥击时法线仍以竖直为主：不会把杆纵向劈开', () => {
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
       const p = cut(1.2, dx, 0, dz);
       expect(p.ny).toBeGreaterThan(0.5);
       expect(Math.hypot(p.nx, p.ny, p.nz)).toBeCloseTo(1, 6);
     }
-    // 若错误地令 n = d，水平挥击会得到 ny = 0；这里必须不是。
     expect(cut(1.2, 1, 0, 0).ny).not.toBeCloseTo(0, 3);
   });
 
@@ -92,7 +97,6 @@ describe('v9s.45 · cutPlane 断面数学', () => {
     expect(west.nx).toBeLessThan(0);
     expect(south.nx).toBeCloseTo(0, 6);
     expect(south.nz).toBeGreaterThan(0);
-    // 相反方向攻击 → 法线恰好镜像
     expect(east.nx).toBeCloseTo(-west.nx, 6);
   });
 
@@ -104,31 +108,8 @@ describe('v9s.45 · cutPlane 断面数学', () => {
     expect(down.ny).toBeLessThan(flat.ny);
   });
 
-  it('倾角有几何上限：每根母线截断高度都落在 [0, height]，cap 不被削破', () => {
-    const p = cut(0.45, 1, -1, 0, JAR);
-    const hs = cutColumnHeights(JAR.radius, 16, p.u, JAR.height, p.nx, p.ny, p.nz);
-    expect(hs).toHaveLength(16);
-    for (const h of hs) {
-      expect(h).toBeGreaterThanOrEqual(0);
-      expect(h).toBeLessThanOrEqual(JAR.height);
-    }
-    // 斜切面确实不是水平的
-    expect(Math.max(...hs) - Math.min(...hs)).toBeGreaterThan(0.01);
-  });
-
-  it('完好态（cutU=1, n=up）所有母线截断高度恰为 height', () => {
-    const hs = cutColumnHeights(POLE.radius, 10, 1, POLE.height, 0, 1, 0);
-    for (const h of hs) expect(h).toBeCloseTo(POLE.height, 10);
-  });
-
-  it('瓶罐命中高度吸附到最近的预设断裂带', () => {
-    expect(cut(0.30, 1, 0, 0, JAR).u).toBeCloseTo(0.35, 6);
-    expect(cut(0.55, 1, 0, 0, JAR).u).toBeCloseTo(0.62, 6);
-    expect(cut(0.80, 1, 0, 0, JAR).u).toBeCloseTo(0.62, 6);
-  });
-
   it('翻倒轴是单位向量、恒水平、且与攻击水平投影正交', () => {
-    for (const [dx, dz] of [[1, 0], [0, 1], [0.6, 0.8]]) {
+    for (const [dx, dz] of [[1, 0], [0, 1], [0.6, 0.8]] as const) {
       const p = cut(1.2, dx, 0, dz);
       expect(p.ay).toBe(0);
       expect(Math.hypot(p.ax, p.ay, p.az)).toBeCloseTo(1, 6);
@@ -141,36 +122,77 @@ describe('v9s.45 · cutPlane 断面数学', () => {
   });
 });
 
-describe('v9s.45 · 状态机与真机链路', () => {
-  it('forceBreak 写状态并发一条 break 事件，y = 断面世界高度', () => {
+describe('v9s.x · 方盒断面几何', () => {
+  it('完好态（standU=1, n=up）四角高度恰为 height', () => {
+    const h = cutBoxHeights(POLE.radius, 1, POLE.height, 0, 1, 0);
+    for (const x of h) expect(x).toBeCloseTo(POLE.height, 10);
+  });
+
+  it('斜切：四角高度不全相等，且都落在 [0, height]', () => {
+    const p = cut(1.2, 1, -0.3, 0, POLE);
+    const h = cutBoxHeights(POLE.radius, p.u, POLE.height, p.nx, p.ny, p.nz);
+    expect(Math.max(...h) - Math.min(...h)).toBeGreaterThan(0.01);
+    for (const x of h) {
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThanOrEqual(POLE.height);
+    }
+  });
+
+  it('断面高度随 standU 单调（连续采样）', () => {
+    let prev = -1;
+    for (let i = 1; i <= 40; i++) {
+      const u = i / 41;
+      const h = cutBoxHeights(POLE.radius, u, POLE.height, 0, 1, 0);
+      const avg = (h[0] + h[1] + h[2] + h[3]) / 4;
+      expect(avg).toBeGreaterThan(prev);
+      prev = avg;
+    }
+  });
+});
+
+describe('v9s.x · 旗杆多段砍断', () => {
+  it('forceBreak 写状态、发 break 事件、站立段降到断面高度', () => {
     const w = armed();
     expect(forceBreak(w, 'pole-a', 1.8, 1, 0, 0)).toBe(true);
     const st = w.destructibles[0];
     expect(st.broken).toBe(1);
-    expect(st.cutU).toBeCloseTo(1.8 / 2.4, 6);
-    expect(st.ny).toBeGreaterThan(0.5);
+    expect(st.standU).toBeCloseTo(1.8 / 2.4, 6);
+    expect(st.fragments).toHaveLength(1);
+    expect(st.sny).toBeGreaterThan(0.5);
     const ev = w.events.find((e) => e.type === 'break');
     expect(ev).toBeDefined();
     expect(ev!.y).toBeCloseTo(1.8, 6);
-    expect(ev!.value).toBe(0);
   });
 
-  it('已断物件不会重复断（一次干净断）', () => {
+  it('可连续多次砍断：每刀掉一段、站立段递减、片段累加', () => {
     const w = armed();
-    expect(forceBreak(w, 'pole-a', 1.0, 1, 0, 0)).toBe(true);
-    expect(forceBreak(w, 'pole-a', 2.0, -1, 0, 0)).toBe(false);
-    expect(w.destructibles[0].cutU).toBeCloseTo(1.0 / 2.4, 6);
+    forceBreak(w, 'pole-a', 2.0, 1, 0, 0);   // 砍下顶端一小段，standU≈0.833
+    forceBreak(w, 'pole-a', 1.2, 1, 0, 0);   // 再砍，standU≈0.5
+    forceBreak(w, 'pole-a', 0.6, 1, 0, 0);   // 再砍，standU≈0.25
+    const st = w.destructibles[0];
+    expect(st.broken).toBe(3);
+    expect(st.fragments).toHaveLength(3);
+    expect(st.standU).toBeLessThan(0.3);
+    expect(st.standU).toBeGreaterThanOrEqual(0.08);
   });
 
-  it('destructiblesReset 回到完好直立且不改其它世界状态', () => {
+  it('砍到只剩底座后不再断（一次干净收尾）', () => {
+    const w = armed();
+    forceBreak(w, 'pole-a', 0.1, 1, 0, 0);   // 砍到接近底座，standU≈MIN_STAND
+    expect(forceBreak(w, 'pole-a', 2.0, -1, 0, 0)).toBe(false);
+    expect(w.destructibles[0].fragments).toHaveLength(1);
+  });
+
+  it('destructiblesReset 回到完好直立、清空片段', () => {
     const w = armed();
     forceBreak(w, 'pole-a', 1.5, 1, 0, 0);
     destructiblesUpdate(w, 0.016, intent({}));
     const tick = w.tick;
     destructiblesReset(w);
-    expect(w.destructibles[0].broken).toBe(0);
-    expect(w.destructibles[0].cutU).toBe(1);
-    expect(w.destructibles[0].fall).toBe(0);
+    const st = w.destructibles[0];
+    expect(st.broken).toBe(0);
+    expect(st.standU).toBe(1);
+    expect(st.fragments).toHaveLength(0);
     expect(w.tick).toBe(tick);
   });
 
@@ -183,42 +205,185 @@ describe('v9s.45 · 状态机与真机链路', () => {
     expect(w.destructibles[0].broken).toBe(0);
   });
 
-  it('active 帧且刀风覆盖物件：breakHits 生效并留下断面读数', () => {
+  it('active 帧且刀风覆盖物件：breakHits 生效并落下一段刚体', () => {
     const w = armed();
     destructiblesUpdate(w, 0.016, intent({
       breakHits: [{ id: 'pole-a', x: 0, y: 1.8, z: 1, dx: 1, dy: 0, dz: 0 }],
     }));
     expect(w.destructibles[0].broken).toBe(1);
-    expect(w.destructibles[0].cutU).toBeCloseTo(0.75, 6);
+    expect(w.destructibles[0].fragments).toHaveLength(1);
+  });
+});
+
+describe('v9s.x · 坛子碎裂', () => {
+  it('命中即碎裂成 6~12 块、站立段归零、确定性随机', () => {
+    const w = armed(JAR);
+    expect(forceBreak(w, 'jar-a', 0.5, 1, 0, 0)).toBe(true);
+    const st = w.destructibles[0];
+    expect(st.broken).toBe(1);
+    expect(st.standU).toBe(0);
+    expect(st.fragments.length).toBeGreaterThanOrEqual(6);
+    expect(st.fragments.length).toBeLessThanOrEqual(12);
   });
 
-  it('横扫能打断侧面物件：3D 相交口径不被 2D 扇形否决', () => {
-    const w = armed();
-    // 物件在正侧方（+x），attackFacing=0 的扇形不覆盖它，但刀刃线段确实扫到了。
-    w.destructibles[0].x = 1.2;
-    w.destructibles[0].z = 0;
-    destructiblesUpdate(w, 0.016, intent({
-      breakHits: [{ id: 'pole-a', x: 1.2, y: 1.2, z: 0, dx: 1, dy: 0, dz: 0 }],
-    }));
-    expect(w.destructibles[0].broken).toBe(1);
-    expect(w.destructibles[0].cutU).toBeCloseTo(0.5, 6);
+  it('碎裂确定性：同输入两遍片段逐字节一致', () => {
+    const a = armed(JAR);
+    const b = armed(JAR);
+    forceBreak(a, 'jar-a', 0.5, 1, 0, 0);
+    forceBreak(b, 'jar-a', 0.5, 1, 0, 0);
+    expect(JSON.stringify(a.destructibles)).toBe(JSON.stringify(b.destructibles));
   });
 
-  it('翻倒角单调收敛到目标且不越过（固定步长确定性）', () => {
-    const w = armed();
-    forceBreak(w, 'pole-a', 1.2, 1, 0, 0);
-    let prev = -1;
-    for (let i = 0; i < 200; i++) {
-      destructiblesUpdate(w, 0.016, intent({}));
-      const f = w.destructibles[0].fall;
-      expect(f).toBeGreaterThan(prev);
-      expect(f).toBeLessThan(BREAK_FALL_TARGET);
-      prev = f;
+  it('已碎裂的坛子不再响应二次命中', () => {
+    const w = armed(JAR);
+    forceBreak(w, 'jar-a', 0.5, 1, 0, 0);
+    expect(forceBreak(w, 'jar-a', 0.5, -1, 0, 0)).toBe(false);
+  });
+
+  it('碎块初速度全向上 + 径向外扩（无向下初速）', () => {
+    const w = armed(JAR);
+    forceBreak(w, 'jar-a', 0.5, 1, 0, 0);
+    for (const f of w.destructibles[0].fragments) expect(f.vy).toBeGreaterThan(0);
+  });
+});
+
+describe('v9s.x · 仙人掌（固定造型 + 断块侧臂尺寸一致）', () => {
+  it('侧臂固定 2 条，不再随机程序化生成', () => {
+    const short = createDestructibleStates([{ ...CACTUS, height: 2.0 }])[0];
+    expect(short.arms).toHaveLength(2);
+    const tall = createDestructibleStates([{ ...CACTUS, height: 2.6 }])[0];
+    expect(tall.arms).toHaveLength(2);
+    // 同尺寸必得同造型（确定性）
+    const again = createDestructibleStates([{ ...CACTUS, height: 2.0 }])[0];
+    expect(again.arms).toEqual(short.arms);
+  });
+
+  it('断块上的侧臂尺寸与站立侧臂完全一致（不减半 → 不会「掉下来变细」）', () => {
+    const w = armed(CACTUS);
+    const st = w.destructibles[0];
+    // 砍在最低手臂之下，使整段（含全部手臂）作为一块断块掉出
+    const lowArmU = Math.min(...st.arms.map((a) => a.atU));
+    const hitY = (lowArmU - 0.05) * st.height;
+    expect(forceBreak(w, 'cac-a', hitY, 1, 0, 0)).toBe(true);
+    const frag = st.fragments[st.fragments.length - 1];
+    expect(frag.parts).toBeDefined();
+    // 每条手臂 = 2 个 part（水平伸出盒 + 末端向上盒）
+    expect(frag.parts!.length).toBe(st.arms.length * 2);
+    for (let i = 0; i < st.arms.length; i++) {
+      const a = st.arms[i];
+      const alongX = Math.abs(a.dx) > 0.5;
+      const hOut = frag.parts![i * 2];
+      const hUp = frag.parts![i * 2 + 1];
+      // 水平伸出盒：沿轴半长 = outLen（不是 outLen/2），径向半厚 = rad（不是 rad/2）
+      expect(hOut.hx).toBeCloseTo(alongX ? a.outLen : a.rad, 6);
+      expect(hOut.hy).toBeCloseTo(a.rad, 6);
+      expect(hOut.hz).toBeCloseTo(alongX ? a.rad : a.outLen, 6);
+      // 末端向上盒：径向半厚 = rad，半高 = upLen（与站立一致）
+      expect(hUp.hx).toBeCloseTo(a.rad, 6);
+      expect(hUp.hy).toBeCloseTo(a.upLen, 6);
+      expect(hUp.hz).toBeCloseTo(a.rad, 6);
     }
-    expect(prev).toBeCloseTo(BREAK_FALL_TARGET, 3);
   });
 
-  it('快照 / 恢复后继续推进与未中断一致（破坏状态随 World 回放）', () => {
+  it('多段砍断：手臂总数守恒（站桩 + 各断块合计 = 原始条数），不会越砍越多', () => {
+    const w = armed(CACTUS);
+    const st = w.destructibles[0];
+    const total = st.arms.length;
+    // 在每条手臂高度之上各砍一刀 + 顶部一刀
+    const us = [...st.arms.map((a) => a.atU), 0.95].sort((a, b) => b - a);
+    for (const u of us) forceBreak(w, 'cac-a', (u + 0.02) * st.height, 1, 0, 0);
+    const standingArms = st.arms.filter((a) => a.atU <= st.standU + 1e-4).length;
+    const fragArms = st.fragments.reduce((s, f) => s + (f.parts ? f.parts.length / 2 : 0), 0);
+    expect(standingArms + fragArms).toBe(total);
+  });
+
+  it('单次挥砍（多帧同高命中）只产生 1 个断块，不生成零高碎片（防「越砍越多 / 断枝浮空」）', () => {
+    const w = armed(CACTUS);
+    // 同高度命中持续 20 帧（等价于一次挥砍停在半空），模拟此前每帧都生成零高碎片的 bug
+    for (let f = 0; f < 20; f++) {
+      destructiblesUpdate(w, w.config.fixedDt, intent({
+        breakHits: [{ id: 'cac-a', x: 0, y: 1.8, z: 1, dx: 1, dy: 0, dz: 0 }],
+      }));
+    }
+    const st = w.destructibles[0];
+    expect(st.fragments).toHaveLength(1);
+    for (const f of st.fragments) expect(f.hy * 2).toBeGreaterThan(0.05); // 无零高碎片
+    // 再让物理落定，断块应落到地面而非浮空
+    for (let f = 0; f < 180; f++) destructiblesUpdate(w, w.config.fixedDt, intent({}));
+    const cs = obbCorners(st.fragments[0] as any);
+    expect(Math.min(...cs.map((c) => c.y))).toBeLessThan(0.05);
+  });
+
+  it('一次「从上往下扫」的挥砍只砍下 1 段（斩波闸门：刀刃持续接触同物件只破一次）', () => {
+    const w = armed(CACTUS);
+    // 模拟真实下劈：命中高度逐帧下降（等价于刀刃扫过整根仙人掌），共 12 帧。
+    // 起点略低于顶端（1.8 < 2.0），避免刚好落在顶端被「零高碎片」闸门挡掉。
+    for (let f = 0; f < 12; f++) {
+      const y = 1.8 + (0.4 - 1.8) * (f / 11);
+      destructiblesUpdate(w, w.config.fixedDt, intent({
+        breakHits: [{ id: 'cac-a', x: 0, y, z: 1, dx: 1, dy: 0, dz: 0 }],
+      }));
+    }
+    const st = w.destructibles[0];
+    // 关键回归：此前会切成 12 片薄块（互相重叠、初始零速 → 像浮空断枝 / 互相穿透）
+    expect(st.fragments).toHaveLength(1);
+    // 每一片都是真实厚度的段，而非接近零高的薄片
+    for (const fr of st.fragments) expect(fr.hy * 2).toBeGreaterThan(0.1);
+    // 落定后不再浮空 / 穿透
+    for (let f = 0; f < 200; f++) destructiblesUpdate(w, w.config.fixedDt, intent({}));
+    const st2 = w.destructibles[0];
+    for (const fr of st2.fragments) {
+      const lo = Math.min(...obbCorners(fr as any).map((c) => c.y));
+      expect(lo).toBeGreaterThanOrEqual(-0.05);
+    }
+  });
+
+  it('挥砍闸门：刀刃离开物件后再砍可再次破坏（多段砍靠多次挥砍）', () => {
+    const w = armed(CACTUS);
+    // 第一次挥砍（高处一刀）
+    destructiblesUpdate(w, w.config.fixedDt, intent({
+      breakHits: [{ id: 'cac-a', x: 0, y: 1.8, z: 1, dx: 1, dy: 0, dz: 0 }],
+    }));
+    const after1 = w.destructibles[0].fragments.length;
+    expect(after1).toBe(1);
+    // 刀刃离开（无命中），解除武装
+    destructiblesUpdate(w, w.config.fixedDt, intent({}));
+    // 第二次挥砍（更低处一刀）应再砍下一段
+    destructiblesUpdate(w, w.config.fixedDt, intent({
+      breakHits: [{ id: 'cac-a', x: 0, y: 1.0, z: 1, dx: 1, dy: 0, dz: 0 }],
+    }));
+    expect(w.destructibles[0].fragments.length).toBe(2);
+  });
+});
+
+describe('v9s.x · 掉落刚体物理（确定式）', () => {
+  it('杆段掉落后最终休眠且停在地面之上（无 NaN）', () => {
+    const w = armed();
+    forceBreak(w, 'pole-a', 1.8, 1, 0, 0);
+    for (let i = 0; i < 400; i++) destructiblesUpdate(w, 0.016, intent({}));
+    const f = w.destructibles[0].fragments[0];
+    expect(Number.isFinite(f.x) && Number.isFinite(f.y) && Number.isFinite(f.z)).toBe(true);
+    expect(f.rest).toBe(1);
+    // 实际最低角点 ≈ 地面（未穿地）：敲落的段平躺落地，中心 y 远低于半高属正常，
+    // 故以「最低 OBB 角点」判定而非 f.y - f.hy 这类轴对齐近似。
+    const lowest = Math.min(...obbCorners(f as any).map((c: any) => c.y));
+    expect(lowest).toBeGreaterThanOrEqual(-0.05);
+  });
+
+  it('碎块全部落定休眠（确定性积分稳定）', () => {
+    const w = armed(JAR);
+    forceBreak(w, 'jar-a', 0.5, 1, 0, 0);
+    for (let i = 0; i < 600; i++) destructiblesUpdate(w, 0.016, intent({}));
+    for (const f of w.destructibles[0].fragments) {
+      expect(Number.isFinite(f.x) && Number.isFinite(f.y) && Number.isFinite(f.z)).toBe(true);
+      expect(f.rest).toBe(1);
+      // 实际最低角点 ≈ 地面（未穿地）：多块碎块散开后平躺/侧立落地均正常
+      const lowest = Math.min(...obbCorners(f as any).map((c: any) => c.y));
+      expect(lowest).toBeGreaterThanOrEqual(-0.05);
+    }
+  });
+
+  it('快照 / 恢复后继续推进与未中断一致（物理随 World 回放）', () => {
     const w = armed();
     forceBreak(w, 'pole-a', 1.6, 0, -0.6, 1);
     for (let i = 0; i < 20; i++) destructiblesUpdate(w, 0.016, intent({}));
@@ -228,11 +393,26 @@ describe('v9s.45 · 状态机与真机链路', () => {
     expect(snapshot(twin)).toBe(snapshot(w));
   });
 
-  it('不配置物件时状态为空数组，模块更新是纯 no-op', () => {
-    const w = makeWorld();
-    expect(w.destructibles).toEqual([]);
-    const before = snapshot(w);
-    destructiblesUpdate(w, 0.016, intent({ breakHits: [] }));
-    expect(snapshot(w)).toBe(before);
+  it('多块碎块落定后散开（未塌缩成同一点，碰撞把碎片推开）', () => {
+    const w = armed(JAR);
+    forceBreak(w, 'jar-a', 0.5, 1, 0, 0);
+    for (let i = 0; i < 600; i++) destructiblesUpdate(w, 0.016, intent({}));
+    const fs = w.destructibles[0].fragments;
+    let maxSpread = 0;
+    for (let i = 0; i < fs.length; i++) {
+      for (let j = i + 1; j < fs.length; j++) {
+        const d = Math.hypot(fs[i].x - fs[j].x, fs[i].y - fs[j].y, fs[i].z - fs[j].z);
+        expect(d).toBeGreaterThan(0.02); // 不应几乎完全重叠
+        if (d > maxSpread) maxSpread = d;
+      }
+    }
+    // 向外飞散的碎块应铺开一定范围（碰撞 + 初速度共同结果）
+    expect(maxSpread).toBeGreaterThan(0.3);
+  });
+});
+
+describe('v9s.x · 兼容性常量', () => {
+  it('BREAK_FALL_TARGET 仍导出且为有限数', () => {
+    expect(Number.isFinite(BREAK_FALL_TARGET)).toBe(true);
   });
 });

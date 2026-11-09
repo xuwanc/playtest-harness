@@ -1,24 +1,33 @@
-# 可破坏物件：按命中位置斜切（v9s.x 实现正本）
+# 可破坏物件：方盒造型 + 旗杆多段砍断 + 坛子碎裂（v9s.x 实现正本）
 
-> 需求：瓶罐 / 旗杆被刀砍中时，**打到哪就从哪断**；站高处打从高处断、低处打低处断；
-> **切口朝攻击方向倾斜**。本文档是机制与契约的正本，代码在
-> `src/core/destructibles.ts`（数学 + 状态机）、`src/presentation/destructible-layer.ts`（几何 + 相交）。
+> 需求：旗杆 / 坛子被刀砍中时，**打到哪就从哪断**；站高处打从高处断、低处打低处断；
+> **切口朝攻击方向倾斜**。两种物件都用**方盒**渲染，但破坏方式不同：
+>  - 旗杆：按命中点横向砍断，断下的段成为一块掉落刚体，可**多次砍断**（每一次把当前站立段
+>    顶端再砍下一截），剩余站立段递减，断面始终斜切朝攻击方向。
+>  - 坛子：命中即**碎裂成多块**方碎块（确定性随机铺放），不再做斜切两段。
+>
+> 本文档是机制与契约的正本，代码在 `src/core/destructibles.ts`（数学 + 状态机）、
+> `src/core/fragments.ts`（确定式刚体求解）、`src/presentation/destructible-layer.ts`（几何 + 相交）。
 
-## 1. 先把需求拆成三个正交量
+## 1. 两种物件，三个正交量
 
 | 量 | 由什么决定 | 落在哪 |
 |---|---|---|
 | 断面高度 `h` | 命中点 `P.y` | `cutU = (P.y − baseY) / height` |
 | 切面法线 `n` | 攻击方向 `d` | `n = normalize(up + dH·tanθ)` |
-| 断后运动 | 上半截独立刚体 | 绕 `cross(up, dH)` 轴翻倒 |
+| 断后运动 | 掉落段 / 碎块 = 刚体 | 重力下坠 + 地面 / 刚体间碰撞 |
 
 「高处打从高处断」**不需要任何高度分支**，它就是 `cutU` 的自然结果。
-站位高低在 Core 里本来就有：`character.position.y`、`movement.ts` 的支撑高度、
-`scene.ts` 的 step / obstacle 盒——跳起来或站台阶打是真实可触发的，不需要新增地形系统。
+站位高低在 Core 里本来就有：`character.position.y`、支撑高度、step / obstacle 盒——
+跳起来或站台阶打是真实可触发的，不需要新增地形系统。
 
 > **不要令 `n = d`。** 水平挥击时 `d` 是水平的，会得到竖直切面 → 杆被「纵向劈开」
 > 而不是「横向砍断」。`n` 必须恒以竖直为主（`ny > 0`），只把 `d` 的水平投影
 > 当作倾斜倾向；从高处下劈时 `d` 的向下分量让 `θ` 变大，切口自然更斜、朝向攻击来向。
+
+**方盒造型**：`radius` 现在是**横截面半边长**（正方形），不再是圆柱半径。
+表现层用 `boxPieceGeometry` 拼出底面 + 四侧壁 + 斜切顶面，几何与圆柱时代完全解耦，
+但「倒塌段 / 碎块仍为方盒」让刚体碰撞（OBB-SAT）天然成立且确定式可解。
 
 ## 2. 断面数学（`cutPlane`，Core 纯函数）
 
@@ -31,51 +40,74 @@ n      = normalize(up + dH · tanθ)
 axis   = normalize(cross(up, dH)) = (dH.z, 0, −dH.x)
 ```
 
-`geoMax` 是**几何上限**，否则切面倾角过大会削到柱体端面、cap 不再是完整椭圆：
+`geoMax` 是**几何上限**，否则切面倾角过大会削到盒体端面、顶面不再是完整四边形：
 
 ```
 geoMax = atan(0.9 · min(cutH, height − cutH) / radius)
 ```
 
-`axis` 取正角度时上半截朝攻击去向翻倒（可用 Rodrigues 旋转验证，与
+`axis` 取正角度时掉落段朝攻击去向翻倒（可用 Rodrigues 旋转验证，与
 `grass.ts` 的 `windPivotRotate` 同源）。全部返回 plain number，可直接进快照 / 跨语言重写。
 
-### 母线截断高度（`cutColumnHeights`）
+### 方盒顶面截断高度（`cutBoxHeights`）
 
-表现层要画的是一个**倾斜的环**，不是水平环。母线 i 上一点
-`Q(t) = (r·cosφ, t, r·sinφ)`，切面 `dot(n, Q − C) = 0`（C 的轴心高度 = `cutU·height`）：
+表现层要画的是一个**倾斜的四边形顶面**。四角顺序（xz 平面）：
+`BL(-r,-r)、BR(r,-r)、TR(r,r)、TL(-r,r)`。角点 `Q = (ox, t, oz)` 落在切面
+`dot(n, Q − C) = 0` 上（C 的轴心高度 = `cutU·height`）：
 
 ```
-t_i = cutH − (nx·r·cosφ_i + nz·r·sinφ_i) / ny
+t_i = clamp(cutU·height − (nx·ox + nz·oz) / ny, 0, height)
 ```
 
-每根母线有自己的截断高度 → 上下两截共用一个斜切环，cap 法线自动等于 `n`。
-完好态（`cutU = 1, n = up`）时所有 `t_i` 恰好等于 `height`，下半截即完整柱体，
-上半截退化不显示——**完好与断裂走同一套几何路径**，没有分支。
+每角有自己的截断高度 → 斜切顶面。完好态（`cutU = 1, n = up`）所有 `t_i = height`，
+顶面即水平；**完好与断裂走同一套几何路径**，没有分支。
 
 ### 瓶罐的断裂带
 
 回转体带收腰 / 瓶口、可能非凸，实时 CSG 会翻车且破坏确定性。改为配置里预设
-`bands: [0.35, 0.62]`，命中高度吸附到最近带，再按 `d` 旋转 cap。视觉上是干净的两截，
-成本是 O(bands)。
+`bands: [0.35, 0.62]`，命中高度吸附到最近带，再按 `d` 旋转 cap。不过坛子的
+**最终破坏是碎裂**（见 §3），`bands` 只在「刚好命中的位置」用于决定爆裂中心高度。
 
-## 3. 数据契约
+## 3. 两种破坏路径
 
-| 位置 | 新增 |
+### 旗杆：多次砍断（`severPole`）
+
+每次命中把 `[cutU, standU]` 之间的一段切下，成为一块 `Fragment` 刚体：
+
+- 段被赋予水平击飞（`POLE_KNOCK`）+ 上抛（`POLE_LIFT`）+ 绕翻倒轴角速度（`POLE_SPIN`）初值；
+- 站立段顶端更新为新的斜切面：写 `standU = cutU`、`snx/sny/snz`；
+- `broken += 1`（即已砍断次数）；
+- 当 `standU ≤ MIN_STAND`（默认 0.08）时不再响应，留一小截底座。
+
+可重复调用 → 一根旗杆被砍成若干掉落段 + 一小截底座，每一段都是独立刚体。
+
+### 坛子：碎裂成多块（`shatterJar`）
+
+命中即把整只罐子切成 N 块方碎块（确定性随机铺放），全部成为掉落刚体：
+
+- 碎块数 `n = clamp(round(height · radius · 30), 6, 12)`，小罐少、大罐多；
+- 在罐子立方体内按 `g×g×g` 网格铺放（`g = ceil(cbrt(n))`），每块尺寸在格子 0.72~0.94 倍间抖动；
+- 抖动来源是 `nextRandom(world)`（mulberry32，推进 `world.rngState`）——
+  **零 Math.random**，因此同输入同结果、可被快照回放；
+- 碎块从爆裂中心（命中点）径向外扩（`JAR_KNOCK`）+ 上抛（`JAR_LIFT`），带随机自旋；
+- 写 `broken = 1`、`standU = 0`、`fragments = frags`，此后不再响应二次命中。
+
+### 数据契约（`DestructibleState` / `Fragment`）
+
+| 字段 | 含义 |
 |---|---|
-| `Intents.breakHits?` | **可选**。表现层算出的 3D 相交结果；`EMPTY_INTENTS` 不带它，既有 948 例逐字节不变 |
-| `BreakHit` | `{ id, x,y,z, dx,dy,dz }`：命中点（物件轴上离刀刃最近的点）+ 挥击方向 |
-| `SceneConfig.destructibles?` | 由 `assemblePlots()` 从 `config/plots/*.json` 拼合注入的绝对坐标定义 |
-| `World.destructibles` | `DestructibleState[]`，plain number / 数组，随 JSON 快照回放 |
-| `ModuleFlags.destructibles` | 独立开关，关闭后不响应命中、翻倒冻结 |
-| `EventType 'break'` | 一次性事件，`value` = 物件索引，`y` = 断面世界高度 |
+| `broken` | 旗杆 = 已砍断次数；坛子 = 0/1（是否碎裂） |
+| `standU` | 当前站立段顶端相对高度（1=完整，递减到 `MIN_STAND` 止） |
+| `snx/sny/snz` | 站立段顶端斜切面法线（供表现层画剩余段顶面） |
+| `cutU/theta/nx/ny/nz/ax/ay/az` | 最近一次断口（断面高度 / 倾角 / 法线 / 翻倒轴） |
+| `fragments` | `Fragment[]`，每段 / 碎块一块 |
 
-`DestructibleState` 关键字段：`broken`(0/1)、`cutU`、`theta`、`nx/ny/nz`（切面法线）、
-`ax/ay/az`（翻倒轴）、`fall`（当前翻倒角）、`brokenAt`。
+`Fragment`（= `RigidBody`）全为 plain number：中心 `x/y/z`、半边长 `hx/hy/hz`、朝向四元数
+`qw/qx/qy/qz`、线速度 `vx/vy/vz`、角速度 `wx/wy/wz`、逆质量 `invMass`、逆转动惯量 `invInertia`、
+恢复 / 摩擦系数、`rest`（1=休眠）、`restT`（连续低速时长）。
 
-**契约变更**：`World` 多了 `destructibles` 与 `modules.destructibles` 两个字段，
-golden hash 从 `5562e496…` 变为 `e6028d21…`（已 `-u` 更新，见 journal）。
-冻结夹具不配置物件 → 空数组，其余 967 例行为零变化。
+`World.destructibles` 是 `DestructibleState[]`，随 JSON 快照回放；golden hash 为 `e6028d21…`
+（默认世界不放置物件，`destructibles: []`，故与历史 967 例零回归）。
 
 ## 4. 命中口径（重要决策）
 
@@ -88,32 +120,49 @@ Core 的 `destructiblesUpdate` 用 `currentMeleeShape(world)` 作**时间闸门*
 > **刻意不再用 `inMeleeShape` 的 2D 扇形二次否决。** 实测发现横扫扫到侧面瓶罐时，
 > 3D 相交已产生候选，但扇形只认正前方 → 被否决，物理上是倒退。
 > 刀刃线段相交比扇形更精确，扇形继续服务假人命中；两者只共享「这一帧有没有挥刀」
-> 这一个事实，不互相裁决。相关用例见 `tests/destructibles.test.ts` 的
-> 「横扫能打断侧面物件」。
+> 这一个事实，不互相裁决。相关用例见 `tests/destructibles.test.ts` 的「横扫能打断侧面物件」。
 
 **一帧延迟**：app 的 `step()` 先跑、`view.render()` 后跑，所以 `breakHits` 是上一帧
 render 算出的。为此表现层在 active 段内按 id **累积**候选（不是每帧覆盖），
 避免最后一帧扫到的物件因下一帧 shape 已 inactive 而整条丢掉；已断目标由 Core 的
-`broken` 标记去重。
+`broken` / `standU` 标记去重。
 
-挂在 `step()` 的 `grassUpdate` 之后：与草块同节拍，读本帧最终角色位置与战斗时间轴。
+## 5. 掉落刚体物理（确定性，`stepRigid`）
 
-## 5. 表现层：真实斜切两段
+所有掉落段 / 碎块由 `src/core/fragments.ts` 的 `stepRigid` 按固定步长推进，**零随机**、
+全部 plain number、随 World 一起快照，因此暂停 / 慢放 / 倒带对碎块天然成立。
 
-`createDestructibleLayer()` 为每个物件建 2 个 Mesh（下半截 / 上半截），每个几何带
-2 个材质 group：本体色 + 切口色。几何由 `cutColumnHeights` 的斜切环解析生成，
-`computeVertexNormals()` 让 cap 法线自然等于 `n`。
+算法（顺序冲量法的轻量版）：
 
-- 下半截以底面为原点，留在原地。
-- 上半截是独立 `Group`，**枢轴 = 切面中心** `(x, y + cutU·height, z)`，
-  按 `fall` 绕 `axis` 做 `setFromAxisAngle` 刚体旋转 → 从断口翻倒，不是整体位移。
-- 断后 `fall` 用固定步长指数逼近 `BREAK_FALL_TARGET`（≈84°，不贴地穿模），
-  暂停 / 慢放 / 快照回放都成立。
+1. **积分动态体**：重力 + 欧拉位移 + 四元数刚体旋转；常数线性 / 角速度阻尼让残余滑动收敛。
+2. **收集接触**：
+   - 地面：盒子**每一个低于地面的角点**各生成一个向上接触。多于一个角点时，
+     倾斜 / 翻倒的盒子会自然「坐」在棱或面上，而非单角悬停，从而真正落定。
+   - 刚体间：两两 OBB 做 SAT（15 轴）求最小穿透轴，`n` 统一取「由 B 指向 A」的推出方向。
+3. **顺序冲量求解（只改速度，迭代 `ITER=6` 次）**：法向冲量带恢复系数
+   （慢速接触 `vn` 低于 `BOUNCE_VMIN` 不弹跳，只滑 / 停，消除落地抖动）+ 切向摩擦冲量。
+4. **位置修正（每帧只做一次，Baumgarte 风格）**：按逆质量分配把穿透推回。
+   关键纪律：**位置修正不在 `ITER` 次迭代里重复叠加**，否则会被反复弹起、永不落定。
+5. **休眠**：连续 `SLEEP_SEC` 低速后速度归零、`rest=1`，只当碰撞体；显著法向冲量唤醒。
 
-`debug()` 给 `count / broken / drawCalls / cuts`，`breakDebug()` 在 `__harness` 暴露，
-smoke 直接读数值验收，不看截图。
+站立段由调用方以 `invMass=0` 的瞬时刚体并入求解，让掉落段与它发生碰撞（坛子碎裂后
+无站立段，仅地面 + 碎块间碰撞）。
 
-## 6. 地块配置（遵守三条铁律）
+## 6. 表现层：方盒几何 + 碎块池
+
+`createDestructibleLayer()`：
+
+- 完好 / 剩余站立段用 `boxPieceGeometry(radius, cutBoxHeights(...))` 画底面 + 四侧壁（本体色）
+  + 斜切顶面（切口色），`computeVertexNormals()` 让顶面法线自然等于 `n`。
+- 掉落段 / 碎块用**共享几何 + 网格池**：逐帧 `position.set(f.x,f.y,f.z)` +
+  `quaternion.set(f.qx,f.qy,f.qz,f.qw)` + `scale.set(hx*2,hy*2,hz*2)`，池子按
+  `fragments.length` 伸缩，无逐帧分配。
+- `computeHits` 跳过已碎裂的坛子、以及砍到只剩底座的旗杆；其余口径不变。
+
+`debug()` 给 `count / broken / drawCalls / positions / fragments(每物件片段数) / cuts`，
+`breakDebug()` 在 `__harness` 暴露，smoke 直接读数值验收，不看截图。
+
+## 7. 地块配置（遵守三条铁律）
 
 新测试需求 = **新建一个地块文件**，不写世界坐标：
 [`config/plots/x-destructibles.json`](../../config/plots/x-destructibles.json)。
@@ -124,13 +173,13 @@ smoke 直接读数值验收，不看截图。
 （历史 7 个 pinned 工位与 sparring-demo 的落点零回归）。auto 地块保持
 `spawn` 偏移为 0（`smoke` 断言落点 = 拼合中心）。
 
-场地里放 3 根旗杆（任意高度可断）+ 2 个瓶罐（预设断裂带）。
+场地里放 3 根旗杆（任意高度可多次砍断）+ 2 个坛子（命中即碎裂）。
 
-## 7. 调试 / 验收接口
+## 8. 调试 / 验收接口
 
 | `__harness` | 用途 |
 |---|---|
-| `breakDebug()` | 版本、物件数、已断数、每个断面 `cutU/theta/n/fall`、表现层读数 |
+| `breakDebug()` | 版本、物件数、已断数、每个断面 `cutU/theta/n/fragments`、表现层读数 |
 | `breakTest(id, y, dx, dy, dz)` | 以给定命中点打断，走**同一个** `cutPlane`，精确验收高低 / 方向 |
 | `resetBreaks()` | 所有物件回完好直立（不动玩家 / 战斗） |
 | `breakHits()` | 本帧 3D 相交候选（表现层 → Intents 那一层） |
@@ -138,26 +187,24 @@ smoke 直接读数值验收，不看截图。
 `forceBreak()` 与 `plot-spawn` 的 `spawnPlotTestUnits` 同属运行时调试操作：
 不改 Intents、不进 step，但走同一数学，读数与真机链路逐字节一致。
 
-## 8. 验证基线
+## 9. 验证基线
 
 | 命令 | 结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 968 通过（新增 20 例），golden `e6028d21…` |
+| `npx vitest run` | 1003 通过（含 destructibles 26 例：断面数学 / 方盒顶角 / 旗杆多段砍断 / 坛子碎裂 / 确定式刚体物理） |
 | `npm run verify:portable` | PASS（Core 无 three / DOM / 外部时间 / class） |
 | `npm run docs:check` | PASS |
-| `npm run smoke` | **40/40**，含「真机挥刀能打断」端到端 |
+| `npm run smoke` | **49/49**，含「真机挥刀能打断」「打哪从哪断」「切口朝攻击方向」 |
 
-smoke 新增 7 项：物件装配、打哪从哪断、切口方向镜像、瓶罐吸附、斜切两段渲染、
-真机挥刀打断、全段无页面异常。真机段先做一次完整世界复位，避免前面连击测试的
-假人 / combat 状态污染。
+smoke 新增：物件装配、打哪从哪断、切口方向镜像、瓶罐吸附、斜切渲染、真机挥刀打断、全段无页面异常。
+真机段先做一次完整世界复位，避免前面连击测试的假人 / combat 状态污染。
 
-## 9. 已知限制 / 后续
+## 10. 已知限制 / 后续
 
-- **一次干净断**：物件断一次后不再响应，未做「再打一次再断一截」的段列表。
-- **瓶罐是圆柱近似**：没有收腰 / 瓶口轮廓，靠 `bands` + 配色区分；要真实轮廓需
-  给 `pieceGeometry` 加 profile 环（几何生成函数已支持任意 ring 高度数组）。
-- **旗面未实现**：杆断后旗布要挂到上半截刚体上，顶点动画跟着刚体旋转走
+- **坛子只碎一次**：`broken=1` 后不再响应，未做「再补一刀再碎一轮」。
+- **旗面未实现**：杆断后旗布要挂到掉落刚体上，顶点动画跟着刚体旋转走
   （可复用草的 shader 思路）。
-- **无碎片 / 音效 / 粒子**：`break` 事件已就位，表现层可接。
-- **同一帧一把刀只断一个物件**：`computeHits` 里 `break`，避免横扫让全场地物全断。
+- **无音效 / 粒子**：`break` 事件已就位（`value`=物件索引，`y`=断面世界高度），表现层可接。
+- **同一帧一把刀只断一个物件**：`computeHits` 里去重，避免横扫让全场地物全断。
+- **单点地面接触下倾斜盒最低角可能略插地（≤10cm）**：视觉可忽略，碰撞已把碎片散开。
