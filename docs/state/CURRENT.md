@@ -9,13 +9,14 @@
 `feat/integration-grass-wind`（基于 `main` `5a320f4`，**main 未被触碰**）。
 远端树 `4843ea5b…` 与本地 HEAD **逐字节一致**（263 文件、`git diff` 为空）。
 本地已 `reset --hard` 对齐远端、设置跟踪分支，分层 commit 留在备份分支。
-线上静态预览仍是 v0.9.63（本次代码未变，dist 未重新构建）。
+线上静态预览仍是 v0.9.63（源码零变化；`publish:preview` 重新 build 仅使 `buildTime`
+时间戳变化 → 产物 hash 变为 `main-B1_t5k_a.js`，已同步线上与远端分支，三者一致）。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.63`（本次纯协同流程，未 bump；dist 未变） |
+| `package.json` 版本 | `0.9.63`（本次纯协同流程，未 bump；dist 仅 buildTime 变 → 新 hash `main-B1_t5k_a.js`） |
 | 当前分支 | `feat/integration-grass-wind` @ `9fb9e45`，跟踪 `origin/feat/integration-grass-wind` |
 | 远程 `main` | `5a320f4`（**未变**，无远端写入 main） |
 | 远程功能分支 | `feat/integration-grass-wind` @ `9fb9e45`（新增，3 个 API 重建 commit） |
