@@ -725,6 +725,103 @@ def main() -> int:
                 check(f"慢放转身下盘不「拧出去再拧回来」（最低 {hipd['lo']:.1f}° > −6°）",
                       hipd["lo"] > -6, str(hipd))
 
+                # ---- v9s.x：可破坏物件（断面高度 / 切口方向 / 斜切渲染）----
+                br = page.evaluate("""() => {
+                  const h = window.__harness;
+                  h.resetBreaks();
+                  const base = h.breakDebug();
+                  // 同一批物件：低处打 / 高处打 / 反向打 / 瓶罐断裂带
+                  h.breakTest('pole-a', 0.6, 1, 0, 0);
+                  h.breakTest('pole-b', 2.1, 1, 0, 0);
+                  h.breakTest('pole-c', 1.2, -1, 0, 0);
+                  h.breakTest('jar-a', 0.75, 0, -0.6, 1);
+                  h.view.render(h.world, 1 / 60);
+                  const after = h.breakDebug();
+                  const items = h.world.destructibles.map(s => ({ id: s.id, x: s.x, z: s.z }));
+                  h.resetBreaks();
+                  return { base, after, items };
+                }""")
+                cuts = {c["id"]: c for c in br["after"]["cuts"]}
+                check("可破坏物件已装配且初始完好（5 件 / 0 已断）",
+                      br["base"]["count"] == 5 and br["base"]["broken"] == 0,
+                      f"count={br['base']['count']} broken={br['base']['broken']}")
+                # 回归护栏：完好态也必须画在地块绝对坐标上。曾经 root 没定位，
+                # 5 件全叠在世界原点（中央 8 向区冒出一根杆子、地块反而空）。
+                pos = {p["id"]: p for p in br["base"]["rendered"].get("positions", [])}
+                check("完好态就画在地块坐标（不再叠在世界原点 / 与 Core 状态一致）",
+                      len(pos) == 5
+                      and all(any(abs(p["x"] - s["x"]) < 1e-6 and abs(p["z"] - s["z"]) < 1e-6
+                                 for s in br["items"]) for p in pos.values())
+                      and sum(1 for p in pos.values() if abs(p["x"]) < 0.5 and abs(p["z"]) < 0.5) == 0,
+                      str(pos))
+                check("打哪从哪断：高处命中 cutU 明显大于低处命中",
+                      "pole-a" in cuts and "pole-b" in cuts
+                      and cuts["pole-b"]["cutU"] > cuts["pole-a"]["cutU"] + 0.4,
+                      f"low={cuts.get('pole-a', {}).get('cutU')} "
+                      f"high={cuts.get('pole-b', {}).get('cutU')}")
+                check("切口朝攻击方向：反向挥击的切面法线镜像",
+                      "pole-a" in cuts and "pole-c" in cuts
+                      and cuts["pole-a"]["nx"] > 0 and cuts["pole-c"]["nx"] < 0
+                      and all(c["ny"] > 0.5 for c in cuts.values()),
+                      str({k: (v["nx"], v["ny"]) for k, v in cuts.items()}))
+                check("瓶罐命中高度吸附到预设断裂带",
+                      "jar-a" in cuts
+                      and any(abs(cuts["jar-a"]["cutU"] - b) < 1e-6 for b in (0.35, 0.62)),
+                      f"jar-a cutU={cuts.get('jar-a', {}).get('cutU')}")
+                rendered = br["after"]["rendered"]
+                check("斜切两段真的画出来了（表现层与 Core 断裂数一致）",
+                      rendered["broken"] == 4 and rendered["drawCalls"] >= 9,
+                      str(rendered))
+
+                # 真机链路：站到物件前挥一刀，验证「刀刃 3D 相交 → Intents → Core → 斜切渲染」。
+                # 关掉自动索敌，避免 attackFacing 被场上的假人带偏（只影响这一刀）。
+                page.evaluate("""() => {
+                  const h = window.__harness;
+                  const p = h.plotDebug().plots.find(q => q.id === 'x-destructibles');
+                  // 前面的连击 / 击地测试把假人挪到 (60,60) 并留了一个陪练贴身，
+                  // 还改过 combat.weapon / phase。先做一次完整世界复位回到基线，
+                  // 否则玩家一直被陪练打断，测的就不是「挥刀砍物件」了。
+                  const I = {
+                    moveX: 0, moveZ: 0, jumpPressed: false, sprintHeld: false,
+                    sprintPressed: false, resetPressed: true, attackPressed: false,
+                    attackHeld: false, attackReleased: false, skill2Pressed: false,
+                    weaponSlot: 0, dummyClickId: 0, aimX: 0, aimZ: 0, aimActive: false,
+                  };
+                  h.clock.singleStep(I);
+                  h.debug.timeScale = 1;
+                  h.world.character.position.x = p.centerX;
+                  h.world.character.position.y = 0;
+                  h.world.character.position.z = p.centerZ - 2.0;
+                  h.world.character.bodyYaw = 0;
+                  h.world.character.facing = 0;
+                  h.world.combat.phase = 'idle';
+                  h.world.combat.phaseTimer = 0;
+                  h.world.combat.comboIndex = 0;
+                  h.world.combat.hitIds.length = 0;
+                  h.world.combat.weapon = 'sword-shield';
+                  h.world.modules.targeting = false;
+                  h.resetBreaks();
+                }""")
+                page.keyboard.press("j")
+                try:
+                    page.wait_for_function(
+                        "() => window.__harness.breakDebug().broken > 0", timeout=5000,
+                    )
+                    live_ok = True
+                except Exception:
+                    live_ok = False
+                live = page.evaluate("""() => {
+                  const h = window.__harness;
+                  const d = h.breakDebug();
+                  h.world.modules.targeting = true;
+                  h.debug.timeScale = 0.25;
+                  return { broken: d.broken, cuts: d.cuts.filter(c => c.broken) };
+                }""")
+                check("真机挥刀能打断（3D 刀刃相交 → Intents → Core → 斜切渲染）",
+                      live_ok and live["broken"] > 0,
+                      f"broken={live['broken']} cuts={live['cuts']}")
+                check("v9s.x 全段无新增页面异常", not errors, str(errors[:2]))
+
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
                       f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}",
                       " 命中 progress", f"{hit_prog:.3f}" if hit_prog is not None else "-")

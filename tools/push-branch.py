@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.11
 # -*- coding: utf-8 -*-
 """
-v9s.45 · 协同推送脚本（GitHub MCP 网关通道）。
+v9s.x · 协同推送脚本（GitHub MCP 网关通道）。
 
 为什么需要它
 ------------
@@ -121,7 +121,9 @@ class MCP:
         text = ''.join(
             c.get('text', '') for c in res.get('content', []) if c.get('type') == 'text'
         )
-        return text[:800]
+        # 8000 而不是 800：agent-sync.py 复用本类解析 create_pull_request 的 PR 号，
+        # 返回体里还带 url / head sha，截太短会丢字段。
+        return text[:8000]
 
 
 def main():
@@ -159,6 +161,17 @@ def main():
         base = f'origin/{branch}'
     else:
         base = 'origin/main'
+
+    # 防撞车护栏（v9s.x 无人值守协同）：远端同名分支若已被别的 agent 推进，
+    # 本地 HEAD 还没包含它就直接 push_files 会把对方的文件当成「删除」推上去。
+    # 只有 origin/<branch> 是本地 HEAD 的祖先（或不存在）才允许写。
+    if not args.base and git_ok('rev-parse', '--verify', f'origin/{branch}'):
+        if not git_ok('merge-base', '--is-ancestor', f'origin/{branch}', 'HEAD'):
+            sys.exit(
+                f'[push-branch] 拒绝推送：远端 {branch} 有本地没有的提交（别的 agent 推过）。\n'
+                '  先 git fetch origin && git merge --no-ff origin/<branch>，'
+                '或换一个带 agent 后缀的分支名 feat/<topic>-<agent>。'
+            )
 
     diff = git('diff', '--name-status', '--no-renames', base, 'HEAD').splitlines()
     adds, mods, dels = [], [], []

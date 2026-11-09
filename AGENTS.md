@@ -23,7 +23,8 @@
    - 跑 `npm run verify` → `npm run publish:preview`（`tools/publish-preview.mjs`）；
    - 脚本发布 `dist/` → 校验 `verified` → 打印**唯一**公网链接（不再有第二条）；
    - **把这条链接贴进任务回复**；
-   - 这是「线上静态预览同步」，**不是 GitHub push**；push / `--apply` 仍需用户明确通知。
+   - 这是「线上静态预览同步」，**不是 GitHub push**；代码推送与合并由
+     `tools/agent-sync.py finish` 自动完成（用户已授权，见规范 §11）。
 
 > 为什么：多套场景让「看到的」≠「主线接入的」；手写绝对坐标 + 共改一个数组是多 agent
 > 冲突的根源；只 commit 不同步线上，别人和用户没法快速验证。
@@ -35,15 +36,13 @@
 
 ```bash
 git fetch origin
-git checkout -b feat/<主题> origin/main     # 一定基于最新 main，保留共同祖先
+python3.11 tools/agent-sync.py start --agent <你的id> --topic <主题>   # 基于最新 main 建 feat/<主题>-<agent>
 # ...只改自己负责的文件...
-git fetch origin                            # 提交前再看有无新推送
 npm run verify
-npm run publish:preview                      # 更新线上预览，把打印的链接贴进任务回复
 git add -A && git commit -m "..."
-python3.11 tools/push-branch.py              # 用户通知 push 后：推到同名功能分支（绝不动 main）
-git fetch origin <分支> && git diff --stat HEAD origin/<分支>   # 必须为空（树一致）
-git reset --hard origin/<分支>               # 本地与远端对齐（远端 commit 由 API 重建，SHA 不同但 tree 相同）
+python3.11 tools/agent-sync.py finish        # 收尾闭环（详见规范 §11）：
+#   fetch → 必要时 merge main 并按 §6 解冲突 → 领号 → build/golden → verify
+#   → 推自己的分支 → 建 PR → GitHub 端自动 merge → 对齐 → publish:preview（唯一链接）
 ```
 
 - `tools/push-branch.py`：走 MCP `create_branch` / `push_files` / `delete_file`，
@@ -54,7 +53,10 @@ git reset --hard origin/<分支>               # 本地与远端对齐（远端 
 - **不要** `git init` + 导入代码快照：那会生成与远端无共同祖先的历史，
   合并时几十个文件被误判成「双方新增」（本项目踩过，见 `docs/journal/`）。
 - 每天 rebase 一次 `origin/main`，别攒几十个文件再合。
-- **GitHub push / 网关 `--apply` 需用户明确通知**；当前约定下本地 commit 可以，push 不行。
+- **2026-11-09 用户已授权「不需要我参与」**：push / 合并不再逐次请示，
+  统一由 `tools/agent-sync.py finish` 按硬护栏自动完成（规范 §11）。
+  边界没变：只写自己的 `feat/*` 分支，main 的写入只由 GitHub 端 PR merge 完成，
+  发布只走 `publish:preview` 唯一通道。
 
 ## 三、共享热点文件：单一写入方
 
@@ -63,7 +65,9 @@ git reset --hard origin/<分支>               # 本地与远端对齐（远端 
 `package.json`、`dist/` —— 这些**由 integrator 独占或排队改**，各 agent 只新建自己的文件。
 
 **版本号是热点的热点**：功能分支**不占** `v9s.NN`（写 `v9s.x` 或留空），
-合并时由 integrator 统一 `version` +1 并宣布号（规范 §0）。两个分支各写 v9s.44 的坑踩过一次。
+合并时由闸门统一 `version` +1 并宣布号（规范 §0）。两个分支各写 v9s.44 的坑踩过一次。
+**分支名带 agent 后缀** `feat/<topic>-<agent>`，两人别共用一个分支
+（`push-branch.py` 已加「远端分支被别人推进就拒绝覆盖」的护栏）。
 契约（类型 / 事件 / config schema / `World` 字段 / 模块顺序）由 integrator 一次性定完再并行。
 
 `config/plots/*.json` **不是热点**：每个 agent 只新建自己的那一个文件（这正是动态拼合
@@ -83,7 +87,8 @@ git reset --hard origin/<分支>               # 本地与远端对齐（远端 
 ```bash
 npm run verify              # build → 全量单测 → Core 可移植边界 → docs:check → smoke
 npm run verify:portable     # 改了 src/core/ 时必跑
-npm run publish:preview     # 每次任务完成必跑：发布 dist + 打印唯一公网链接（见规范 §9）
+python3.11 tools/agent-sync.py status     # 开工 / 收尾先看：main 有没有前进、合并队列有没有待办
+python3.11 tools/agent-sync.py finish     # 收尾：自动验证 → 推送 → 合并 → 发布（含 publish:preview）
 ```
 
 改了 `World` 结构 → golden hash 必变，用 `-u` 更新并在 journal 记一笔「契约变更」。
@@ -95,7 +100,8 @@ npm run publish:preview     # 每次任务完成必跑：发布 dist + 打印唯
 |---|---|
 | 测试场景与扩展规则（正本） | [`docs/systems/test-scene-policy.md`](docs/systems/test-scene-policy.md) |
 | 动态地块拼合 / 测试按钮 / 发布（正本） | [`docs/systems/plot-assembly.md`](docs/systems/plot-assembly.md) |
-| 分支 / 契约 / 提交网关 | [`docs/systems/multi-agent-workflow.md`](docs/systems/multi-agent-workflow.md) |
+| 分支 / 契约 / 提交网关 / 无人值守执行层（§11） | [`docs/systems/multi-agent-workflow.md`](docs/systems/multi-agent-workflow.md) |
+| 待接手的合并队列 | [`docs/state/MERGE_QUEUE.md`](docs/state/MERGE_QUEUE.md) |
 | 文档地图（按症状查） | [`docs/INDEX.md`](docs/INDEX.md) |
 | 现在做到哪、下一步 | [`docs/state/CURRENT.md`](docs/state/CURRENT.md) |
 | 项目是什么、怎么跑 | [`README.md`](README.md) |

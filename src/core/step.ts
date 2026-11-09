@@ -7,6 +7,7 @@ import { decayHurt, hitsUpdate } from './hits';
 import { decayLinks, linksUpdate } from './links';
 import { dummiesUpdate } from './dummies';
 import { grassUpdate } from './grass';
+import { destructiblesUpdate } from './destructibles';
 import { movementUpdate } from './movement';
 import { orientationUpdate } from './orientation';
 import { crowdResistanceUpdate, separationUpdate } from './separation';
@@ -97,6 +98,10 @@ export function step(world: World, dt: number, intents: Intents): World {
   // v9s.39：草块放在 hits 之后 —— 压弯读本帧新位置，割断复用本帧刀风形状。
   // 独立模块开关；关闭时 grassUpdate 内部直接返回，草状态冻结。
   grassUpdate(world, dt);
+
+  // v9s.x：可破坏物件同样在 hits 之后 —— 命中闸门复用本帧刀风形状，
+  // 上半截翻倒按固定步长积分（暂停 / 慢放 / 快照回放一致）。
+  destructiblesUpdate(world, dt, intents);
 
   // 相机意图放最后：读的是本帧所有模块结束后的最终玩家 / 假人位置。
   // 关闭模块时输出中性意图，让表现层平滑回到基础 2.5D 构图。

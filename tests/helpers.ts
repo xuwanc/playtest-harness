@@ -25,6 +25,7 @@ const plotDefs: PlotDef[] = readdirSync(plotDir)
 export const PLOT_ASSEMBLY = assemblePlots(plotDefs, DEFAULT_PLOT_LAYOUT);
 raw.scene.stations = PLOT_ASSEMBLY.stations;
 if (raw.scene.grass) raw.scene.grass.plots = PLOT_ASSEMBLY.grassPlots;
+raw.scene.destructibles = PLOT_ASSEMBLY.destructibles;
 
 export const CONFIG: AppConfig = raw;
 

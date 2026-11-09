@@ -47,6 +47,7 @@
 | 草压不开 / 刀割不到草 / 草挡住角色 | `core/grass.ts`、`presentation/grass-layer.ts` | `grassUpdate`、`grassCut`、`currentMeleeShape` | [systems/grass.md](systems/grass.md) | `tests/grass.test.ts`、`__harness.grassDebug()` |
 | 草不随风摆 / 浪带不明显 / 摆得太乱 | `core.grass.wind`、`presentation/grass-layer.ts` | `windPhase`、`windSample`、`windAdvance`、`installGrassWind` | [systems/grass.md](systems/grass.md) §12 | 主场景「风：开」/ `G` 键 A/B、`__harness.windDebug()` |
 | 草割断后「长回来」太突然 / 想缓慢长高 | `core/grass.ts`、`presentation/grass-layer.ts` | `grassGrowth`、`GRASS_GROWTH_STAGGER`、`sampleHeight` | [systems/grass-growth-pivot.md](systems/grass-growth-pivot.md) §1 | `tests/grass-growth-pivot.test.ts`、`__harness.grassDebug().sampleHeight` |
+| [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒（实现正本） |
 | 风把草每节 box 拉歪 / 想要一节一节弯且保持方块 | 同上 | `windPivotAngles`、`windPivotEffLength`、`windPivotRotate`、`<project_vertex>` | 同上 §2 | `tests/grass-growth-pivot.test.ts`、`__harness.grassDebug().wind.mode` |
 | 多个 agent 同时开发 / 怎么合并提交 | `tools/gh-commit.mjs`、冲突分类 | `--apply`、ref SHA 乐观锁 | [systems/multi-agent-workflow.md](systems/multi-agent-workflow.md) | `node tools/gh-commit.mjs`（dry-run） |
 | 用户通知 push 后怎么推到功能分支（`git push` 无凭证） | `tools/push-branch.py`、GitHub MCP 网关 | `push_files` / `delete_file`、tree 一致校验 | 同上 §1 | `python3.11 tools/push-branch.py --dry` → 去掉 `--dry` |
@@ -180,11 +181,13 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/known-limits.md`](systems/known-limits.md) | 已知限制（现状，不是待办） |
 | [`systems/grass.md`](systems/grass.md) | 体素草块：压开 / 割断 / 实例化渲染 / 风吹麦浪 / 性能结论 |
 | [`systems/grass-growth-pivot.md`](systems/grass-growth-pivot.md) | v9s.46 缓慢连续生长 + 枢轴顶点动画（每节 box 刚体旋转，实现正本） |
+| [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒（实现正本） |
 | [`systems/test-scene-policy.md`](systems/test-scene-policy.md) | 单一主测试场景 + 三条规则（规则正本） |
 | [`systems/plot-assembly.md`](systems/plot-assembly.md) | 动态地块拼合 / 工位传送 / 测试按钮 / 每次任务更新线上（实现正本） |
-| [`systems/multi-agent-workflow.md`](systems/multi-agent-workflow.md) | 多 agent 分支、版本号分配、契约先行、冲突分类、合并闸门 |
+| [`systems/multi-agent-workflow.md`](systems/multi-agent-workflow.md) | 多 agent 分支、版本号分配、契约先行、冲突分类、合并闸门、**无人值守执行层 §11** |
 | [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 108 步手动验收 |
 | [`state/CURRENT.md`](state/CURRENT.md) | 当前状态 + 下一步（覆盖写） |
+| [`state/MERGE_QUEUE.md`](state/MERGE_QUEUE.md) | 合并闸门失败队列（agent-sync 自动维护，空表即无待办） |
 | [`risk-review.md`](risk-review.md) | **当前**活跃风险 + 处置优先级 |
 | [`risk-history.md`](risk-history.md) | 已关闭风险的归档（按版本） |
 | [`assets/conventions.md`](assets/conventions.md) | 路径与命名规范 |

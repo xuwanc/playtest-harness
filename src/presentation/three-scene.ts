@@ -17,7 +17,7 @@
  */
 import * as THREE from 'three';
 import type { GroundBasis } from '../adapters/input';
-import type { BodyTypeConfig, Box, DummyState, StationSpec, ViewConfig, World } from '../core';
+import type { BodyTypeConfig, Box, BreakHit, DummyState, StationSpec, ViewConfig, World } from '../core';
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
 import { createFighterRig } from './fighter-rig';
@@ -36,6 +36,8 @@ import { createYawSmoother } from './yaw-smooth';
 import { createWeaponTrail } from './weapon-trail';
 import { createGrassLayer } from './grass-layer';
 import type { GrassDebug } from './grass-layer';
+import { createDestructibleLayer } from './destructible-layer';
+import type { BladePair, DestructibleDebug } from './destructible-layer';
 import { FX_ORDER, setFxOrder } from './fx-layer';
 import type { HurtPose } from './hurt-pose';
 
@@ -73,6 +75,10 @@ export type SceneView = {
   yawDebug(): { target: number; shown: number; tauMs: number };
   /** v9s.39：草块渲染读数（实例数 / draw call / 本帧 dirty / 压弯 / 割断 / 碎片） */
   grassDebug(): GrassDebug;
+  /** v9s.x：本帧刀刃与可破坏物件的 3D 相交候选，组装层把它塞进 Intents */
+  breakHits(): BreakHit[];
+  /** v9s.x：可破坏物件渲染读数（数量 / 已断 / 断面 / draw call） */
+  destructibleDebug(): DestructibleDebug;
   /** v9s.40：持械陪练的步态读数（简化假人没有腿骨架 → null） */
   dummyRigDebug(id: number): FighterGaitDebug | null;
   /**
@@ -288,6 +294,13 @@ export function createSceneView(
   const grassLayer = createGrassLayer(world.grass, view.grass, world.config.grass.wind);
   setFxOrder(grassLayer.object, FX_ORDER.grass);
   scene.add(grassLayer.object);
+
+  // ---- v9s.x 可破坏物件 ----
+  // 状态全在 world.destructibles（Core）；这里只按断面重建斜切网格 + 画上半截刚体。
+  const destructibleLayer = createDestructibleLayer(world.destructibles);
+  scene.add(destructibleLayer.object);
+  /** 上一次 render 算出的命中候选：组装层在下一帧把它喂进 Intents（延迟一帧，与 bladesWorld 读数同节拍）。 */
+  let pendingBreakHits: BreakHit[] = [];
 
   // ---- 体素角色 ----
   // playerRoot 承担「位置 + 身体平滑朝向」；rig 自身只承担翻滚旋转。
@@ -851,6 +864,12 @@ export function createSceneView(
     grassDebug() {
       return grassLayer.debug();
     },
+    breakHits() {
+      return pendingBreakHits;
+    },
+    destructibleDebug() {
+      return destructibleLayer.debug();
+    },
     fxDebug() {
       return {
         // 任意一块「非调试线框」状态的地块都应该是 opaque；只要有一块透明就说明排序问题回来了
@@ -1207,6 +1226,27 @@ export function createSceneView(
       // v9s.39：草块按 Core 状态做脏标记局部更新（静止草场本帧 dirty = 0）
       grassLayer.update(w, frameDt);
 
+      // v9s.x：按 Core 断面重建斜切两段 + 上半截刚体翻倒。
+      destructibleLayer.update(w.destructibles);
+      // 只在真正在挥刀的帧采样 3D 命中候选。命中结果喂给组装层有**一帧延迟**
+      // （step 先跑、render 后跑），所以 active 段内按 id 累积而不是每帧覆盖 ——
+      // 否则最后一帧扫到的物件会因为下一帧 shape 已 inactive 而整条丢掉。
+      // 已断目标由 Core 的 broken 标记去重，累积不会造成重复破坏。
+      if (cb.phase === 'active' || w.playerLink.phase === 'active') {
+        const found = destructibleLayer.computeHits(
+          w.destructibles, voxel.bladesWorld() as BladePair,
+        );
+        for (let i = 0; i < found.length; i++) {
+          let seen = false;
+          for (let j = 0; j < pendingBreakHits.length; j++) {
+            if (pendingBreakHits[j].id === found[i].id) { seen = true; break; }
+          }
+          if (!seen) pendingBreakHits.push(found[i]);
+        }
+      } else {
+        pendingBreakHits = [];
+      }
+
       cam.update(c.position.x, c.position.y, c.position.z, frameDt, w.camera);
       renderer.render(scene, cam.camera);
     },
@@ -1357,6 +1397,7 @@ export function createSceneView(
       voxel.dispose();
       lab.dispose();
       grassLayer.dispose();
+      destructibleLayer.dispose();
       for (const rig of dummyRigs) rig.dispose();
       playerRing.dispose();
       for (const ring of dummyRings) ring.dispose();

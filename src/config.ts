@@ -53,3 +53,5 @@ export const VIEW_CONFIG: ViewConfig = copy(source.view);
 // 这两处是运行时唯一来源；测试夹具（tests/helpers.ts）用同一套拼合器保持一致。
 SCENE_CONFIG.stations = PLOT_ASSEMBLY.stations;
 if (SCENE_CONFIG.grass) SCENE_CONFIG.grass.plots = PLOT_ASSEMBLY.grassPlots;
+// v9s.x：可破坏物件同样由拼合器把相对偏移解算成绝对坐标后注入。
+SCENE_CONFIG.destructibles = PLOT_ASSEMBLY.destructibles;

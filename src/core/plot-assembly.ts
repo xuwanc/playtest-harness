@@ -1,6 +1,6 @@
 import type {
-  AssembledPlot, GrassPlotSpec, PlotAssembly, PlotDef, PlotDiagnostics,
-  PlotLayout, StationSpec,
+  AssembledPlot, DestructibleSpec, GrassPlotSpec, PlotAssembly, PlotDef,
+  PlotDiagnostics, PlotLayout, StationSpec,
 } from './types';
 
 /**
@@ -144,10 +144,32 @@ export function assemblePlots(
       if (g.clearMarginCells !== undefined) p.clearMarginCells = g.clearMarginCells;
       grassPlots.push(p);
     }
+    // v9s.x：可破坏物件同样只写相对偏移，绝对坐标在这里一次性解算。
+    const destructibles: DestructibleSpec[] = [];
+    if (def.destructibles) {
+      for (const d of def.destructibles) {
+        destructibles.push({
+          id: d.id,
+          kind: d.kind,
+          x: round6(centerX + d.dx),
+          y: d.y ?? 0,
+          z: round6(centerZ + d.dz),
+          height: d.height,
+          radius: d.radius,
+          tiltDeg: d.tiltDeg,
+          pitchGain: d.pitchGain,
+          maxTiltDeg: d.maxTiltDeg,
+          fallSec: d.fallSec,
+          bands: d.bands ? [...d.bands] : undefined,
+          color: d.color,
+          cutColor: d.cutColor,
+        });
+      }
+    }
     return {
       id: def.id, index, name: def.name, hint: def.hint,
       owner: def.owner ?? '', centerX: station.x, centerZ: station.z,
-      placement, slot, shape, radius, color, station, grassPlots,
+      placement, slot, shape, radius, color, station, grassPlots, destructibles,
       testSpawn: def.testSpawn,
     };
   };
@@ -198,10 +220,13 @@ export function assemblePlots(
 
   // 4) 面板 / 循环切换按 index 排序（与数组内顺序解耦）
   result.sort((a, b) => a.index - b.index);
+  // 物件按地块 id 字典序展平，与插入顺序 / 提交先后无关。
+  const byId = [...result].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return {
     plots: result,
     stations: result.map((p) => p.station),
     grassPlots: result.flatMap((p) => p.grassPlots),
+    destructibles: byId.flatMap((p) => p.destructibles),
     diagnostics,
   };
 }

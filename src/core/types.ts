@@ -120,6 +120,8 @@ export type SceneConfig = {
   stations?: StationSpec[];
   /** v9s.39：体素草块的生成区域（纯场景元数据，不参与碰撞） */
   grass?: GrassSceneSpec;
+  /** v9s.x：可破坏物件（由 assemblePlots 从 config/plots/*.json 拼合注入） */
+  destructibles?: DestructibleSpec[];
 };
 
 /* ---------------- v9s.43 · 动态地块拼合契约 ----------------
@@ -159,6 +161,8 @@ export type PlotDef = {
   };
   /** 可选：地块上的「测试按钮」配方，点击就地生成假人 / 陪练 */
   testSpawn?: PlotTestSpawn;
+  /** v9s.x：该地块上的可破坏物件（相对坐标，绝对位置由拼合器解算） */
+  destructibles?: PlotDestructibleDef[];
   /** 归属说明（哪个 agent / 哪个功能加的），只用于文档与诊断 */
   owner?: string;
 };
@@ -229,6 +233,8 @@ export type AssembledPlot = {
   station: StationSpec;
   /** 该地块产出的草块（绝对格坐标），没有则空数组 */
   grassPlots: GrassPlotSpec[];
+  /** v9s.x：该地块产出的可破坏物件（绝对世界坐标），没有则空数组 */
+  destructibles: DestructibleSpec[];
   testSpawn?: PlotTestSpawn;
 };
 
@@ -245,7 +251,99 @@ export type PlotAssembly = {
   plots: AssembledPlot[];
   stations: StationSpec[];
   grassPlots: GrassPlotSpec[];
+  /** v9s.x：所有地块产出的可破坏物件（绝对世界坐标，按地块 id 字典序稳定） */
+  destructibles: DestructibleSpec[];
   diagnostics: PlotDiagnostics;
+};
+
+/* ---------------- v9s.x · 可破坏物件契约 ----------------
+ *
+ * 需求：瓶罐 / 旗杆被刀砍中时，按「打到哪就从哪断」，且切口朝攻击方向倾斜。
+ * 与草块同一套纪律：定义是场景元数据（不进碰撞盒），状态是 World 里的 plain data，
+ * 表现层只读。命中点 / 挥击方向由表现层刀刃线段做 3D 相交算出，
+ * 经 Intents 送入 Core；是否真的挥到仍由 hits.currentMeleeShape 裁决（同源口径）。
+ * ------------------------------------------------------------------ */
+
+/** 表现层刀刃与物件做 3D 相交后填入 Intents 的一次命中。 */
+export type BreakHit = {
+  /** 命中的物件 id（表现层已按最近距离定好目标，Core 不再猜） */
+  id: string;
+  /** 命中点世界坐标（物件轴上离刀刃线段最近的点） */
+  x: number; y: number; z: number;
+  /** 挥击方向（世界单位向量，来自刀刃中点的帧间位移） */
+  dx: number; dy: number; dz: number;
+};
+
+/** 地块文件里的物件声明：位置是相对地块中心的偏移，绝对坐标由拼合器解算。 */
+export type PlotDestructibleDef = {
+  id: string;
+  /** 'pole' = 旗杆（任意高度可断）；'jar' = 瓶罐（吸附预设断裂带） */
+  kind: 'pole' | 'jar';
+  /** 相对地块中心的水平偏移（米） */
+  dx: number; dz: number;
+  /** 底面离地高度（米），一般 0 */
+  y?: number;
+  height: number;
+  radius: number;
+  /** 基础切面倾角（度），缺省 18 */
+  tiltDeg?: number;
+  /** 俯仰放大系数（弧度 / 单位 dy），缺省 0.85 */
+  pitchGain?: number;
+  /** 倾角上限（度），缺省 62 */
+  maxTiltDeg?: number;
+  /** 断后翻倒时长（秒），缺省 0.9 */
+  fallSec?: number;
+  /** 预设断裂带（相对高度 0..1），瓶罐用；空 = 任意高度可断 */
+  bands?: number[];
+  /** 本体 / 切口颜色（十六进制） */
+  color?: string;
+  cutColor?: string;
+};
+
+/** 拼合后的绝对坐标物件定义（Core 状态由它生成）。 */
+export type DestructibleSpec = {
+  id: string;
+  kind: 'pole' | 'jar';
+  x: number; y: number; z: number;
+  height: number;
+  radius: number;
+  tiltDeg?: number;
+  pitchGain?: number;
+  maxTiltDeg?: number;
+  fallSec?: number;
+  bands?: number[];
+  color?: string;
+  cutColor?: string;
+};
+
+/** 运行时状态：全部 plain number / 数组，随 World 一起 JSON 快照回放。 */
+export type DestructibleState = {
+  id: string;
+  kind: 'pole' | 'jar';
+  x: number; y: number; z: number;
+  height: number;
+  radius: number;
+  tiltDeg: number;
+  pitchGain: number;
+  maxTiltDeg: number;
+  fallSec: number;
+  bands: number[];
+  color: string;
+  cutColor: string;
+  /** 0 = 完好；1 = 已断 */
+  broken: number;
+  /** 断面相对高度 0..1；完好时 = 1（下半截即完整柱体） */
+  cutU: number;
+  /** 切面倾角（弧度） */
+  theta: number;
+  /** 切面法线（世界单位向量，ny 恒 > 0） */
+  nx: number; ny: number; nz: number;
+  /** 上半截翻倒轴（世界单位向量 = cross(up, dH)） */
+  ax: number; ay: number; az: number;
+  /** 当前翻倒角（弧度） */
+  fall: number;
+  /** 断裂时刻 world.time */
+  brokenAt: number;
 };
 
 /* ---------------- v9s.39 · 体素草块契约 ----------------
@@ -2910,6 +3008,11 @@ export type Intents = {
   aimX: number;
   aimZ: number;
   aimActive: boolean;
+  /**
+   * v9s.x：本帧刀刃与可破坏物件的 3D 相交结果（表现层算，Core 消费）。
+   * 刻意**可选**：EMPTY_INTENTS 不带它，冻结夹具与既有 948 例逐字节不变。
+   */
+  breakHits?: BreakHit[];
 };
 
 export const EMPTY_INTENTS: Intents = {
@@ -2989,6 +3092,8 @@ export type EventType =
   | 'ground-slam'
   /** v9s.39：一次挥击割断了草，`value` = 本次割断根数，x/z = 刀风中心 */
   | 'grass-cut'
+  /** v9s.x：打断一个可破坏物件，value = 物件索引，y = 断面世界高度 */
+  | 'break'
   /**
    * v9s.31：关键帧事件（AnimNotify）。`name` 是事件名，`value` 是附带数值。
    *
@@ -3069,6 +3174,8 @@ export type ModuleFlags = {
   dummies: boolean;
   /** v9s.39：草块模块独立开关（关闭后状态冻结、不压弯、不割断） */
   grass: boolean;
+  /** v9s.x：可破坏物件模块独立开关（关闭后不响应命中、翻倒冻结） */
+  destructibles: boolean;
 };
 
 export type World = {
@@ -3119,6 +3226,8 @@ export type World = {
   dummyAttackCount: number;
   /** v9s.39：体素草块（确定性、可序列化；表现层只读） */
   grass: GrassState;
+  /** v9s.x：可破坏物件（确定性、可序列化；表现层只读）。不配置时为空数组 */
+  destructibles: DestructibleState[];
   events: GameEvent[];
   modules: ModuleFlags;
 };

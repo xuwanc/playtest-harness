@@ -4,6 +4,7 @@ import { initialCombatState } from './combat';
 import { initialDashState, resetDash } from './dash';
 import { createDummies, resetDummies } from './dummies';
 import { createGrassState, grassReset } from './grass';
+import { createDestructibleStates, destructiblesReset } from './destructibles';
 import { initialHurt, NEVER_HURT_AT } from './hits';
 import { initialLinkState, resetLink } from './links';
 import { resetCharacter } from './movement';
@@ -83,6 +84,8 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
     dummyAttackCount: 0,
     // v9s.39：草场只在这里生成一次；冻结夹具没有 scene.grass → 空草场，行为零影响。
     grass: createGrassState(core, scene, boxes, scene.grid),
+    // v9s.x：不配置可破坏物件时是空数组，既有世界行为逐字节不变。
+    destructibles: createDestructibleStates(scene.destructibles),
     events: [],
     modules: {
       movement: true,
@@ -100,6 +103,7 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
       gaze: true,
       dummies: true,
       grass: true,
+      destructibles: true,
     },
   };
 }
@@ -148,5 +152,6 @@ export function resetWorld(world: World): void {
   g.threatCount = 0;
   g.threat = 0;
   grassReset(world);
+  destructiblesReset(world);
   world.events.length = 0;
 }
