@@ -196,7 +196,11 @@ def claim_version():
 
 
 def cmd_status(_args):
-    fetch()
+    try:
+        fetch()
+    except RuntimeError as e:
+        # 只读命令不该被 github.com 的网络抖动带崩；用本地缓存引用继续给状态。
+        print(f'  （远端同步暂不可用：{str(e)[:100]}；以下为本地缓存引用）')
     branch = git('rev-parse', '--abbrev-ref', 'HEAD')
     local = git('rev-parse', '--short', 'HEAD')
     main = git('rev-parse', '--short', 'origin/main')
@@ -312,8 +316,16 @@ def cmd_finish(args):
         return 1
     print(f'[agent-sync] PR #{pr_number} 已自动并入 main（expectedHeadSha={head_sha[:8]}）')
 
-    fetch()
-    git('branch', '-f', 'main', 'origin/main', check=False)  # 只更新引用，不切工作区（共享工作区安全）
+    # 对齐远端引用：网络抖动**不阻断发布**。发布服务走另一条通道，与 github.com 无关；
+    # 远端 main 已由上面的 merge_pull_request 成功确认，fetch 只用来刷新本地引用。
+    for attempt in range(3):
+        try:
+            fetch()
+            git('branch', '-f', 'main', 'origin/main', check=False)  # 只更新引用，不切工作区
+            break
+        except RuntimeError as e:
+            print(f'[agent-sync] fetch 对齐失败（{attempt + 1}/3）：{str(e)[:110]}；'
+                  '稍后 git fetch 补齐引用即可，继续发布')
     queue_clear(branch)
     save_state(last_merged_at=datetime.now().isoformat(timespec='seconds'))
 

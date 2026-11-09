@@ -72,3 +72,22 @@ v2 规范还留着两个由人触发的缺口：
 - `npm run smoke` 49/49（新增「完好态画在地块坐标」一项）；
 - 浏览器三张截图：中央无杆 / 地块 3 杆 2 罐完好可见 / 断后两截同位置；
 - `npm run docs:check` PASS。
+
+## 5. 首次无人值守闭环的实测与两处补强
+
+`agent-sync.py finish` 首次真跑：`npm run verify` 49/49 → `push-branch.py` 推
+28 文件 / 1.3MB → 网关建 PR #1 → `merge_pull_request(merge, expectedHeadSha)`
+自动并入 main（`e695574`，v0.9.68 / v9s.47）。**用户全程未参与**，验证了机制可行。
+
+暴露两个问题，本轮一并修：
+
+1. **网络抖动不该中断发布**：收尾的 `git fetch` 遇到 GnuTLS / 连接超时，
+   脚本异常退出，`publish:preview` 没跑到。改成 fetch 重试 3 次且失败也继续发布
+   （发布服务走另一条通道，与 github.com 无关）；`status` 同样容错。
+2. **CURRENT 里的线上链接记错了站点**：浏览器实测 `aac01946…` 是 v0.9.68 /
+   9 地块 / 物件坐标正确，`aef42c…` 还是 v0.9.67 / 8 地块。规范 §9 强调
+   「判据永远是 `publish:preview` 打印的 shareLink」，把 CURRENT 与 §9 统一到
+   发布脚本真正更新的那条，并写进规范避免再靠历史记录抄域名。
+
+补跑 `npm run publish:preview` 后线上 7/7：v0.9.68、5 件物件的渲染坐标与
+Core 状态逐项一致、9 地块、零页面异常。
