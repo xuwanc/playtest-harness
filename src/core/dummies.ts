@@ -1,5 +1,6 @@
 import { overlapsAny, resolveHorizontal, supportHeight } from './collision';
 import { initialCombatState } from './combat';
+import { initialHealth, updateHealth } from './health';
 import { initialHurt } from './hits';
 import { initialLinkState, resetLinkEntity } from './links';
 import { nextRandom } from './random';
@@ -101,21 +102,24 @@ function emitDummy(world: World, type: EventType, s: DummyState): void {
 /** 按配置创建假人。初始朝向 0（+Z），即面向相机，便于肉眼验收。 */
 export function createDummies(cfg: DummyConfig): DummyState[] {
   const list: DummyState[] = [];
+  // v9s.56：普通假人血量缺省 0 = 打不死的测试桩（旧行为）；陪练另有自己的血量。
+  const baseHp = Math.max(0, cfg.health ?? 0);
   for (let i = 0; i < cfg.count; i++) {
     const home = cfg.spawn[i] ?? { x: 0, z: 0 };
     const mode = cfg.initialModes[i] ?? 'idle';
-    list.push(createDummyState(i + 1, mode, home.x, home.z, null));
+    list.push(createDummyState(i + 1, mode, home.x, home.z, null, 0, baseHp));
   }
   // v9s.38：持械陪练追加在后面（id 连续）。它们不是另一套实体 —— 就是带武器的假人，
   // 所以点击轮转 / 威胁环 / 受击 / 击退 / 插值全部沿用同一份机制。
   const f = cfg.fighters;
   if (f) {
+    const fighterHp = Math.max(0, f.health ?? baseHp);
     for (let i = 0; i < f.weapons.length; i++) {
       const home = f.spawn[i] ?? { x: 0, z: 0 };
       const mode = f.initialModes?.[i] ?? 'spar';
       // 错开首次出手：三个陪练同时挥刀会读成「被集火」，也遮住了各自的动作
       const cd = f.attackInterval * (0.25 + 0.22 * i);
-      list.push(createDummyState(list.length + 1, mode, home.x, home.z, f.weapons[i], cd));
+      list.push(createDummyState(list.length + 1, mode, home.x, home.z, f.weapons[i], cd, fighterHp));
     }
   }
   return list;
@@ -124,6 +128,7 @@ export function createDummies(cfg: DummyConfig): DummyState[] {
 export function createDummyState(
   id: number, mode: DummyMode, x: number, z: number, weapon: WeaponId | null,
   attackCooldown = 0,
+  maxHp = 0,
 ): DummyState {
   return {
     id,
@@ -155,6 +160,7 @@ export function createDummyState(
     weapon,
     // 武器槽只用于初始化 weapon 字段，真正驱动挥击的是下面每帧同步的 phase / progress
     combat: weapon ? { ...initialCombatState(WEAPON_ORDER.indexOf(weapon) + 1), weapon } : null,
+    health: initialHealth(maxHp),
   };
 }
 
@@ -211,6 +217,14 @@ export function resetDummies(world: World): void {
     h.knockX = 0;
     h.knockZ = 0;
     resetLinkEntity(s.link);
+    // v9s.56：复位 = 满血复活。maxHp 跟随配置（读一次，避免复位时配置被改过而失同步）
+    const hp = s.health.maxHp;
+    s.health.hp = hp;
+    s.health.dead = false;
+    s.health.deadT = 0;
+    s.health.respawn = 0;
+    s.health.revive = 0;
+    s.health.kills = 0;
     // v9s.38：持械陪练复位时把挥击时间轴一并归零，否则会带着「挥到一半」的姿态回工位
     if (s.combat) {
       const c = s.combat;
@@ -514,6 +528,14 @@ function desiredDirection(
 }
 
 function updateOne(world: World, dt: number, s: DummyState, cfg: DummyConfig): void {
+  // v9s.56：尸体不做任何事 —— 不出手、不移动、不吃击退。
+  // 位置 / 朝向保持死亡那一刻（表现层据此做倒地），重生由 updateHealth 统一处理。
+  if (s.health.dead) {
+    s.velocity.x = 0;
+    s.velocity.z = 0;
+    s.velocity.y = 0;
+    return;
+  }
   s.wanderTimer -= dt;
   s.attackCooldown = Math.max(0, s.attackCooldown - dt);
   s.comboGap = Math.max(0, s.comboGap - dt);
@@ -684,5 +706,7 @@ export function dummiesUpdate(world: World, dt: number, intents: Intents): void 
   }
 
   // 2) 按 id 顺序逐个推进（顺序固定 → 种子随机消耗顺序确定）
+  // v9s.56：生命计时先于 AI —— 这一帧刚复活的人要能立刻被 AI 接管，而不是等下一帧。
+  updateHealth(world, dt);
   for (const s of world.dummies) updateOne(world, dt, s, cfg);
 }

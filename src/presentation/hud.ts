@@ -111,6 +111,15 @@ export function createHud(el: HTMLElement): Hud {
         .map((s) => `${s.id}:${MODE_LABELS[s.mode]}`)
         .join('  ');
 
+      // v9s.56：陪练血量摘要。只统计「有血可流」的单位（普通假人是 0 血木桩），
+      // 这样一行就能看出「还剩几个能打的」以及死了几只、刷了几次。
+      const hpUnits = world.dummies.filter((s) => s.health.maxHp > 0);
+      const hpSum = Math.round(hpUnits.reduce((a, s) => a + Math.max(0, s.health.hp), 0));
+      const hpMax = hpUnits.reduce((a, s) => a + s.health.maxHp, 0);
+      const hpDead = hpUnits.filter((s) => s.health.dead).length;
+      const hpKills = hpUnits.reduce((a, s) => a + s.health.kills, 0);
+      const hpLabel = hpMax > 0 ? `  hp ${hpSum}/${hpMax} 死${hpDead} 杀${hpKills}` : '';
+
       // v9c：收起态只输出一行摘要。长时间跑动 / 连击时完整读数会一直压在左上角，
       // 手机竖屏最明显；默认收起，点「状态」才展开完整读数，开始操作自动收回。
       if (compact) {
@@ -127,7 +136,7 @@ export function createHud(el: HTMLElement): Hud {
           `face ${deg(c.facing)}  body ${deg(c.bodyYaw)}  head ${deg(c.headYaw)}  move ${deg(c.moveYaw)}  st${strafePct}%  stick(${f(input.stickX)},${f(input.stickY)}) ${input.source}  str${f(c.stride)}`,
           `weapon ${label}  ${cb.phase}  combo ${cb.comboIndex}/3  atk ${f(cb.attackProgress)}  dash ${dashLabel}  ab ${atkBlendLabel}  gw/lw ${wShort}  land ${landShort}  ik ${ikShort}`,
           `aim ${aimLabel}  target ${world.targeting.hasTarget ? `#${world.targeting.targetId} @${f(world.targeting.targetDist)}m` : '无'}  hit ${world.hitCount}  hurt ${world.playerHurt.type}  lay ${hurtShort}`,
-          `dummies ${dummies}  atkCount ${world.dummyAttackCount}  cam ${(cam.threat * 100).toFixed(0)}% ×${f(cam.distanceScale)}  ${zoomLabel}  lk ${linkShort}`,
+          `dummies ${dummies}${hpLabel}  atkCount ${world.dummyAttackCount}  cam ${(cam.threat * 100).toFixed(0)}% ×${f(cam.distanceScale)}  ${zoomLabel}  lk ${linkShort}`,
           `event ${last ? `${last.type} ${f(last.value)}` : '-'}  scale ${f(debug.timeScale)}${debug.paused ? ' [P]' : ''}  g ${gestureLabel}`,
         ].join('\n');
       } else {
@@ -145,7 +154,7 @@ export function createHud(el: HTMLElement): Hud {
           linkLabel,
           `camera ${camLabel}  ${zoomLabel}`,
           `target ${world.targeting.hasTarget ? `#${world.targeting.targetId} @${f(world.targeting.targetDist)}m  face ${deg(world.targeting.targetYaw)}deg` : '无 (前方扇区内无敌人)'}   charge [${bar}] ${(cb.charge * 100).toFixed(0)}%  charging ${cb.charging ? 'Y' : 'N'}`,
-          `dummies ${dummies}   atkCount ${world.dummyAttackCount}  hit ${world.hitCount}  hurt ${world.playerHurt.type}  impulse (${f(world.impulse.x)}, ${f(world.impulse.z)})`,
+          `dummies ${dummies}${hpLabel}   atkCount ${world.dummyAttackCount}  hit ${world.hitCount}  hurt ${world.playerHurt.type}  impulse (${f(world.impulse.x)}, ${f(world.impulse.z)})`,
           `event ${last ? `${last.type} ${f(last.value)}` : '-'}   scale ${f(debug.timeScale)}${debug.paused ? ' [PAUSED]' : ''}   gesture ${gestureLabel}`,
         ].join('\n');
       }

@@ -54,6 +54,10 @@ export function spawnPlotTestUnits(world: World, plot: AssembledPlot): number {
   const modes = recipe.modes ?? DEFAULT_MODES;
   const weapons = recipe.weapons ?? world.config.dummies.fighters?.weapons ?? DEFAULT_WEAPONS;
   const fighterInterval = world.config.dummies.fighters?.attackInterval ?? 3.4;
+  // v9s.56：测试按钮生成的单位也吃同一份血量配置 —— 否则「一键摆一排陪练」全是打不死的桩，
+  // 而配置里的三个陪练能被打死，两处手感对不上。
+  const baseHp = Math.max(0, world.config.dummies.health ?? 0);
+  const fighterHp = Math.max(0, world.config.dummies.fighters?.health ?? baseHp);
 
   const created: DummyState[] = [];
   for (let k = 0; k < total; k++) {
@@ -65,7 +69,10 @@ export function spawnPlotTestUnits(world: World, plot: AssembledPlot): number {
     const mode: DummyMode = isFighter ? 'spar' : modes[k % modes.length];
     const weapon: WeaponId | null = isFighter ? weapons[fi % weapons.length] : null;
     const cd = isFighter ? fighterInterval * (0.25 + 0.22 * fi) : 0;
-    const s = createDummyState(world.dummies.length + created.length + 1, mode, x, z, weapon, cd);
+    const s = createDummyState(
+      world.dummies.length + created.length + 1, mode, x, z, weapon, cd,
+      isFighter ? fighterHp : baseHp,
+    );
     s.spawnedByPlot = plot.id;
     created.push(s);
   }

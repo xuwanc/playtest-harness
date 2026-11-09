@@ -1,23 +1,25 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-10 02:20。
+> 最后更新：2026-11-10 07:30。
 
 ## 一句话
 
-v0.9.76：**动画三件事一次做完** —— ① 待机换成**斜跨站姿**（前脚 = 最后踩出去的那只，
-停步直接接斜跨、不再把脚收回来）；② 每段攻击的**起手 / 收招**按阶段取采样点、淡入淡出与
-`windup`/`recovery` 等长，剑身三通道与整体带转也进了交叉淡出（交还那一帧 68.3° → 3.0°）；
-③ 剑盾不再复用大剑剪辑，改单手剑自己的打法，扫角 **131° → 200.5°**。
+v0.9.77：**陪练能被打死了，也有血了** —— ① `applyHit` 一个出口结算伤害（按受击类型 × 武器倍率），
+陪练 120 血，剑盾 9 刀 / 双刀 13 刀 / 大剑 4 刀；② 死亡冻结 AI，七处读假人的系统统一跳过尸体，
+3.5s 后**原地**满血刷回来（0.45s 复活保护）；③ 命中飙血三层（血珠 / 血雾 / 地面血迹），
+数据源是 `world.hitMarks` 短环形，不读事件队列。
+
+普通假人的 `health` 仍是 `0` —— 它们是测试桩，行为逐字节不变（夹具 hash 只差结构字段，已用剔除对比验证）。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.76`（内部代号 v9s.55） |
-| 线上徽标 | `v0.9.76`（构建时间随发布变化） |
+| `package.json` 版本 | `0.9.77`（内部代号 v9s.56） |
+| 线上徽标 | `v0.9.77`（构建时间随发布变化） |
 | 发布方式 | `npm run ship`（构建 → 推 main → 重建 `preview` 产物；带凭证自恢复与推送重试） |
-| 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— **已开启且 200**（Pages: branch `preview` / `(root)`），此链接固定不变 |
+| 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— 此链接固定不变 |
 | 蜘蛛开局 | <https://xuwanc.github.io/playtest-harness/?hero=spider> |
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
@@ -27,62 +29,62 @@ v0.9.76：**动画三件事一次做完** —— ① 待机换成**斜跨站姿*
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 107 文件 / 1065 例全绿 |
+| `npx vitest run` | 109 文件 / 1081 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
 | `npm run smoke` | 53/53 PASS |
-| `npm run docs:check` | PASS（87 份文档 ≤300 行，README 98 行） |
-| `npm run clip:lab:check` | 9 段全 PASS（剑盾 200.5° / 182.6°） |
+| `npm run docs:check` | PASS（90 份文档 ≤300 行，README 99 行） |
+| `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
-| `python3 tools/check-online.py --wait 180` | PASS（线上 JS `main-DGeEthZi.js` = 本地 dist，徽标 v0.9.76） |
+| `python3 tools/check-online.py --wait 180` | 发布后核验线上 JS 与本地 `dist` 同一份 |
+| `python3 tools/blood-shot.py` | 10 张：命中 3 帧 / 落地 / 倒下 / 沉没 / 升起 |
 
 ## 正在做
 
-- 无。v9s.55（v0.9.76）待合入 main。
+- 无。v9s.56（v0.9.77）已合并发布。
 
-## 站姿与进出场的关键数（改之前先读）
+## 伤害 / 死亡的关键数（改之前先读）
 
 | 参数 | 值 | 为什么 |
 |---|---|---|
-| `view.gait.idleStance.hipYaw` | 0.16 rad | **「斜跨」的读感来源**：只转下半身、胸口仍朝目标；调到 0 就退回「两脚前后站」 |
-| `frontPitch` / `backPitch` | 0.16 / 0.14 rad | 前后脚开度；再大就成弓步 |
-| `shift` / `sink` | 0.03 m / 0.012 m | 重心侧移与下沉，**必须在 `captureIKBase` 之后叠** |
-| `enterSpeed` / `exitSpeed` | 0.18 / 0.55 m/s | 速度门控；中间线性过渡，`smoothing 7` 一阶平滑 |
-| 起手 fading | `max(0.1, windup × 0.75)` | 蓄势帧要留 1/4 windup 定格 |
-| 收招 fading | `max(0.16, (recovery + settle/2) × 0.85)` | 剑盾 0.298s、大剑 0.374s |
-| `swingDebug().poseW` | 0..1 | `poseW < 1` 的帧量出来的刃身角度是混合值，测稳态要先筛帧 |
-| 剑盾 `weaponScale` | 1.0 | 0.78 是把双手武器角度硬缩，会「没舒展开」 |
+| `dummies.health` | `0` | **普通假人打不死**：它们是测试桩，死了会让工位失效 |
+| `dummies.fighters.health` | `120` | 剑盾 9 刀、双刀 13 刀、大剑 4 刀 |
+| `hits.damage` | light 12 / heavy 18 / knock 26 | 按**受击类型**查表，不按武器 —— 类型已按「武器 × 段数」定过档 |
+| `hits.damageMul` | 剑盾 1.0 / 双刀 0.7 / 大剑 1.4 | 重量差从数字上读得出来 |
+| `fighters.respawnSec` | 3.5s | 原地满血，不回 home |
+| `REVIVE_GUARD` | 0.45s | 与起身 `riseSec` 同长；没有它，站在尸体上连打会秒掉刚刷出来的人 |
+| `HIT_MARK_CAP` | 24 | 命中记录环形；进快照，所以 golden hash 变过一次 |
+| 血珠 / 血雾 / 血迹 | 13 滴 0.46s / 1 团 0.15s / ~8 块 6.5s | 三层缺一层就读不出血 |
 
-细节：[`../systems/idle-stance.md`](../systems/idle-stance.md)、
-[`../systems/pose-entry.md`](../systems/pose-entry.md)。
+细节：[`../systems/damage-death.md`](../systems/damage-death.md)、[`../systems/blood.md`](../systems/blood.md)。
 
 ## 下一步
 
-1. **转身期间站姿权重为 0**：转完再升回来，中间有 0.15s「并腿」过渡；要消掉得让站姿
-   跟着转身进度插值。
-2. **剑盾段间仍是连续承接**：换段跳变靠 `segBlend`（0.08s）掩，要压到 70° 以内需改共享锚点。
-3. **三段节奏同质**：三种武器九段配比完全一致（`animation.md` §3.1），应做成逐段递减。
-4. **陪练没接进出场验收**：`probe-entry.py` 只读主角，`fighter-rig` 复用同一骨架但没测。
-5. **`config/game.json` 拆分**：`core.gait` / `core.combat` / `view.*` 仍未拆。
-6. 可破坏物件后续：二次断裂、瓶罐收腰轮廓、旗面挂上半截、碎片 / 音效。
+1. **尸体不可碰撞**：`separation` 跳过死者，玩家能穿过尸体；要更实需要给 Core「尸体是障碍」的语义。
+2. **血不跟骨骼**：命中点是「脚底 + 身高比例」，打头打脚喷的位置一样。
+3. **血迹不分材质**：台阶侧面也会贴一块平的（`groundY` 取脚下支撑面）。
+4. **陪练没有血量 UI**：只有 HUD 一行摘要 + 倒地本身；头顶血条是产品决定，没做。
+5. **转身期间站姿权重为 0**（v9s.55 遗留）：转完再升回来，中间 0.15s「并腿」过渡。
+6. **剑盾段间仍是连续承接**：换段跳变靠 `segBlend`（0.08s）掩。
+7. **三段节奏同质**：三种武器九段配比完全一致，应做成逐段递减。
+8. **`config/game.json` 拆分**：`core.gait` / `core.combat` / `view.*` 仍未拆。
 
 ## 已知风险
 
 见 [`../risk-review.md`](../risk-review.md)。本轮变化：
 
-- **斜跨会污染静态对照用例**：受击 / 落地 / 攻击下盘等 11 个用例必须用 `GAIT_NO_IDLE`
-  关掉站姿，否则「关闭后精确归零」的断言全部失效（已处理，但新增同类用例要记得）。
-- **剑身通道漏乘 `poseW` 就会闪**：以后新增任何「剑身类」通道（仰角 / 外撇 / 滚转 / 带转）
-  都必须乘 `combatPoseW`，否则交还那一帧硬切。
-- **`poseIn/poseOut` 的 0 有语义**：显式配 0 = 关掉过渡（A/B 对照），读原值必须
-  `Number.isFinite`，用 `??` / `||` 会被默认值吃掉。
-- **`ship` 只推分支、不等 Pages 构建**：本批 Pages 连挂两次（`abandoned` / `failed`），线上
-  继续发旧包而版本号看不出区别。现由 `ship.sh` 末尾的 `check-online.py` 兜住（只提示、不改退出码）。
-- **低帧率下淡入变短**：`fadeDur` 按秒算、`combatPoseW` 按帧推进，20 fps 时 0.1s 只有 2 帧，
-  起手会比 60 fps 更「脆」。这是固定步长的固有权衡，未做补偿。
+- **木桩喷血是个陷阱**：`maxHp = 0` 的单位必须跳过 `pushHitMark`（否则砍测试桩也出血）。
+  但**不能**因此提前 `return` —— 那会把卡肉也一起跳过。判断要包在 `if` 里，不是守卫语句。
+- **死亡要跳过的系统有七处**：命中结算 / 近战·击地·派生扫描 / AI / 索敌 / 注视 / 分离 / 脚下环。
+  新增任何「按 dummies 遍历」的模块，都要问一句「尸体该不该算」。
+- **`hitMarks` 进快照**：改记录结构或容量会让 `determinism` golden 漂移；
+  确认是结构差异而不是行为差异的方法：把新字段剔除后重算 hash，应等于旧值。
+- **血的颜色会和衣服撞**：红衣陪练 + 红血 = 看不见。验收换紫衣大剑陪练。
+- **金快照（golden hash）本批变了两次**：一次是新字段，一次是「木桩不记命中」。这是预期内的。
 
-上一轮（造型 / 蜘蛛）遗留，仍有效：
+上一轮遗留，仍有效：
 
+- **斜跨会污染静态对照用例**：新增同类用例要用 `GAIT_NO_IDLE`。
+- **剑身通道漏乘 `poseW` 就会闪**：新增任何剑身类通道都乘 `combatPoseW`。
+- **`ship` 只推分支、不等 Pages 构建**：`ship.sh` 末尾用 `check-online.py` 兜（只提示）。
 - **脚滑**：步幅 0.66 后冲刺（4.5 m/s）脚滑 12%，低速 0。
 - **蜘蛛无武器**：`bladesWorld()` 返回 null，打不到可破坏物。
-- **`hub` 钉在原点 → 地图只会往东北长**，西南侧永远是边界。
-- **地块 id 改名 = 重排**：排在后面的地块会顺延，旧截图与旧坐标假设全部失效。

@@ -39,6 +39,8 @@
 | 前进切后退（或左右换向）时腿抽一下 | `presentation/gait.ts` | `slewDirSign`、`dirDrive`、`GaitInput.dirF` | [systems/animation-notes-4.md](systems/animation-notes-4.md) §18 | `tests/v9s43-reverse-blend.test.ts`、`npm run smoke`「换向不抽腿」 |
 | 站定两脚并拢、停下像把最后一步撤回去 / 想要斜跨站姿 | `presentation/gait.ts`、`voxel-rig.ts` 的 2.04 段 | `solveIdleStance`、`mixIdleStance`、`leadFootIsLeft`、`idleStanceTarget`、`idleSink/idleShift/idleHipYaw` | [systems/idle-stance.md](systems/idle-stance.md) | `tests/v9s55-idle-stance.test.ts`、`python3 tools/stance-shot.py` |
 | 起手一帧抬手 / 收招停在半挥 / 打完回待机闪一下 | `voxel-rig.ts` 的 `posePhaseU`、`combatPoseW`、`applyBladeTarget` | `posePhaseU`、`combatPoseW`、`fadeTarget`、`poseW`、`bladePitch × w` | [systems/pose-entry.md](systems/pose-entry.md) | `tests/v9s55-pose-entry.test.ts`、`python3 tools/probe-entry.py` |
+| 打中只有卡肉 / 没有血 / 想要飙血 | `presentation/blood-fx.ts`、`core/health.ts` 的 `pushHitMark` | `createBloodFx`、`HitMark`、`HIT_MARK_CAP`、`FX_ORDER.bloodDrop/Stain/Mist` | [systems/blood.md](systems/blood.md) | `tests/v9s56-damage-blood.test.ts`、`python3 tools/blood-shot.py` |
+| 陪练打不死 / 打死了不消失 / 死了不刷新 | `core/health.ts`、`core/dummies.ts`、`three-scene.ts` 的 `applyDeathPose` | `damageDummy`、`killDummy`、`reviveDummy`、`updateHealth`、`REVIVE_GUARD` | [systems/damage-death.md](systems/damage-death.md) | `tests/v9s56-damage-blood.test.ts`、`__harness.deathDebug(id)` |
 | 剑盾挥剑不舒展 / 扫角只有 130° / 剑扫到身后看不见 | `config.view.animation.swing` 的 `ss.*` 与 `weaponScale` | `armYaw` 换向、`elbow` 行程、`armLPitch`/`elbowL`（盾臂） | [systems/pose-entry.md](systems/pose-entry.md) §三 | `npm run clip:lab:check`、`python3 tools/swing-shot.py` |
 | 截图放哪 / 能不能入库 | `shots/`（`.gitignore` 已挡） | — | [assets/conventions.md](assets/conventions.md) | `git status` 里不该出现 png |
 | 刀光 / 斩击弧不出现 | `presentation/three-scene.ts` | `weapon-trail.ts`、`FX_ORDER.trail / slash` | [systems/presentation-fx.md](systems/presentation-fx.md) | `__harness.fxDebug()` |
@@ -100,6 +102,8 @@
 | `scene-burst-fx.ts` | 一次性贴地光环：冲刺尘环 / 派生招 / 击地冲击的池化与触发 | `createBurstFx`、`slamDebug` |
 | `fx-layer.ts` | **特效层级唯一来源** | `FX_ORDER`、`setFxOrder` |
 | `voxel-rig.ts` | 人形主角骨架装配 + 逐帧姿态解算（含**姿态进出场**：`posePhaseU` 定采样点、`combatPoseW` 定交叉淡出） | `createVoxelRig`、`rig.update`、`posePhaseU`、`combatPoseW`、`bladeWorld` |
+| `health.ts` | **生命值 / 死亡 / 重生**（Core）：扣血、判死、复活保护、命中记录环形 | `damageDummy`、`killDummy`、`reviveDummy`、`updateHealth`、`pushHitMark` |
+| `blood-fx.ts` | 命中飙血三层：血珠（InstancedMesh）/ 血雾 / 地面血迹 | `createBloodFx`、`spawnBurst`、`spawnStain` |
 | `gait.ts` | **程序化步态解算（纯函数）**：相位推进 / 反向前后融合 / 停步惯性 / 转身闸门 / **待机斜跨站姿** | `solveGait`、`slewDirSign`、`solveStopInertia`、`solveIdleStance`、`leadFootIsLeft` |
 | `spider-rig.ts` | **8 腿主角骨架**：两节身体 + 三角步态 + 每腿两骨闭式解（按 `bodyTypes.rig` 切换） | `createSpiderRig`、`solveLeg`、`debug()`、`legs()` |
 | `beard.ts` / `voxel-rig.ts` 的 `style` 段 | **造型特征**：驼背 / 屈膝 / 地中海（一盒穿三面）/ 长白胡子（三节 × 前后左右两通道）/ 肩甲 / 呼吸 | `CharacterStyle`、`solveBeard`、`beardAvoidAt`、`createBeardState` |
@@ -141,7 +145,7 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（107 文件 / 1065 例） | 提交前 |
+| `npm test` | vitest 全量（109 文件 / 1081 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
 | `npm run smoke` | 起 `dist/`，跑 53 项画面层 + 契约自检 | 发布前 |
@@ -191,6 +195,8 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/animation.md`](systems/animation.md) | 连击骨架锚点 / 平衡 / 节奏 / 加动作清单（规范） |
 | [`systems/idle-stance.md`](systems/idle-stance.md) | 待机斜跨站姿：前脚锁定、三条「不写」、参数与门控 |
 | [`systems/pose-entry.md`](systems/pose-entry.md) | 动作进出场：起手接待机、收招交还待机、剑身通道也要淡 |
+| [`systems/damage-death.md`](systems/damage-death.md) | 伤害 / 血量 / 死亡 / 重生：三个旋钮、七处跳过、倒→沉→升 |
+| [`systems/blood.md`](systems/blood.md) | 命中飙血：三层、为什么不用事件队列、调参经验 |
 | [`systems/animation-notes-1/2/3/4.md`](systems/animation-notes-1.md) | 按版本追加的动画落地细节（补充，非规范） |
 | [`systems/movement-facing.md`](systems/movement-facing.md) | 移动 / 朝向四角 / 分离 / 边界 |
 | [`systems/camera-targeting.md`](systems/camera-targeting.md) | 智能相机、软锁定、两级注视 |
@@ -222,4 +228,4 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`decisions/ADR-008`](decisions/ADR-008-grass.md) | 草块状态在 Core、几何在表现层、判定复用 hits |
 | [`decisions/ADR-009`](decisions/ADR-009-plot-slabs.md) | 测试场地块化：模数 5m + 整数跨格拼底板（已实现，v9s.49） |
 | [`decisions/ADR-010`](decisions/ADR-010-spider-locomotion.md) | 蜘蛛：复用的是解算器不是动画，不引入 FullBodyIK（已实施，v9s.51 造型/步幅/惯性定型） |
-| [`journal/`](journal/) | 按日期的迭代记录（44 份，2026-11-05 起；`-00` 是功能总表，`-02` 是 v9s.41 换腿、`-06` 是 v9s.45 慢放、`-08-plot-slabs` 是 v9s.49 底板、`2026-11-10-02` 是 v9s.55 站姿与进出场；带 `<主题>` 后缀的按内容命名） |
+| [`journal/`](journal/) | 按日期的迭代记录（45 份，2026-11-05 起；`-00` 是功能总表，`-02` 是 v9s.41 换腿、`-06` 是 v9s.45 慢放、`-08-plot-slabs` 是 v9s.49 底板、`2026-11-10-02` 是 v9s.55 站姿与进出场、`-03` 是 v9s.56 飙血与死亡重生；带 `<主题>` 后缀的按内容命名） |

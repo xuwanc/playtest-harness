@@ -26,6 +26,7 @@ import { createFighterRig } from './fighter-rig';
 import type { FighterGaitDebug } from './fighter-rig';
 import { createLabLayer } from './lab-scene';
 import { createBurstFx } from './scene-burst-fx';
+import { createBloodFx } from './blood-fx';
 import {
   areaOpen, createArcMeter, createAreaRing, createGroundRing, dummyWindupWarning, fadeTowards,
   ringGroundHeight,
@@ -101,6 +102,13 @@ export type SceneView = {
   destructibleDebug(): DestructibleDebug;
   /** v9s.40：持械陪练的步态读数（简化假人没有腿骨架 → null） */
   dummyRigDebug(id: number): FighterGaitDebug | null;
+  /** v9s.56：飙血特效读数（喷发次数 / 活跃血珠 / 活跃血迹 / 已播到的 seq） */
+  bloodDebug(): { bursts: number; drops: number; stains: number; lastSeq: number };
+  /**
+   * v9s.56：假人死亡的渲染读数（倒地角 / 下沉量 / 是否已沉入地面）。
+   * 验收「打死后是不是真躺下了、重生是不是从地里升起来」直接读这里，不靠肉眼猜。
+   */
+  deathDebug(id: number): { dead: boolean; fall: number; sink: number; rise: number; y: number } | null;
   /**
    * v9s.38：特效层级读数（发布自检用）。
    * `boxOpaque` = 地块是否走不透明通道（旧版透明地面会盖掉刀光）；
@@ -516,6 +524,8 @@ export function createSceneView(
     }
     // 所有子节点都带上 id，射线命中身体、标签或攻击弧都能识别
     rig.group.traverse((obj) => { obj.userData.dummyId = s.id; });
+    // v9s.56：死亡是「先转身再后倒」：YXZ 让 yaw 先应用，X 轴才是身体局部的前后轴
+    rig.group.rotation.order = 'YXZ';
     scene.add(rig.group);
     return rig;
   }
@@ -854,6 +864,9 @@ export function createSceneView(
 
   // ---- 一次性贴地光环（冲刺 / 派生招 / 击地）：池化、触发与生命周期都在 scene-burst-fx ----
   const burstFx = createBurstFx(scene, view, world, groundFxY);
+  // v9s.56：命中飙血（血珠 / 血雾 / 地面血迹）。数据源是 Core 的 hitMarks 环形，
+  // 不读事件队列 —— 低帧率一帧多步时事件会被覆盖，血花就会漏。
+  const bloodFx = createBloodFx(scene, view, groundFxY);
 
 
   // ---- 2.5D 相机（叠加 Core 的智能构图意图） ----
@@ -905,6 +918,7 @@ export function createSceneView(
       warn.dispose();
       selMix.pop();
       haloMix.pop();
+      deathState.pop();
     }
     if (shrunk) {
       for (let i = 0; i < n; i++) {
@@ -913,6 +927,63 @@ export function createSceneView(
         dummyRigs[i].group.traverse((obj) => { obj.userData.dummyId = id; });
       }
     }
+  }
+
+  // ---- v9s.56：假人死亡 / 重生的整体变换 ----
+  const deathCfg = view.dummies.death;
+  const deathState: Array<{ dead: boolean; fall: number; sink: number; rise: number; y: number }> = [];
+
+  /**
+   * 把「死亡曲线」叠到假人根节点上（两条骨架共用）。
+   *
+   * 曲线由 Core 的三个字段完全决定，表现层不自己计时：
+   *   - `deadT`  → 倒下进度（0..fallSec）
+   *   - `respawn` → 沉入进度（最后 sinkSec 内从 0 沉到 sinkDepth）
+   *   - `revive`  → 升起进度（重生后 riseSec 内从地里升回来）
+   * 三段首尾相接，所以「躺下 → 沉掉 → 升起来」是连续的，中间没有跳帧。
+   */
+  function applyDeathPose(i: number, s: DummyState): void {
+    const rig = dummyRigs[i];
+    let st = deathState[i];
+    if (!st) {
+      st = { dead: false, fall: 0, sink: 0, rise: 1, y: s.position.y };
+      deathState[i] = st;
+    }
+    const h = s.health;
+    if (!deathCfg || !h || h.maxHp <= 0) {
+      // 打不死的测试桩：清掉可能残留的变换（配了死亡参数之后又改回 0 血量）
+      st.dead = false; st.fall = 0; st.sink = 0; st.rise = 1; st.y = s.position.y;
+      rig.group.rotation.x = 0;
+      return;
+    }
+    const fallRad = (deathCfg.fallDeg * Math.PI) / 180;
+    const smooth = (x: number): number => {
+      const t = x < 0 ? 0 : x > 1 ? 1 : x;
+      return t * t * (3 - 2 * t);
+    };
+    if (h.dead) {
+      const fall = smooth(h.deadT / Math.max(deathCfg.fallSec, 1e-3));
+      const sink = smooth(1 - h.respawn / Math.max(deathCfg.sinkSec, 1e-3));
+      if (!st.dead) {
+        // 刚倒下那一下：镜头轻震 + 在读数量里留个标记（fatal 血花由 Core 的 hitMark 驱动）
+        cam.addShake(0.42);
+      }
+      st.dead = true;
+      st.fall = fall;
+      st.sink = sink;
+      st.rise = 0;
+    } else if (h.revive > 0) {
+      const rise = smooth(1 - h.revive / Math.max(deathCfg.riseSec, 1e-3));
+      st.dead = false;
+      st.fall = 1 - rise;
+      st.sink = 1 - rise;
+      st.rise = rise;
+    } else {
+      st.dead = false; st.fall = 0; st.sink = 0; st.rise = 1;
+    }
+    rig.group.rotation.x = -fallRad * st.fall;
+    st.y = s.position.y - deathCfg.sinkDepth * st.sink;
+    rig.group.position.y = st.y;
   }
 
   function pickDummy(clientX: number, clientY: number): number {
@@ -1001,6 +1072,14 @@ export function createSceneView(
     },
     slamDebug() {
       return burstFx.slamDebug();
+    },
+    bloodDebug() {
+      return bloodFx.debug();
+    },
+    deathDebug(id) {
+      const i = world.dummies.findIndex((d) => d.id === id);
+      if (i < 0) return null;
+      return deathState[i] ?? null;
     },
     yawDebug() {
       return { target: yawTarget, shown: yawSmoother.value, tauMs: view.renderInterp?.yawSmoothMs ?? 0 };
@@ -1134,6 +1213,13 @@ export function createSceneView(
           if (w.dummies[i]) dummyRigs[i].update(w.dummies[i], animDt, w.time);
         }
       }
+      // v9s.56：死亡 / 重生是**表现层叠加**在骨架上的整体变换（绕脚底后倒 → 沉入地面 → 升起）。
+      // 不放进 rig：骨架接口是「按 Core 状态解算姿态」，倒地是整机变换，两条骨架
+      // （简化假人 / 持械陪练）都该一模一样，写在调用方只有一份。
+      for (let i = 0; i < dummyRigs.length; i++) {
+        const d = w.dummies[i];
+        if (d) applyDeathPose(i, d);
+      }
 
       // v9s.9 / v9s.10：脚下半环 —— 弧心朝相机侧（屏幕下方），假人颜色读 Core 威胁等级
       const camPos = cam.camera.position;
@@ -1205,6 +1291,13 @@ export function createSceneView(
           warnArc.mesh.visible = false;
           continue;
         }
+        // v9s.56：尸体脚下不该还有「威胁环 / 选中光晕 / 起手预警」
+        if (d.health.dead) {
+          ring.mesh.visible = false;
+          halo.mesh.visible = false;
+          warnArc.mesh.visible = false;
+          continue;
+        }
         const selected = w.targeting.hasTarget && w.targeting.targetId === d.id;
         if (isHostileDummy(w, d)) {
           const level = dummyThreatLevel(w, d);
@@ -1269,6 +1362,8 @@ export function createSceneView(
       // 一次性贴地光环（冲刺尘环 / 派生招 / 击地冲击）：触发读 Core 的持久 id，
       // 池化与生命周期在 scene-burst-fx 内推进；shake 回调只用于击地那一下的镜头下压。
       burstFx.update(w, frameDt, (amount) => cam.addShake(amount));
+      // 飙血用真实帧时长：卡肉只冻结角色姿态，血已经溅出去了，跟着冻反而读作「时间停了」
+      bloodFx.update(w, frameDt);
 
       // v9s.22：轻击不再画「斩击弧」—— 那是一个固定在身前的白色环，和真实刀轨
       // 没关系，反而会盖住贴刀身的拖尾。只有 comboIndex >= 3 的重击保留弧光，
@@ -1576,6 +1671,7 @@ export function createSceneView(
       glowTex.dispose();
       trailTex.dispose();
       burstFx.dispose();
+      bloodFx.dispose();
       boxGroup.traverse((obj) => {
         if (obj instanceof THREE.Mesh) obj.geometry.dispose();
       });

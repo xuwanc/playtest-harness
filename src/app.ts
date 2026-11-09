@@ -328,6 +328,21 @@ export function startApp(): void {
     fxDebug: () => view.fxDebug(),
     /** v9s.39：草块渲染读数（实例数 / draw call / dirty / 压弯 / 割断 / 碎片） */
     grassDebug: () => view.grassDebug(),
+    /** v9s.56：飙血读数（喷发次数 / 活跃血珠 / 活跃血迹 / 已播到的 seq） */
+    bloodDebug: () => view.bloodDebug(),
+    /** v9s.56：某个假人的死亡渲染读数（倒地角 / 下沉量 / 升起量） */
+    deathDebug: (id: number) => view.deathDebug(id),
+    /** v9s.56：假人血量快照（血量 / 是否死亡 / 距重生 / 击杀数），验收直接读 */
+    dummyHealth: () => world.dummies.map((d) => ({
+      id: d.id,
+      weapon: d.weapon,
+      hp: d.health.hp,
+      maxHp: d.health.maxHp,
+      dead: d.health.dead,
+      respawn: d.health.respawn,
+      revive: d.health.revive,
+      kills: d.health.kills,
+    })),
     /**
      * v9s.x：可破坏物件读数。cuts 给每个已断物件的断面高度 / 倾角 / 法线 / 翻倒角，
      * 验收「高处打从高处断、切口朝攻击方向」直接读这里。
@@ -372,6 +387,12 @@ export function startApp(): void {
     },
     /** v9s.35：主循环是否被 clip 工具台锁住（锁住时 view.render 完全不跑，画面定格） */
     renderHold: () => clipHold,
+    /**
+     * v9s.56：手动锁画面（配合 `paused` + `stepOnce` + `view.render`）。
+     * 飙血 / 倒地这种「几百毫秒就过去了」的表现，实时抓帧必然错过；锁住主循环之后
+     * 由脚本逐帧推进，才能精确停在「血在空中」「尸体躺下」「从地里升起」那几帧。
+     */
+    holdRender: (on: boolean) => { clipHold = !!on; return clipHold; },
     // v9s.32：挥空时刀光增亮的读数（证明「不震屏也有反馈」）
     trailDebug: () => view.trailDebug(),
     // v9s.26：刃身两端世界坐标（验收横扫仰角，避免被斜俯视截图误导）
