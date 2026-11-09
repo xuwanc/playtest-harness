@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>蜘蛛角色可行性原型 · 8 腿三角步态 + 解析式三骨 IK</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0b0d10; overflow: hidden;
+    font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: #cfd6e4; }
+  #app { position: fixed; inset: 0; }
+  #panel { position: fixed; top: 12px; left: 12px; width: 236px; padding: 10px 12px;
+    background: rgba(16,20,26,.88); border: 1px solid #263041; border-radius: 8px; }
+  #panel h1 { margin: 0 0 8px; font-size: 12px; letter-spacing: .04em; color: #7fe0c0; font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+  .row label { flex: 0 0 78px; color: #8b97a8; }
+  .row output { flex: 0 0 42px; text-align: right; color: #e6edf7; }
+  input[type=range] { flex: 1; min-width: 0; accent-color: #3fb98c; }
+  #stats { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #263041; color: #7c8798; white-space: pre; }
+  #hint { position: fixed; bottom: 12px; left: 12px; color: #5d6879; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="panel">
+  <h1>SPIDER · 8 LEGS</h1>
+  <div class="row"><label>速度</label><input id="speed" type="range" min="0" max="3.2" step="0.05" value="1.4"><output id="o-speed"></output></div>
+  <div class="row"><label>步幅</label><input id="stride" type="range" min="0.15" max="0.9" step="0.01" value="0.42"><output id="o-stride"></output></div>
+  <div class="row"><label>支撑比</label><input id="duty" type="range" min="0.45" max="0.8" step="0.01" value="0.6"><output id="o-duty"></output></div>
+  <div class="row"><label>抬腿</label><input id="lift" type="range" min="0" max="0.24" step="0.005" value="0.09"><output id="o-lift"></output></div>
+  <div class="row"><label>体高</label><input id="height" type="range" min="0.18" max="0.72" step="0.01" value="0.38"><output id="o-height"></output></div>
+  <div class="row"><label>转向</label><input id="turn" type="range" min="-1.6" max="1.6" step="0.05" value="0"><output id="o-turn"></output></div>
+  <div id="stats"></div>
+</div>
+<div id="hint">三角步态（alternating tripod）· 每条腿 = 腿根 yaw + 两骨闭式 IK · 支撑脚世界坐标锁死</div>
+
+<script type="importmap">
+{ "imports": { "three": "/node_modules/three/build/three.module.js" } }
+</script>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

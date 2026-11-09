@@ -201,4 +201,5 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`decisions/ADR-007`](decisions/ADR-007-knockback-default.md) | 默认配置反映真实手感 |
 | [`decisions/ADR-008`](decisions/ADR-008-grass.md) | 草块状态在 Core、几何在表现层、判定复用 hits |
 | [`decisions/ADR-009`](decisions/ADR-009-plot-slabs.md) | 测试场地块化：模数 5m + 整数跨格拼底板（已实现，v9s.49） |
+| [`decisions/ADR-010`](decisions/ADR-010-spider-locomotion.md) | 蜘蛛：复用的是解算器不是动画，不引入 FullBodyIK（**待批准**，原型 `prototype/spider/`） |
 | [`journal/`](journal/) | 按日期的迭代记录（36 份，2026-11-05 起；`-00` 是功能总表，`-02` 是 v9s.41 换腿、`-06` 是 v9s.45 慢放、`-08-plot-slabs` 是 v9s.49 底板；带 `<主题>` 后缀的按内容命名） |
