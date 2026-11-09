@@ -20,6 +20,7 @@ export * from './targeting';
 export * from './turn-in-place';
 export * from './gaze';
 export * from './grass';
+export * from './destructibles';
 export * from './world';
 export * from './step';
 export * from './pathfinding';

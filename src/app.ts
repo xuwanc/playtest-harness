@@ -7,7 +7,7 @@ import { clampZoom } from './adapters/pinch';
 import { createRecorder } from './adapters/telemetry';
 import {
   EMPTY_INTENTS, WEAPON_ORDER, clearPlotTestUnits, createWorld,
-  plotTestUnitCount, spawnPlotTestUnits,
+  destructiblesReset, forceBreak, plotTestUnitCount, spawnPlotTestUnits,
 } from './core';
 import type { Intents, WeaponId } from './core';
 import { CORE_CONFIG, SCENE_CONFIG, VIEW_CONFIG, PLOTS, PLOT_ASSEMBLY } from './config';
@@ -317,6 +317,27 @@ export function startApp(): void {
     /** v9s.39：草块渲染读数（实例数 / draw call / dirty / 压弯 / 割断 / 碎片） */
     grassDebug: () => view.grassDebug(),
     /**
+     * v9s.x：可破坏物件读数。cuts 给每个已断物件的断面高度 / 倾角 / 法线 / 翻倒角，
+     * 验收「高处打从高处断、切口朝攻击方向」直接读这里。
+     */
+    breakDebug: () => ({
+      version: __APP_VERSION__,
+      count: world.destructibles.length,
+      broken: world.destructibles.filter((s) => s.broken !== 0).length,
+      cuts: world.destructibles.map((s) => ({
+        id: s.id, kind: s.kind, broken: s.broken, cutU: s.cutU, theta: s.theta,
+        nx: s.nx, ny: s.ny, nz: s.nz, fall: s.fall, height: s.height,
+      })),
+      rendered: view.destructibleDebug(),
+    }),
+    /** 自动化 / 演示：以给定命中点打断指定物件，走与真机同一个 cutPlane。 */
+    breakTest: (id: string, y: number, dx = 1, dy = 0, dz = 0) =>
+      forceBreak(world, id, y, dx, dy, dz),
+    /** 复位所有物件到完好直立（不动玩家 / 战斗）。 */
+    resetBreaks: () => { destructiblesReset(world); return world.destructibles.length; },
+    /** 本帧刀刃相交候选（表现层 → Intents 的那一层）。 */
+    breakHits: () => view.breakHits(),
+    /**
      * v9s.42：风场读数 / 热切换（验收「默认开 + 按钮可关」）。
      * configured = 配置里的开关（点按钮立即变）；rendered = 草层上一帧实际写进
      * uniform 的值（会滞后一帧，两者分开报，避免把渲染节拍误读成开关没生效）。
@@ -501,7 +522,12 @@ export function startApp(): void {
 
     lastFrame = {
       ...sampled,
-      intents: { ...sampled.intents, dummyClickId: pendingDummyClick } as Intents,
+      intents: {
+        ...sampled.intents,
+        dummyClickId: pendingDummyClick,
+        // v9s.x：表现层算出的 3D 刀刃相交候选，Core 消费并按本帧刀风裁决。
+        breakHits: view.breakHits(),
+      } as Intents,
     };
     // v9f：逐步收集事件（掉帧补算多步时只有最后一步的留在 world.events 里）
     const steps = clock.frame(dt, lastFrame.intents, debug.timeScale, debug.paused, () => {

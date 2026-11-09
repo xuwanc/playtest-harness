@@ -1,0 +1,73 @@
+{
+  "id": "x-destructibles",
+  "name": "可破坏物件 · 斜切断口",
+  "hint": "站高台打=高处断，平地打=低处断；切口朝挥刀方向斜切 · 瓶罐只断预设带",
+  "radius": 2.0,
+  "color": "#e8a05c",
+  "owner": "可破坏物件（auto 地块，只写相对偏移；id 不带版本代号，由合并闸门统一领号；排在 sparring-demo 之后不抢槽位）",
+  "destructibles": [
+    {
+      "id": "pole-a",
+      "kind": "pole",
+      "dx": -1.25,
+      "dz": -1.0,
+      "height": 2.4,
+      "radius": 0.11,
+      "tiltDeg": 20,
+      "color": "#8a6b4a",
+      "cutColor": "#f0d2a0"
+    },
+    {
+      "id": "pole-b",
+      "kind": "pole",
+      "dx": 0,
+      "dz": -1.0,
+      "height": 2.8,
+      "radius": 0.11,
+      "tiltDeg": 20,
+      "color": "#8a6b4a",
+      "cutColor": "#f0d2a0"
+    },
+    {
+      "id": "pole-c",
+      "kind": "pole",
+      "dx": 1.25,
+      "dz": -1.0,
+      "height": 2.0,
+      "radius": 0.11,
+      "tiltDeg": 20,
+      "color": "#8a6b4a",
+      "cutColor": "#f0d2a0"
+    },
+    {
+      "id": "jar-a",
+      "kind": "jar",
+      "dx": -0.7,
+      "dz": -1.8,
+      "height": 0.9,
+      "radius": 0.28,
+      "tiltDeg": 14,
+      "bands": [
+        0.35,
+        0.62
+      ],
+      "color": "#6f8fb8",
+      "cutColor": "#d8e4f0"
+    },
+    {
+      "id": "jar-b",
+      "kind": "jar",
+      "dx": 0.7,
+      "dz": -1.8,
+      "height": 0.8,
+      "radius": 0.26,
+      "tiltDeg": 14,
+      "bands": [
+        0.4,
+        0.68
+      ],
+      "color": "#b87f6f",
+      "cutColor": "#f0d8c8"
+    }
+  ]
+}

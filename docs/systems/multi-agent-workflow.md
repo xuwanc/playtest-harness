@@ -70,7 +70,9 @@ git add -A && git commit -m "..."
 ```
 
 - 每天 rebase 一次 `origin/main`，别攒几十个文件再合。
-- **GitHub push / 网关 `--apply` 需用户明确通知**；本地功能分支 commit 不受此限。
+- **2026-11-09 起用户已授权「不需要我参与」**：push / 合并不再逐次请示，
+  统一由 [`tools/agent-sync.py`](../../tools/agent-sync.py) 自动执行（§11）；
+  本地功能分支 commit 不受此限。
 - 通道优先级：标准 `git push` 能写就用它（历史线性、SHA 稳定）；不能写才走网关（commit 由 API 重建，需 `diff` + `reset --hard` 对齐）。
 
 ## 2. 三条铁律（测试场景 + 发布，正本见 [`test-scene-policy.md`](test-scene-policy.md) / [`plot-assembly.md`](plot-assembly.md)）
@@ -146,12 +148,12 @@ git add -A && git commit -m "..."
 本次真实落地：基于 `origin/main` 建分支后 cherry-pick 本地改动，9 个冲突按上表解决
 （`.gitignore` 自动合并成功，比演练少 1 个）；远端 9 个新增文件全部保留，`tsc` 0 error。
 
-## 7. 提交网关用法（`--apply` 需用户明确通知）
+## 7. 提交网关用法（REST 兜底，日常走 §11）
 
 ```bash
 node tools/gh-commit.mjs                 # 只读：看会提交哪些文件、远端基线是什么
 node tools/gh-commit.mjs --list         # 只列文件，不联网
-# 用户通知「可以提交」后：
+# 确实需要 REST 兜底时（自备 token；日常协同不用）：
 GITHUB_TOKEN=xxx node tools/gh-commit.mjs --apply -m "feat(grass): ..."
 GITHUB_TOKEN=xxx node tools/gh-commit.mjs --apply -m "..." \
   --path src/core/grass.ts --path tests/grass.test.ts
@@ -194,7 +196,7 @@ npm run publish:preview   # tools/publish-preview.mjs
 2026-11-09 曾并行两套通道（`/workspace/grass-preview` + `aac01946…` 与 `dist` + `aef42c…`），
 用户手机打开两个链接看到两个版本（0.9.63 / 0.9.66）—— 已收敛为一套。
 
-push / `--apply` 仍按 §1 / §7，需用户明确通知。
+代码推送与合并按 §11 自动执行，不再逐次请示用户。
 
 ## 10. 合并闸门：合的是「合并结果」，不是分支
 
@@ -216,3 +218,58 @@ push / `--apply` 仍按 §1 / §7，需用户明确通知。
 **合并后必查三件事**：`config/game.json` 的 key 集合（自动合并也要比对）、
 `tests/__snapshots__/determinism.test.ts.snap` 是否需 `-u`（只有契约变了才需要）、
 构建产物入口名是否换了（v9s.46 从 `index-*.js` 改成 `main-*.js`，旧缓存会 404）。
+
+## 11. 无人值守执行层（用户 2026-11-09 授权）
+
+> 本节**覆盖** §1 / §7 / §9 里「需用户明确通知」的旧表述：授权是一次性的，
+> 之后每个 agent 按规则自动跑完闭环，不再逐次请示。授权靠**硬护栏**兜底，
+> 不是靠「大家自觉」。实现正本 [`../../tools/agent-sync.py`](../../tools/agent-sync.py)。
+
+### 谁做什么
+
+| 角色 | 动作 | 不需要协商的原因 |
+|---|---|---|
+| 任一 agent · 开工 | `agent-sync.py start --agent <id> --topic <t>` | 基于最新 `origin/main` 建 `feat/<t>-<id>`，分支名带 agent 后缀不撞车 |
+| 任一 agent · 收尾 | `agent-sync.py finish` | 谁 finish 谁就是本次 integrator；领号读 `origin/main:package.json` 再 +1，天然单调 |
+| 下一个 agent · 开工 | `status` 看队列 → 切到该分支重跑 `finish` | 失败可观测，接手也是 agent 自己做 |
+
+### 闭环（finish 的 10 步）
+
+1. `fetch --prune`；工作区脏就停在原地（不吞改动）。
+2. `origin/main` 有前进 → `merge --no-ff`，冲突按 §6 自动解（见下表）；解不了写队列退出。
+3. **领号**：`version` patch +1，同步 `CURRENT.md`（§0，分支不占号）。
+4. `npm run build` + golden `-u`；把版本号 / 生成物一并 commit。
+5. 在**合并结果**上跑 `npm run verify`（§10 第 4 步），再把 verify 重建的最终
+   `dist/` 提交 —— 保证「仓库 dist == 线上 dist」。
+6. `push-branch.py` 推自己的分支（三道护栏见下）。
+7. `create_pull_request` → `merge_pull_request(merge_method=merge, expectedHeadSha=…)`：
+   main 的写入只发生在 GitHub 端，天然带冲突检测与乐观锁，merge commit 可整体 revert。
+8. `fetch` + `git branch -f main origin/main`（只更新引用、**不切工作区**，共享工作区安全）。
+9. 清队列；`npm run publish:preview`（§9 唯一通道）。
+10. 打印版本 / 链接；把链接贴进任务回复（铁律 3）。
+
+### 自动解冲突（§6 的可执行版）
+
+| 冲突文件 | 动作 |
+|---|---|
+| `dist/*` | `rm -rf dist` 后 rebuild，**不手解** |
+| `tests/__snapshots__/determinism.test.ts.snap` | 取主干版后 `-u` 重生成 |
+| `package.json` / `docs/state/CURRENT.md` | 取主干版，随后由领号 / 覆盖写统一 |
+| 其余（追加取并集类） | 自动解不了 → 写 `MERGE_QUEUE.md` 退出，由 agent 手工解后重跑 |
+
+### 硬护栏（授权不扩大权限）
+
+- `push-branch.py`：拒绝写 `main/master/backup/*`；源码未提交就停；
+  **远端同名分支有本地没有的提交时拒绝覆盖**（防两个 agent 互推覆盖）。
+- `agent-sync.py`：只在 `feat/*` / `fix/*` 上跑；合并前必须 verify 通过；
+  PR 合并带 `expectedHeadSha`；不切工作区、不碰别人的分支。
+- 发布永远只有 `publish:preview` 一条通道、一条链接。
+- 失败不静默：[`../state/MERGE_QUEUE.md`](../state/MERGE_QUEUE.md) 留痕，`status` 可见，
+  重跑带 `--pr-number` 断点续跑。
+
+```bash
+python3.11 tools/agent-sync.py status
+python3.11 tools/agent-sync.py start  --agent b --topic destructibles
+python3.11 tools/agent-sync.py finish --dry       # 只看计划，不写远端
+python3.11 tools/agent-sync.py finish             # 真跑闭环
+```
