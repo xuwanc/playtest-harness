@@ -39,13 +39,13 @@ describe('v9s.52 造型特征：默认不改变骨架', () => {
     expect(headPivot.children.length).toBe(3);
   });
 
-  it('elder 造型只多出 3 节胡子 + 4 片头发 + 2 道眉 + 1 个脖子', () => {
+  it('elder 造型只多出 3 节胡子 + 1 顶发 + 2 道眉 + 1 个脖子 + 2 块肩甲', () => {
     const rig = makeRig(elderVoxel);
     expect(rig.group.getObjectByName('beard0')).toBeTruthy();
     expect(rig.group.getObjectByName('beard1')).toBeTruthy();
     expect(rig.group.getObjectByName('beard2')).toBeTruthy();
     const extra = meshCount(rig) - meshCount(makeRig());
-    expect(extra).toBe(10);
+    expect(extra).toBe(9);
   });
 });
 

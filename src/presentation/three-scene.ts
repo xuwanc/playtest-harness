@@ -74,6 +74,8 @@ export type SceneView = {
   setBodyType(id: string): string;
   /** v9s.30：当前体型 id 与可选列表（HUD / 自动化用） */
   bodyTypes(): { id: string; ids: string[] };
+  /** v9s.53：主角骨架根节点（造型验收要按名字 / 世界坐标遍历 mesh）。 */
+  heroGroup(): THREE.Object3D;
   /** 屏幕坐标 → 被点中的假人 id（0 = 没点中）。表现层做射线拾取，Core 只收 id。 */
   pickDummy(clientX: number, clientY: number): number;
   /**
@@ -1445,6 +1447,8 @@ export function createSceneView(
     bodyTypes() {
       return { id: bodyTypeId, ids: Object.keys(view.bodyTypes ?? {}) };
     },
+    /** v9s.53：主角骨架根节点，供造型验收直接遍历 mesh（尺寸 / 位置 / 命名）。 */
+    heroGroup: () => hero.group,
     pickDummy,
     /** v9s.43：渲染对象容量，验收动态生成 / 清除单位时与 Core 的 dummies.length 对齐。 */
     dummyRenderCount: () => dummyRigs.length,

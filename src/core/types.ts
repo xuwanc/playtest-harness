@@ -2116,6 +2116,8 @@ export type CharacterStyle = {
   /** 胡子长度（米），0 / 缺省 = 无。3 节链，带二阶弹簧摆动。 */
   beard?: number;
   beardColor?: string;
+  /** v9s.53 肩甲：每侧一块方块盖住肩关节，补足「窄肩 + 细臂」接头的单薄。 */
+  spaulder?: boolean;
 };
 
 export type VoxelConfig = {

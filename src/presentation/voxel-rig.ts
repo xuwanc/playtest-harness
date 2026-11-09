@@ -361,6 +361,9 @@ export function createVoxelRig(
   const t = v.limbThickness;
   const bodyH = v.bodyHeight;
   const bodyW = v.bodyWidth;
+  // 躯干深度跟随宽度：默认 0.46 宽 → 系数 1（与旧版逐字节一致，不传 style 的体型几何不变）；
+  // 更宽的体型同比例加厚，否则正面宽了、侧面还是一块薄板，反而更显扁。
+  const torsoD = 0.28 * clamp(bodyW / 0.46, 1, 1.4);
 
   // ---- v9s.33 脊柱分段 ----
   // 开启时：upper 只承担「腰段」，新增 chest 节点承担「胸段」，肩 / 头挂在 chest 下。
@@ -385,17 +388,17 @@ export function createVoxelRig(
   if (spineOn) {
     abdomenH = Math.max(0.05, chestPivotY);
     chestH = Math.max(0.05, bodyH - chestPivotY);
-    torso = makeBox(bodyW, abdomenH, 0.28, colors.body);
+    torso = makeBox(bodyW, abdomenH, torsoD, colors.body);
     torso.name = 'torsoLower';
     torso.position.y = abdomenH / 2;
     upper.add(torso);
     // 胸块略宽 8mm：两块的侧面不共面，避免 z-fighting；读起来也像胸甲。
-    chestMesh = makeBox(bodyW + 0.008, chestH, 0.288, colors.body);
+    chestMesh = makeBox(bodyW + 0.008, chestH, torsoD + 0.008, colors.body);
     chestMesh.name = 'torsoUpper';
     chestMesh.position.y = chestH / 2;
     chest.add(chestMesh);
   } else {
-    torso = makeBox(bodyW, bodyH, 0.28, colors.body);
+    torso = makeBox(bodyW, bodyH, torsoD, colors.body);
     torso.name = 'torso';
     torso.position.y = bodyH / 2;                 // 相对骨盆
     upper.add(torso);
@@ -435,23 +438,33 @@ export function createVoxelRig(
   let beardState: BeardState | null = null;
   if (style?.balding) {
     const hairColor = style.hairColor ?? '#e8e8e8';
-    const hairMat = new THREE.MeshLambertMaterial({ color: hairColor });
+    // 头发面全是背光面（后脑 / 侧后），纯 Lambert 在暗场景里会读成「灰帽子」而不是白发，
+    // 给一点自发光把明度托住 —— 白发在阴影里也是白的。
+    const hairMat = new THREE.MeshLambertMaterial({
+      color: hairColor, emissive: hairColor, emissiveIntensity: 0.55,
+    });
     const addHair = (w: number, h: number, d: number, x: number, y: number, z: number): void => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), hairMat);
       m.position.set(x, y, z);
       headPivot.add(m);
     };
-    // 两鬓：贴 ±X 面，只盖住耳朵高度那一圈（上方是秃的）
-    for (const sx of [-1, 1]) {
-      addHair(HS * 0.06, HS * 0.62, HS * 0.52, sx * (HS / 2 + 0.003), HS * 0.50, -HS * 0.02);
-    }
-    // 后脑：一片薄的，让「有头发」从背面也成立
-    addHair(HS * 0.70, HS * 0.30, HS * 0.09, 0, HS * 0.42, -(HS / 2 + 0.004));
-    // 顶后「半圈」：只盖后半头顶，前半留空 → M 形发际线 / 地中海
-    addHair(HS * 0.70, HS * 0.06, HS * 0.36, 0, HS * 0.965, -HS * 0.14);
+    // v9s.53：一个盒子「穿三面」替代原来的 4 片（两鬓 / 后脑 / 顶后半圈）。
+    // 盒体比头略宽（左右各露 ~1cm）、后侧露 ~1cm、前面收在头内 —— 左、右、后三个面
+    // 都有头发、正面和头顶留白 = 地中海；连成一体后拼接缝消失，还少 3 个 mesh。
+    // 盒体比头略宽（左右各露 pad）、后侧也露 pad、前面收在头内 —— 左、右、后三个面
+    // 都有头发、正面和头顶留白 = 地中海；连成一体后拼接缝消失，还少 3 个 mesh。
+    // 深度/中心必须让后表面真的超出头的背面（旧版 4 片用 -(HS/2 + 0.004) 就是这原因），
+    // 否则后脑整片被头挡住，只剩正面两条白边 —— 实测背面看是纯肤色。
+    const pad = HS * 0.075;
+    const hairCap = new THREE.Mesh(
+      new THREE.BoxGeometry(HS + pad * 2, HS * 0.66, HS * 0.84 + pad), hairMat,
+    );
+    hairCap.name = 'hairCap';
+    hairCap.position.set(0, HS * 0.47, -HS * 0.08 - pad / 2);
+    headPivot.add(hairCap);
     // 白眉：两个薄片，比眼睛高一点、宽一点 —— 方块脸靠这一笔才有「老」
     for (const sx of [-1, 1]) {
-      addHair(HS * 0.24, HS * 0.035, HS * 0.03, sx * HS * 0.20, HS * 0.655, HS / 2 + 0.006);
+      addHair(HS * 0.28, HS * 0.05, HS * 0.03, sx * HS * 0.20, HS * 0.655, HS / 2 + 0.006);
     }
   }
   // 驼背时头会前伸、抬头补偿，头底和肩线之间会裂一道缝 —— 补一小块「脖子」。
@@ -463,7 +476,9 @@ export function createVoxelRig(
   }
   if (beardLen > 0) {
     const beardColor = style?.beardColor ?? '#f2f2f2';
-    const beardMat = new THREE.MeshLambertMaterial({ color: beardColor });
+    const beardMat = new THREE.MeshLambertMaterial({
+      color: beardColor, emissive: beardColor, emissiveIntensity: 0.42,
+    });
     const segLen = beardLen / 3;
     let parent: THREE.Object3D = headPivot;
     for (let i = 0; i < 3; i++) {
@@ -471,9 +486,9 @@ export function createVoxelRig(
       pivot.name = `beard${i}`;
       // 第 1 节挂在下巴（头底前缘）；后面每节挂在上一节末端。
       // z 不能只贴着脸：躯干半深 0.14，胡子若挂在 0.10 会整条埋进胸腔里（实测就是「看不见」）。
-      pivot.position.set(0, i === 0 ? HS * 0.02 : -segLen, i === 0 ? Math.max(HS * 0.5, 0.165) : 0);
+      pivot.position.set(0, i === 0 ? HS * 0.02 : -segLen, i === 0 ? Math.max(HS * 0.5, torsoD / 2 + 0.025) : 0);
       parent.add(pivot);
-      const w = HS * [0.52, 0.44, 0.36][i];
+      const w = HS * [0.52, 0.42, 0.28][i];
       const seg = new THREE.Mesh(
         new THREE.BoxGeometry(w, segLen * 1.06, HS * (0.20 - i * 0.04)), beardMat,
       );
@@ -581,6 +596,18 @@ export function createVoxelRig(
   const legR = makeLeg(1);
   const armL = makeArm(-1);
   const armR = makeArm(1);
+
+  // ---- v9s.53 肩甲：一块方块把「肩宽 + 细臂」的接头补实 ----
+  // 体素风格里手臂是一根细棍插在山墙上，肩线单薄；加一块略大于臂的方块，轮廓立刻变厚。
+  // 挂在胸段而不是 shoulder 关节上：挂关节会跟着抬臂翻起来，反而暴露「肩块是手臂的一部分」。
+  if (style?.spaulder) {
+    for (const sx of [-1, 1]) {
+      const sp = makeBox(t * 1.35, t * 1.35, bodyW * 0.44, colors.body);
+      sp.name = sx < 0 ? 'spaulderL' : 'spaulderR';
+      sp.position.set(sx * (bodyW / 2 + t * 0.4), bodyH - 0.05 - chestPivotY, 0);
+      torsoRoot.add(sp);
+    }
+  }
 
   // v8g：两骨 IK 的腿描述（大腿 / 小腿各 legLen/2，膝向后折）。
   // footTip 是本帧 FK 末端；rig-ik 直接用它取世界锚点，玩家与假人共用同一套解算。

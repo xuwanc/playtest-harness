@@ -1,20 +1,20 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-09 23:55。
+> 最后更新：2026-11-10 00:45。
 
 ## 一句话
 
-v0.9.73：**个性化造型** —— `VoxelConfig.style` 新增体态与配饰（驼背 / 屈膝 / 地中海 /
-长白胡子 + 二阶弹簧摆动）。首个用例「驼背老人」：比标准高 6%（1.28m），因弓腰视觉反而略矮，
-盒子预算只多 10 个。同时补上一条命令发布 `npm run ship` 与固定链接。
+v0.9.74：**老人造型加量** —— 整体放大（宽 0.30→0.50，四肢 0.095→0.125，身高 1.28→1.32，
+躯干深度跟随宽度），4 片头发并成 **1 个穿三面的发帽**，新增 `style.spaulder` 肩甲 2 块。
+盒子预算从 10 降到 9。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.73`（内部代号 v9s.52） |
-| 线上徽标 | `v0.9.73`（构建时间随发布变化） |
+| `package.json` 版本 | `0.9.74`（内部代号 v9s.53） |
+| 线上徽标 | `v0.9.74`（构建时间随发布变化） |
 | 发布方式 | `npm run ship`（构建 → 推 main → 重建 `preview` 产物；带凭证自恢复与推送重试） |
 | 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— **已开启且 200**（Pages: branch `preview` / `(root)`），此链接固定不变 |
 | 蜘蛛开局 | <https://xuwanc.github.io/playtest-harness/?hero=spider> |
@@ -26,16 +26,16 @@ v0.9.73：**个性化造型** —— `VoxelConfig.style` 新增体态与配饰�
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 102 文件 / 1021 例全绿 |
+| `npx vitest run` | 103 文件 / 1026 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
 | `npm run smoke` | 53/53 PASS |
-| `npm run docs:check` | PASS（82 份文档 ≤300 行，README 97 行） |
+| `npm run docs:check` | PASS（83 份文档 ≤300 行，README 97 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 
 ## 正在做
 
-- 无。v9s.52（v0.9.73）已合入 main。
+- 无。v9s.53（v0.9.74）已合入 main。
 
 ## 蜘蛛主角的几个关键数（改之前先读）
 
