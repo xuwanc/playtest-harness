@@ -86,3 +86,10 @@ git worktree add -f "$WT" origin/$BRANCH --detach >/dev/null 2>&1
 
 echo
 echo "固定链接（永不变，对外只发这条）： https://${REPO%%/*}.github.io/${REPO##*/}/"
+
+# 「推到 preview」不等于「线上已是新版」：Pages 构建偶尔 abandoned / failed，
+# 而 CDN 会继续用旧 index.html（v9s.55 连挂两次，本地新版线上旧版只差一个 hash）。
+# 这里最多等 2 分钟，只做提示，不改退出码 —— 发布本身已经成功，构建是 GitHub 的事。
+if command -v python3 >/dev/null 2>&1; then
+  python3 "$ROOT/tools/check-online.py" --wait 120 || echo "[ship] 线上还没生效，稍后用 python3 tools/check-online.py --wait 600 复查"
+fi

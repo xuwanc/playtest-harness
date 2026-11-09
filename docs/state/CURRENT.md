@@ -33,6 +33,7 @@ v0.9.76：**动画三件事一次做完** —— ① 待机换成**斜跨站姿*
 | `npm run docs:check` | PASS（87 份文档 ≤300 行，README 98 行） |
 | `npm run clip:lab:check` | 9 段全 PASS（剑盾 200.5° / 182.6°） |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
+| `python3 tools/check-online.py --wait 180` | PASS（线上 JS `main-DGeEthZi.js` = 本地 dist，徽标 v0.9.76） |
 
 ## 正在做
 
@@ -74,6 +75,8 @@ v0.9.76：**动画三件事一次做完** —— ① 待机换成**斜跨站姿*
   都必须乘 `combatPoseW`，否则交还那一帧硬切。
 - **`poseIn/poseOut` 的 0 有语义**：显式配 0 = 关掉过渡（A/B 对照），读原值必须
   `Number.isFinite`，用 `??` / `||` 会被默认值吃掉。
+- **`ship` 只推分支、不等 Pages 构建**：本批 Pages 连挂两次（`abandoned` / `failed`），线上
+  继续发旧包而版本号看不出区别。现由 `ship.sh` 末尾的 `check-online.py` 兜住（只提示、不改退出码）。
 - **低帧率下淡入变短**：`fadeDur` 按秒算、`combatPoseW` 按帧推进，20 fps 时 0.1s 只有 2 帧，
   起手会比 60 fps 更「脆」。这是固定步长的固有权衡，未做补偿。
 

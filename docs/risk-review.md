@@ -3,7 +3,30 @@
 > 约定：每批改动完成并发布后更新本文件，同时在交付说明里给出本轮结论。
 > 只记录**结构性问题**与**可执行建议**，不写「以后再说」的愿望清单。
 
-## 当前活跃风险（v9s.49 更新）
+## 当前活跃风险（v9s.55 更新）
+
+### 发布链路：「推到 preview」≠「线上已是新版」（v9s.55）
+
+本批发布时踩到一次：`npm run ship` 报了推送成功，`preview` 分支上的 `index.html` 也确实
+指向新的 `main-DGeEthZi.js`，但**线上仍在发旧包**。查下来是 Pages 的
+`pages build and deployment` 连续两次 `abandoned` / `failed`，而 CDN 继续用上一次成功
+构建的 `index.html`（缓存 10 分钟）—— 表面现象是「版本号没变」，很容易被当成没发出去。
+
+三条处置：
+
+- **`ship.sh` 末尾自动核验**：`python3 tools/check-online.py --wait 120` 比对「线上
+  `index.html` 引用的 JS 文件名 / 大小 / 徽标版本」与本地 `dist/`。只提示、不改退出码。
+- **失败了就重触发**：`POST /repos/.../pages/builds`（带 token）。同一 commit 重跑一次即可，
+  不要改代码、不要重复 ship。
+- **别用 `curl` 的 `?cb=` 判断成败**：加随机参数能绕开 `index.html` 的 CDN 缓存，但绕不开
+  「构建还没完成」；两者现象一样，先查 Actions 的 `pages build and deployment` 结论。
+
+**残余风险**：Pages 构建的排队时间不受控（本次 6~10 分钟）。若哪天彻底挂掉，
+退路是 `preview` 分支改由 Actions 部署（`build_type: workflow`），但那要改仓库设置，
+不在代码可控范围内。
+
+## 历史节点（v9s.49）
+
 
 v9s.38 的五条（特效看不见 / 面板重排 / 文档 / 击退默认开 / 三个持械陪练）已闭环；
 v9s.39 加了**陪练的一轮连击**；v9s.40 只做两件「观感 / 卫生」的事：

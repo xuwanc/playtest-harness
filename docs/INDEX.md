@@ -147,6 +147,7 @@
 | `npm run smoke` | 起 `dist/`，跑 53 项画面层 + 契约自检 | 发布前 |
 | `npm run verify` | build → test → portable → docs → smoke 全链 | **发布前必跑** |
 | `npm run publish:preview` | 发布 `dist/` 到唯一线上地址 + 校验资源 + **打印公网链接** | **每次任务完成必跑**，把链接贴进回复 |
+| `python3 tools/check-online.py --wait 180` | 线上产物是否就是本地 `dist/`（JS 文件名 / 大小 / 徽标版本） | **发布后**核验；`ship.sh` 末尾已自动跑一次 |
 | `npm run docs:check` | README 行数 / INDEX 链接 / 单文件 300 行 | 改文档后 |
 | `node tools/gh-commit.mjs` | REST 提交网关（**默认 dry-run**，`--apply` 才写远端，需自备 token） | 网络受限兜底 / 用户批准后 |
 | `node tools/gh-commit.mjs --list` | 只列待提交文件（不联网） | 分工前 |
