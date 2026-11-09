@@ -446,7 +446,7 @@ export function createVoxelRig(
       addHair(HS * 0.06, HS * 0.62, HS * 0.52, sx * (HS / 2 + 0.003), HS * 0.50, -HS * 0.02);
     }
     // 后脑：一片薄的，让「有头发」从背面也成立
-    addHair(HS * 0.70, HS * 0.42, HS * 0.09, 0, HS * 0.50, -(HS / 2 + 0.004));
+    addHair(HS * 0.70, HS * 0.30, HS * 0.09, 0, HS * 0.42, -(HS / 2 + 0.004));
     // 顶后「半圈」：只盖后半头顶，前半留空 → M 形发际线 / 地中海
     addHair(HS * 0.70, HS * 0.06, HS * 0.36, 0, HS * 0.965, -HS * 0.14);
     // 白眉：两个薄片，比眼睛高一点、宽一点 —— 方块脸靠这一笔才有「老」
@@ -471,7 +471,7 @@ export function createVoxelRig(
       pivot.name = `beard${i}`;
       // 第 1 节挂在下巴（头底前缘）；后面每节挂在上一节末端。
       // z 不能只贴着脸：躯干半深 0.14，胡子若挂在 0.10 会整条埋进胸腔里（实测就是「看不见」）。
-      pivot.position.set(0, i === 0 ? HS * 0.02 : -segLen, i === 0 ? Math.max(HS * 0.5, 0.135) : 0);
+      pivot.position.set(0, i === 0 ? HS * 0.02 : -segLen, i === 0 ? Math.max(HS * 0.5, 0.165) : 0);
       parent.add(pivot);
       const w = HS * [0.52, 0.44, 0.36][i];
       const seg = new THREE.Mesh(
