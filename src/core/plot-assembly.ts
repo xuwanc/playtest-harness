@@ -281,6 +281,8 @@ export function assemblePlots(
           bands: d.bands ? [...d.bands] : undefined,
           color: d.color,
           cutColor: d.cutColor,
+          seed: d.seed,
+          targetId: d.targetId,
         });
       }
     }

@@ -1,24 +1,22 @@
 /**
  * v9s.x · 可破坏物件（表现层）。
  *
- * 只做两件事：
- *  1) 把 Core 的 `world.destructibles` 画成**真实的斜切两段**：解析求每根母线与
- *     切面的交点，重建上下两个闭合网格 + 斜切盖面（cap 法线 = 切面法线 n）。
- *     不是水平切断、不是阶梯拼段、也不是 shader discard —— 断面就是攻击方向
- *     决定的那个倾斜平面。
- *  2) 用刀刃线段与物件轴线段做 3D 最近距离，把「命中点 P + 挥击方向 d」
- *     算成 BreakHit，交给组装层塞进 Intents。Core 仍用 currentMeleeShape 裁决
- *     「这一刀到底有没有挥到」，两边口径同源。
+ * 做两件事：
+ *  1) 把 Core 的 `world.destructibles` 画成**方盒**：站立段是一个带斜切顶面的 box
+ *     （断面由 cutBoxHeights 解析，法线 = sn，斜切方向由攻击方向决定）；坛子也是方盒。
+ *  2) 把每个掉落片段 `Fragment` 画成独立方盒，按它的世界中心 (x,y,z) 与朝向四元数
+ *     (qw,qx,qy,qz) 摆 mesh —— 物理全在 Core 的 stepRigid 里，这里只读。
+ *
+ * 刀刃线段 × 物件轴线段的 3D 最近距离负责命中（同真机口径），命中点 + 挥击方向
+ * 经 Intents 进 Core，是否真的挥到仍由 hits.currentMeleeShape 裁决。
  *
  * 状态全在 Core，这里只读；暂停 / 慢放 / 快照回放天然成立。
  */
 
 import * as THREE from 'three';
-import { cutColumnHeights } from '../core';
+import { cutBoxHeights, MIN_STAND } from '../core';
 import type { BreakHit, DestructibleState } from '../core';
 
-/** 截面多边形边数：体素感 + 斜切椭圆足够平滑。 */
-const SIDES = 10;
 /** 刀刃与物件的相交容差（米）。 */
 const BLADE_THICKNESS = 0.14;
 const EPS = 1e-6;
@@ -31,69 +29,80 @@ export type DestructibleDebug = {
   count: number;
   broken: number;
   drawCalls: number;
-  /** 每个物件的渲染根节点世界坐标；用来断言「画在哪里」与 Core 状态一致。 */
+  /** 站立段渲染根节点世界坐标。 */
   positions: Array<{ id: string; x: number; y: number; z: number }>;
-  cuts: Array<{
-    id: string;
-    cutU: number;
-    theta: number;
-    nx: number; ny: number; nz: number;
-    fall: number;
-  }>;
+  /** 每个物件的掉落片段数。 */
+  fragments: Record<string, number>;
+  cuts: Array<{ id: string; cutU: number; theta: number; nx: number; ny: number; nz: number }>;
 };
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-/** 非索引三角形拼一段柱体（下环 → 上环 + 可选斜切盖面）。两个 group 分材质。 */
-function pieceGeometry(
-  radius: number, ringA: number[], ringB: number[], capAt: 'a' | 'b' | 'none',
+/**
+ * 方盒几何（底面 y=0、轴心 x=z=0）。
+ * 底面 + 四个侧壁用本体色（group 0），斜切顶面用切口色（group 1）。
+ * 每个面用自己的 4 个顶点（不共享），保证盒棱清晰、法线正确。
+ */
+function boxPieceGeometry(
+  half: number, top: [number, number, number, number],
 ): THREE.BufferGeometry {
-  const n = ringA.length;
+  // 四角顺序：0=BL(-,-) 1=BR(+,-) 2=TR(+,+) 3=TL(-,+)
+  const cxs = [-half, half, half, -half];
+  const czs = [-half, -half, half, half];
   const pos: number[] = [];
-  const tri = (a: number[], b: number[], c: number[]): void => {
+  const tris = (
+    a: [number, number, number], b: [number, number, number],
+    c: [number, number, number], d: [number, number, number],
+  ): void => {
+    // 两个三角形 a-b-c, a-c-d（a/b/c/d 为一面的四角，逆时针朝外）
     pos.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+    pos.push(a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2]);
   };
-  const pt = (y: number, i: number): number[] => {
-    const phi = (i / n) * Math.PI * 2;
-    return [Math.cos(phi) * radius, y, Math.sin(phi) * radius];
-  };
-  for (let i = 0; i < n; i++) {
-    const j = (i + 1) % n;
-    const a0 = pt(ringA[i], i);
-    const a1 = pt(ringA[j], j);
-    const b0 = pt(ringB[i], i);
-    const b1 = pt(ringB[j], j);
-    tri(a0, a1, b1);
-    tri(a0, b1, b0);
+  // 底面（y=0，法线朝下：顺时针）
+  const b = cxs.map((x, i) => [x, 0, czs[i]] as [number, number, number]);
+  tris(b[0], b[3], b[2], b[1]);
+  // 四个侧壁
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    const bottom0: [number, number, number] = [cxs[i], 0, czs[i]];
+    const bottom1: [number, number, number] = [cxs[j], 0, czs[j]];
+    const top0: [number, number, number] = [cxs[i], top[i], czs[i]];
+    const top1: [number, number, number] = [cxs[j], top[j], czs[j]];
+    tris(bottom0, bottom1, top1, top0);
   }
-  const sideVerts = n * 6;
-  if (capAt !== 'none') {
-    const ring = capAt === 'b' ? ringB : ringA;
-    let cy = 0;
-    for (let i = 0; i < n; i++) cy += ring[i];
-    cy /= n;
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      tri([0, cy, 0], pt(ring[i], i), pt(ring[j], j));
-    }
-  }
+  // 斜切顶面（切口色）
+  const t = cxs.map((x, i) => [x, top[i], czs[i]] as [number, number, number]);
+  tris(t[0], t[1], t[2], t[3]);
+
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.addGroup(0, sideVerts, 0);
-  if (capAt !== 'none') g.addGroup(sideVerts, n * 3, 1);
+  const verts = pos.length / 3; // 18 顶点：底 6 + 侧壁 24 + 顶 6
+  void verts;
+  // 分组：0=本体（底 + 侧壁 4×6=24 顶点），1=顶面（6 顶点）
+  g.addGroup(0, 30, 0);     // 底 6 + 侧壁 24 = 30
+  g.addGroup(30, 6, 1);     // 顶面 6
   g.computeVertexNormals();
   return g;
 }
 
+/** 单个掉落片段的视图：躯干盒 + 随碎片翻滚的侧臂子盒（仙人掌用）。 */
+type FragView = {
+  group: THREE.Group;
+  trunk: THREE.Mesh;
+  parts: THREE.Mesh[];
+};
+
 type Piece = {
   id: string;
-  /** 整件的定位节点：局部几何（y 从 0 到 height）全靠它搬到世界坐标。 */
   root: THREE.Group;
-  lower: THREE.Mesh;
-  upperGroup: THREE.Group;
-  upper: THREE.Mesh;
+  standing: THREE.Group;
+  /** 旗杆 / 仙人掌躯干用的斜切方盒 mesh；坛子 / 按钮为 null。 */
+  standingMesh: THREE.Mesh | null;
+  /** 掉落片段组：直接挂在 object（原点）下，用世界坐标摆放，避免被 root 偏移叠加。 */
+  fragGroup: THREE.Group;
+  fragViews: FragView[];
   bodyMat: THREE.MeshLambertMaterial;
   capMat: THREE.MeshLambertMaterial;
   key: string;
@@ -129,10 +138,7 @@ function closestSegSeg(p0: V3, p1: V3, q0: V3, q1: V3): { dist: number; cq: V3 }
   }
   const cp = { x: p0.x + d1.x * s, y: p0.y + d1.y * s, z: p0.z + d1.z * s };
   const cq = { x: q0.x + d2.x * t, y: q0.y + d2.y * t, z: q0.z + d2.z * t };
-  return {
-    dist: Math.hypot(cp.x - cq.x, cp.y - cq.y, cp.z - cq.z),
-    cq,
-  };
+  return { dist: Math.hypot(cp.x - cq.x, cp.y - cq.y, cp.z - cq.z), cq };
 }
 
 export type DestructibleLayer = {
@@ -143,6 +149,125 @@ export type DestructibleLayer = {
   dispose(): void;
 };
 
+/**
+ * 坛子的「罐子」造型：用一层层薄方盒堆叠出罐身轮廓
+ * （瓶身粗 → 收肩 → 细颈 → 外翻唇口），全部方盒（与整体 box 风格一致），
+ * 确定性、只读 st.radius / st.height。顶层一两片用切口色高亮成「唇口」。
+ */
+function buildJarTiers(
+  st: DestructibleState, group: THREE.Group,
+  bodyMat: THREE.Material, capMat: THREE.Material, unit: THREE.BufferGeometry,
+): void {
+  const R = st.radius;
+  const H = st.height;
+  const M = 14; // 堆叠层数
+  // 罐子轮廓：t=0 底 → 1 顶，返回该高度处方盒横截面半边长
+  const profile = (t: number): number => {
+    if (t < 0.60) return R * 0.95;                                  // 罐身
+    if (t < 0.78) {                                                 // 收肩
+      const k = (t - 0.60) / 0.18;
+      return R * (0.95 + (0.55 - 0.95) * k);
+    }
+    if (t < 0.92) return R * 0.52;                                  // 细颈
+    const k = (t - 0.92) / 0.08;                                    // 外翻唇口
+    return R * (0.52 + (0.70 - 0.52) * k);
+  };
+  const hSlab = H / M;
+  for (let i = 0; i < M; i++) {
+    const tc = (i + 0.5) / M;
+    const w = profile(tc);
+    const m = new THREE.Mesh(unit, i >= M - 2 ? capMat : bodyMat);
+    m.scale.set(w * 2, hSlab, w * 2);
+    m.position.set(0, (i + 0.5) * hSlab, 0);
+    group.add(m);
+  }
+}
+
+/**
+ * 仙人掌躯干 + 侧臂（程序化）：躯干是带 cut-top 的方盒（断面由 cutBoxHeights 解析），
+ * 侧臂 = 每侧「水平伸出盒 + 末端向上盒」，仅画 atU <= standU 的部分（高于断口的侧臂
+ * 已随断块飞走，由 Fragment.parts 表现层渲染）。全部方盒，与整体一致。
+ */
+function buildCactusStanding(
+  st: DestructibleState, group: THREE.Group,
+  bodyMat: THREE.Material, capMat: THREE.Material, unit: THREE.BufferGeometry,
+): void {
+  const top = cutBoxHeights(st.radius, st.standU, st.height, st.snx, st.sny, st.snz);
+  const trunk = new THREE.Mesh(boxPieceGeometry(st.radius, top), [bodyMat, capMat]);
+  group.add(trunk);
+  for (const a of st.arms) {
+    if (a.atU > st.standU + 1e-4) continue;
+    const baseY = a.atU * st.height;
+    const alongX = Math.abs(a.dx) > 0.5;
+    // 水平伸出盒
+    const out = new THREE.Mesh(unit, bodyMat);
+    out.scale.set(
+      (alongX ? a.outLen : a.rad) * 2,
+      a.rad * 2,
+      (alongX ? a.rad : a.outLen) * 2,
+    );
+    out.position.set(a.dx * (st.radius + a.outLen / 2), baseY, a.dz * (st.radius + a.outLen / 2));
+    group.add(out);
+    // 末端向上盒
+    const up = new THREE.Mesh(unit, bodyMat);
+    up.scale.set(a.rad * 2, a.upLen * 2, a.rad * 2);
+    up.position.set(a.dx * (st.radius + a.outLen), baseY + a.upLen / 2, a.dz * (st.radius + a.outLen));
+    group.add(up);
+  }
+}
+
+/** 触发按钮造型：立柱 + 红色圆帽，自身不被破坏。 */
+function buildButtonStanding(
+  st: DestructibleState, group: THREE.Group,
+  bodyMat: THREE.Material, capMat: THREE.Material, unit: THREE.BufferGeometry,
+): void {
+  const postH = st.height * 0.55;
+  const post = new THREE.Mesh(unit, bodyMat);
+  post.scale.set(st.radius * 1.6, postH, st.radius * 1.6);
+  post.position.set(0, postH / 2, 0);
+  group.add(post);
+  const cap = new THREE.Mesh(unit, capMat);
+  const capR = st.radius * 2.2;
+  cap.scale.set(capR * 2, st.height * 0.22, capR * 2);
+  cap.position.set(0, postH + st.height * 0.11, 0);
+  group.add(cap);
+}
+
+/** 清空并据 kind 重建站立几何（pole/仙人掌断面变化、罐子碎裂、按钮恒定）。 */
+function buildStanding(
+  p: Piece, st: DestructibleState, unit: THREE.BufferGeometry,
+): void {
+  // 清空旧子节点（释放躯干几何，保留材质引用）
+  for (let i = p.standing.children.length - 1; i >= 0; i--) {
+    const c = p.standing.children[i];
+    if (c instanceof THREE.Mesh && c.geometry !== unit) c.geometry.dispose();
+    p.standing.remove(c);
+  }
+  p.standingMesh = null;
+  if (st.kind === 'pole' || st.kind === 'cactus') {
+    if (st.kind === 'pole') {
+      p.standingMesh = new THREE.Mesh(
+        boxPieceGeometry(st.radius, [st.height, st.height, st.height, st.height]),
+        [p.bodyMat, p.capMat],
+      );
+      p.standing.add(p.standingMesh);
+    } else {
+      buildCactusStanding(st, p.standing, p.bodyMat, p.capMat, unit);
+    }
+  } else if (st.kind === 'jar') {
+    if (st.broken === 0) buildJarTiers(st, p.standing, p.bodyMat, p.capMat, unit);
+  } else if (st.kind === 'button') {
+    buildButtonStanding(st, p.standing, p.bodyMat, p.capMat, unit);
+  }
+}
+
+/** 站立几何的重建键：按钮恒定（只建一次），其余随状态变化。 */
+function standingKey(st: DestructibleState): string {
+  if (st.kind === 'button') return 'const';
+  if (st.kind === 'jar') return `${st.broken}`;
+  return `${st.standU}|${st.snx}|${st.sny}|${st.snz}`;
+}
+
 export function createDestructibleLayer(
   initial: readonly DestructibleState[],
 ): DestructibleLayer {
@@ -151,6 +276,7 @@ export function createDestructibleLayer(
   const pieces: Piece[] = [];
   let prevRight: V3 | null = null;
   let prevLeft: V3 | null = null;
+  const unitBox = new THREE.BoxGeometry(1, 1, 1);
 
   for (const st of initial) {
     const bodyMat = new THREE.MeshLambertMaterial({
@@ -159,67 +285,79 @@ export function createDestructibleLayer(
     const capMat = new THREE.MeshLambertMaterial({
       color: new THREE.Color(st.cutColor), side: THREE.DoubleSide,
     });
-    const lower = new THREE.Mesh(new THREE.BufferGeometry(), [bodyMat, capMat]);
-    const upper = new THREE.Mesh(new THREE.BufferGeometry(), [bodyMat, capMat]);
-    lower.name = `lower-${st.id}`;
-    upper.name = `upper-${st.id}`;
-    const upperGroup = new THREE.Group();
-    upperGroup.add(upper);
+    const standing = new THREE.Group();
+    standing.name = `standing-${st.id}`;
     const root = new THREE.Group();
     root.name = `piece-${st.id}`;
-    // 完好态也必须看得见：几何是局部坐标（底面 y=0、轴心 x=z=0），
-    // 靠 root 把整件搬到 Core 给的绝对位置；漏了这一步所有物件会叠在世界原点。
     root.position.set(st.x, st.y, st.z);
-    root.add(lower, upperGroup);
+    root.add(standing);
+    // 掉落片段组直接挂在 object（原点）下，用世界坐标摆放，避免被 root 偏移叠加导致飞出画面。
+    const fragGroup = new THREE.Group();
+    fragGroup.name = `frags-${st.id}`;
     object.add(root);
-    pieces.push({ id: st.id, root, lower, upperGroup, upper, bodyMat, capMat, key: '' });
+    object.add(fragGroup);
+    const p: Piece = {
+      id: st.id, root, standing, standingMesh: null, fragGroup,
+      fragViews: [], bodyMat, capMat, key: '',
+    };
+    buildStanding(p, st, unitBox);
+    p.key = standingKey(st);
+    pieces.push(p);
   }
-
-  const rebuild = (p: Piece, st: DestructibleState): void => {
-    const cutH = st.cutU * st.height;
-    const heights = cutColumnHeights(
-      st.radius, SIDES, st.cutU, st.height, st.nx, st.ny, st.nz,
-    );
-    const zeros = new Array<number>(SIDES).fill(0);
-    const tops = new Array<number>(SIDES).fill(st.height);
-    const lowerG = pieceGeometry(st.radius, zeros, heights, 'b');
-    const upperG = pieceGeometry(
-      st.radius,
-      heights.map((h) => h - cutH),
-      tops.map((h) => h - cutH),
-      'a',
-    );
-    p.lower.geometry.dispose();
-    p.upper.geometry.dispose();
-    p.lower.geometry = lowerG;
-    p.upper.geometry = upperG;
-  };
-
-  const axis = new THREE.Vector3();
 
   function update(next: readonly DestructibleState[]): void {
     for (let i = 0; i < pieces.length; i++) {
       const p = pieces[i];
       let st: DestructibleState | undefined;
-      for (let j = 0; j < next.length; j++) {
-        if (next[j].id === p.id) { st = next[j]; break; }
-      }
-      if (!st) { p.upperGroup.visible = false; continue; }
+      for (let j = 0; j < next.length; j++) if (next[j].id === p.id) { st = next[j]; break; }
+      if (!st) { p.root.visible = false; p.fragGroup.visible = false; continue; }
+      p.fragGroup.visible = true;
 
-      const key = `${st.broken}|${st.cutU}|${st.theta}|${st.nx}|${st.ny}|${st.nz}`;
+      const key = standingKey(st);
       if (key !== p.key) {
-        rebuild(p, st);
+        buildStanding(p, st, unitBox);
         p.key = key;
       }
       p.bodyMat.color.set(st.color);
       p.capMat.color.set(st.cutColor);
-      // root 承担绝对定位；下半截是 local 坐标，上半截只再抬一个「切面中心」的局部偏移。
-      // 两截共用同一个 root，断后不会一截在世界原点、另一截飞到物件坐标。
       p.root.position.set(st.x, st.y, st.z);
-      p.upperGroup.visible = st.broken !== 0;
-      p.upperGroup.position.set(0, st.cutU * st.height, 0);
-      axis.set(st.ax, st.ay, st.az);
-      p.upperGroup.quaternion.setFromAxisAngle(axis, st.fall);
+      // 坛子碎裂后不再画站立盒；其余（旗杆 / 仙人掌 / 按钮）始终保持（仙人掌是剩余桩体）
+      p.standing.visible = !(st.kind === 'jar' && st.broken !== 0);
+
+      // 掉落片段：按数组长度伸缩 FragView 池，逐帧只更新变换（躯干 + 侧臂子盒）
+      const frags = st.fragments ?? [];
+      while (p.fragViews.length < frags.length) {
+        const group = new THREE.Group();
+        group.name = `frag-${st.id}-${p.fragViews.length}`;
+        const trunk = new THREE.Mesh(unitBox, p.bodyMat);
+        group.add(trunk);
+        p.fragGroup.add(group);
+        p.fragViews.push({ group, trunk, parts: [] });
+      }
+      for (let k = 0; k < p.fragViews.length; k++) {
+        const fv = p.fragViews[k];
+        if (k >= frags.length) { fv.group.visible = false; continue; }
+        const f = frags[k];
+        fv.group.visible = true;
+        fv.group.position.set(f.x, f.y, f.z);
+        fv.group.quaternion.set(f.qx, f.qy, f.qz, f.qw);
+        fv.trunk.scale.set(f.hx * 2, f.hy * 2, f.hz * 2);
+        // 侧臂子盒（仙人掌断块带侧臂）
+        const parts = f.parts ?? [];
+        while (fv.parts.length < parts.length) {
+          const m = new THREE.Mesh(unitBox, p.bodyMat);
+          fv.group.add(m);
+          fv.parts.push(m);
+        }
+        for (let pi = 0; pi < fv.parts.length; pi++) {
+          const m = fv.parts[pi];
+          if (pi >= parts.length) { m.visible = false; continue; }
+          const pt = parts[pi];
+          m.visible = true;
+          m.position.set(pt.x, pt.y, pt.z);
+          m.scale.set(pt.hx * 2, pt.hy * 2, pt.hz * 2);
+        }
+      }
     }
   }
 
@@ -231,42 +369,36 @@ export function createDestructibleLayer(
         return;
       }
       const mid: V3 = {
-        x: (b.base.x + b.tip.x) / 2,
-        y: (b.base.y + b.tip.y) / 2,
-        z: (b.base.z + b.tip.z) / 2,
+        x: (b.base.x + b.tip.x) / 2, y: (b.base.y + b.tip.y) / 2, z: (b.base.z + b.tip.z) / 2,
       };
       const prev = which === 'right' ? prevRight : prevLeft;
       if (which === 'right') prevRight = mid; else prevLeft = mid;
       if (!prev) return;
 
-      // 挥击方向 = 刀刃中点的帧间位移；静止时退回刀身轴线。
       let dx = b.tip.x - b.base.x;
       let dy = b.tip.y - b.base.y;
       let dz = b.tip.z - b.base.z;
-      const vx = mid.x - prev.x;
-      const vy = mid.y - prev.y;
-      const vz = mid.z - prev.z;
+      const vx = mid.x - prev.x, vy = mid.y - prev.y, vz = mid.z - prev.z;
       const len = Math.hypot(vx, vy, vz);
       if (len > 0.002) { dx = vx; dy = vy; dz = vz; }
       const dl = Math.hypot(dx, dy, dz);
-      if (dl > EPS) { dx /= dl; dy /= dl; dz /= dl; }
-      else { dx = 0; dy = 0; dz = 1; }
+      if (dl > EPS) { dx /= dl; dy /= dl; dz /= dl; } else { dx = 0; dy = 0; dz = 1; }
 
       const q0: V3 = { x: 0, y: 0, z: 0 };
       const q1: V3 = { x: 0, y: 0, z: 0 };
       for (let i = 0; i < next.length; i++) {
         const st = next[i];
-        if (st.broken !== 0) continue;
+        // 已碎裂的坛子 / 砍到只剩底座的旗杆·仙人掌不再作为命中目标；按钮恒可命中（触发用）
+        if (st.kind === 'jar' && st.broken !== 0) continue;
+        if ((st.kind === 'pole' || st.kind === 'cactus') && st.standU <= MIN_STAND) continue;
+        const topY = st.y + (st.kind === 'pole' || st.kind === 'cactus' ? st.standU : 1) * st.height;
+        const hitR = st.radius + (st.kind === 'cactus' ? 0.18 : 0); // 仙人掌含侧臂伸出，放宽命中半径
         q0.x = st.x; q0.y = st.y; q0.z = st.z;
-        q1.x = st.x; q1.y = st.y + st.height; q1.z = st.z;
+        q1.x = st.x; q1.y = topY; q1.z = st.z;
         const r = closestSegSeg(b.base, b.tip, q0, q1);
-        if (r.dist > st.radius + BLADE_THICKNESS) continue;
-        out.push({
-          id: st.id,
-          x: r.cq.x, y: r.cq.y, z: r.cq.z,
-          dx, dy, dz,
-        });
-        break; // 一把刀一帧只打断一个物件，避免一次横扫全场地物全断
+        if (r.dist > hitR + BLADE_THICKNESS) continue;
+        out.push({ id: st.id, x: r.cq.x, y: r.cq.y, z: r.cq.z, dx, dy, dz });
+        break;
       }
     };
     tryBlade(blades.right, 'right');
@@ -275,29 +407,32 @@ export function createDestructibleLayer(
   }
 
   function debug(): DestructibleDebug {
-    let drawCalls = 0;
     const cuts: DestructibleDebug['cuts'] = [];
     const positions: DestructibleDebug['positions'] = [];
+    const fragments: Record<string, number> = {};
     let broken = 0;
+    let drawCalls = 0;
     for (const p of pieces) {
-      if (p.lower.visible) drawCalls += 1;
-      if (p.upperGroup.visible) drawCalls += 1;
-      positions.push({
-        id: p.id,
-        x: p.root.position.x, y: p.root.position.y, z: p.root.position.z,
-      });
-    }
-    // 断裂读数从 Core 状态取（表现层不另存一份），由 update 的 lastStates 提供。
-    for (const s of lastStates) {
-      if (s.broken !== 0) {
-        broken += 1;
-        cuts.push({
-          id: s.id, cutU: s.cutU, theta: s.theta,
-          nx: s.nx, ny: s.ny, nz: s.nz, fall: s.fall,
+      if (p.root.visible) {
+        positions.push({
+          id: p.id, x: p.root.position.x, y: p.root.position.y, z: p.root.position.z,
         });
+        if (p.standing.visible) drawCalls += 1;
+      }
+      for (const fv of p.fragViews) {
+        if (!fv.group.visible) continue;
+        drawCalls += 1; // 躯干
+        for (const m of fv.parts) if (m.visible) drawCalls += 1;
       }
     }
-    return { count: pieces.length, broken, drawCalls, positions, cuts };
+    for (const s of lastStates) {
+      fragments[s.id] = (s.fragments ?? []).length;
+      if (s.broken !== 0) {
+        broken += 1;
+        cuts.push({ id: s.id, cutU: s.cutU, theta: s.theta, nx: s.nx, ny: s.ny, nz: s.nz });
+      }
+    }
+    return { count: pieces.length, broken, drawCalls, positions, fragments, cuts };
   }
 
   let lastStates: readonly DestructibleState[] = initial;
@@ -308,11 +443,18 @@ export function createDestructibleLayer(
 
   function dispose(): void {
     for (const p of pieces) {
-      p.lower.geometry.dispose();
-      p.upper.geometry.dispose();
+      p.standing.traverse((o) => {
+        if (o instanceof THREE.Mesh && o.geometry !== unitBox) o.geometry.dispose();
+      });
+      for (const fv of p.fragViews) {
+        fv.group.traverse((o) => {
+          if (o instanceof THREE.Mesh && o.geometry !== unitBox) o.geometry.dispose();
+        });
+      }
       p.bodyMat.dispose();
       p.capMat.dispose();
     }
+    unitBox.dispose();
     object.clear();
   }
 

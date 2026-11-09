@@ -1,54 +1,61 @@
 import { currentMeleeShape } from './hits';
-import type { BreakHit, DestructibleSpec, DestructibleState, Intents, World } from './types';
+import { nextRandom } from './random';
+import type {
+  BreakHit, CactusArm, DestructibleSpec, DestructibleState, Fragment, Intents, World,
+} from './types';
+import { stepRigid, type RigidBody } from './fragments';
 
 /**
- * v9s.x · 可破坏物件（瓶罐 / 旗杆）的确定性断面数学与状态机。
+ * v9s.x · 可破坏物件（旗杆 / 坛子 / 仙人掌 / 触发按钮）的确定性断面数学与状态机。
  *
- * ## 三个正交量（不要混为一谈）
- *  - 断面高度 h：只由**命中点 P.y** 决定 → `u = (P.y - baseY) / height`。
- *    「站高处打从高处断」是它的自然结果，不需要任何高度分支。
- *  - 切面法线 n：只由**攻击方向 d** 决定。刻意不让 n = d —— 水平挥击时 d 是水平的，
- *    那样会得到竖直切面，把杆「纵向劈开」而不是「横向砍断」。
- *    这里 n 恒以竖直为主，只把 d 的水平投影当作倾斜倾向：
- *        n = normalize(up + dH·tanθ)
- *    从上往下劈时 d 的向下分量让 θ 变大，切口自然更斜、朝向攻击来向。
- *  - 断后运动：上半截是独立刚体，绕 `cross(up, dH)` 轴朝攻击去向翻倒。
+ * 四种物件都按**方盒**渲染（radius = 横截面半边长），但破坏方式不同：
+ *  - 旗杆 `pole`：按命中点横向砍断，断下的段成为一块掉落刚体；可**多次砍断**
+ *    （每一次都把当前站立段的顶端再砍下一截），剩余站立段递减，断面始终斜切朝攻击方向。
+ *  - 坛子 `jar`：命中即**碎裂成多块**方碎块（确定性随机铺放，不用 Math.random），
+ *    不再做斜切两段 —— 罐子本就是敞口薄壁，切成两半既不对也不好看。
+ *  - 仙人掌 `cactus`：复用旗杆的多段砍物理，但用固定手工调好的萨瓜罗侧臂造型；
+ *    砍下的断块是「带侧臂的方盒刚体」飞出（侧臂作为 `Fragment.parts` 挂在主盒上，
+ *    随碎片四元数一起翻滚，物理仍只算主盒，保证可序列化 / 确定性）。
+ *  - 按钮 `button`：自身不被破坏，被刀砍中后触发 `targetId` 指向的物件
+ *    （未断 → 整体砍断掉落，已断 → 复位），作工位上的演示/开关。
  *
- * 全部状态是 plain number / 数组，随 World 一起 JSON 序列化、快照、回放；
- * 表现层只读，符合 ADR-002 与 check-boundary 的可移植契约。
+ * 掉落的段 / 碎块统一是 `Fragment`（= `RigidBody`）：每帧由 `stepRigid` 按固定步长做
+ * 重力 + 地面 / 刚体间碰撞推进。全部状态 plain number，随 World 一起 JSON 快照回放，
+ * 因此暂停 / 慢放 / 倒带对掉落碎块天然成立。
  */
 
 const EPS = 1e-6;
 const DEG = Math.PI / 180;
 
-/** 上半截最终翻倒角（弧度，≈84°），不到 90° 以免完全贴地穿模。 */
+/** 站立段保留的最小相对高度：低于此不再砍，留一小截底座。 */
+export const MIN_STAND = 0.08;
+/** 旧版单段翻倒角常量保留导出，单测仍引用；新物理已不依赖它。 */
 export const BREAK_FALL_TARGET = 1.47;
 
-/** 切面参数（全部可选，缺省值让「只给一个 tiltDeg」就能用）。 */
+/** 掉落片段的材质 / 初速（确定性，全部可调）。 */
+const DENSITY = 12;        // 质量 = 体积 × DENSITY
+const INV_I_GAIN = 0.6;    // 标量转动惯量增益
+const POLE_KNOCK = 2.4;    // 杆段被砍下时的水平击飞速度（m/s）
+const POLE_LIFT = 1.6;     // 杆段上抛速度
+const POLE_SPIN = 5.0;     // 杆段初角速度（绕翻倒轴，rad/s）
+const JAR_KNOCK = 2.0;     // 碎块径向飞散速度
+const JAR_LIFT = 2.2;      // 碎块上抛速度
+const REST = 0.28;         // 恢复系数
+const FRIC = 0.7;          // 摩擦系数
+
 export type CutOptions = {
-  /** 水平挥击时的基础切面倾角（度），0 = 纯水平断面 */
   tiltDeg: number;
-  /** 预设断裂带（相对高度 0..1）；非空时命中高度吸附到最近带，瓶罐用 */
   bands?: readonly number[];
-  /** 攻击向下分量对倾角的放大系数（弧度 / 单位 dy），默认 0.85 */
   pitchGain?: number;
-  /** 倾角上限（度），默认 62 */
   maxTiltDeg?: number;
-  /** 断面相对高度下限，默认 0.08（不切在底座） */
   minU?: number;
-  /** 断面相对高度上限，默认 0.92（不切在顶端） */
   maxU?: number;
 };
 
-/** 一次切割的完整解析解。全部为 plain number，可直接进快照 / 跨语言重写。 */
 export type CutPlane = {
-  /** 断面相对高度 0..1（= h / height） */
   u: number;
-  /** 切面倾角（弧度） */
   theta: number;
-  /** 切面法线（世界单位向量，ny 恒 > 0） */
   nx: number; ny: number; nz: number;
-  /** 上半截翻倒轴（世界单位向量 = cross(up, dH)） */
   ax: number; ay: number; az: number;
 };
 
@@ -57,11 +64,10 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 /**
- * 由「命中点 + 攻击方向」求切面。纯函数：不读 World、不写状态、不依赖帧时间。
- *
- * `radius/height` 用来给 θ 加一道几何上限：切面倾角过大时会切到柱体端面，
- * cap 就不再是完整椭圆。约束 `radius·tanθ ≤ min(cutH, height-cutH)` 保证
- * 每一根母线的截断高度都落在 [0, height] 内。
+ * 由「命中点 + 攻击方向」求切面。纯函数。
+ *  - 断面高度只由命中点 P.y 决定（砍到哪断哪）；
+ *  - 法线只由攻击水平投影决定（n = normalize(up + dH·tanθ)），水平挥击不会把杆纵向劈开；
+ *  - 从上往下劈时 θ 更大，切口更斜、朝攻击来向。
  */
 export function cutPlane(
   hitY: number, baseY: number, height: number, radius: number,
@@ -69,11 +75,10 @@ export function cutPlane(
   opt: CutOptions,
 ): CutPlane {
   const h = Math.max(EPS, height);
-  const minU = clamp(opt.minU ?? 0.08, 0, 1);
+  const minU = clamp(opt.minU ?? MIN_STAND, 0, 1);
   const maxU = clamp(opt.maxU ?? 0.92, 0, 1);
   let u = clamp((hitY - baseY) / h, minU, maxU);
 
-  // 瓶罐 / 预设断裂带：命中高度吸附到最近的一条带。
   const bands = opt.bands;
   if (bands && bands.length > 0) {
     let best = bands[0];
@@ -85,7 +90,6 @@ export function cutPlane(
     u = clamp(best, minU, maxU);
   }
 
-  // 攻击方向归一化；退化（垂直下劈 / 零向量）时给一个稳定的水平基准。
   const dl = Math.sqrt(dx * dx + dy * dy + dz * dz);
   const ux = dl > EPS ? dx / dl : 0;
   const uy = dl > EPS ? dy / dl : 0;
@@ -96,11 +100,9 @@ export function cutPlane(
 
   const pitchGain = opt.pitchGain ?? 0.85;
   const maxTilt = clamp(opt.maxTiltDeg ?? 62, 0, 89) * DEG;
-  // dy < 0 = 从高处往下打 → 俯仰项为正 → 切口更斜。
   const pitch = Math.max(0, -uy);
   let theta = Math.min(maxTilt, clamp(opt.tiltDeg, 0, 89) * DEG + pitch * pitchGain);
 
-  // 几何上限：切面不能削到柱体端面，否则 cap 不是完整椭圆。
   const cutH = u * h;
   const room = Math.min(cutH, h - cutH);
   const geoMax = Math.atan(Math.max(0, room * 0.9) / Math.max(EPS, radius));
@@ -114,7 +116,6 @@ export function cutPlane(
     nx: hx * t * invN,
     ny: invN,
     nz: hz * t * invN,
-    // cross(up, dH) = (dH.z, 0, -dH.x)；正角度让上半截朝攻击去向倒。
     ax: hz,
     ay: 0,
     az: -hx,
@@ -122,97 +123,344 @@ export function cutPlane(
 }
 
 /**
- * 每根母线的截断高度（供表现层重建上下两段闭合网格 + 斜切 cap）。
+ * 方盒四角的截断高度（供表现层重建斜切顶面）。
  *
- * 母线 i 上一点 Q(t) = (r·cosφ, t, r·sinφ)，切面 `dot(n, Q - C) = 0`，
- * C 的轴心高度 = cutU·height。解出 t：
- *     t = cutH - (nx·r·cosφ + nz·r·sinφ) / ny
- * 得到的是一个**倾斜的环**，不是水平环 —— 这就是「切口朝攻击方向」的几何本体。
- * 完好态（cutU=1, n=up）时所有 t 恰好等于 height，下半截即完整柱体。
+ * 四角顺序（xz 平面，与几何绕序一致）：BL(-r,-r)、BR(r,-r)、TR(r,r)、TL(-r,r)。
+ * 角点 Q = (ox, t, oz) 落在切面 `dot(n, Q - C) = 0` 上，C 的轴心高度 = cutU·height：
+ *     t = cutU·height - (nx·ox + nz·oz) / ny
+ * 完好态（cutU=1, n=up）所有 t = height，顶面即水平。
  */
-export function cutColumnHeights(
-  radius: number, sides: number, cutU: number, height: number,
+export function cutBoxHeights(
+  half: number, cutU: number, height: number,
   nx: number, ny: number, nz: number,
-): number[] {
+): [number, number, number, number] {
   const cutH = cutU * height;
   const invNy = 1 / Math.max(EPS, ny);
-  const n = Math.max(1, Math.floor(sides));
-  const out: number[] = [];
-  for (let i = 0; i < n; i++) {
-    const phi = (i / n) * Math.PI * 2;
-    const ox = Math.cos(phi) * radius;
-    const oz = Math.sin(phi) * radius;
-    out.push(clamp(cutH - (nx * ox + nz * oz) * invNy, 0, height));
-  }
-  return out;
+  const h = (ox: number, oz: number): number =>
+    clamp(cutH - (nx * ox + nz * oz) * invNy, 0, height);
+  return [
+    h(-half, -half),
+    h(half, -half),
+    h(half, half),
+    h(-half, half),
+  ];
 }
 
-/** 由场景元数据创建初始状态（不配置时返回空数组，既有世界逐字节不变）。 */
 export function createDestructibleStates(
   specs: readonly DestructibleSpec[] | undefined,
 ): DestructibleState[] {
   if (!specs || specs.length === 0) return [];
-  return specs.map((s) => ({
-    id: s.id,
-    kind: s.kind,
-    x: s.x, y: s.y, z: s.z,
-    height: s.height,
-    radius: s.radius,
-    tiltDeg: s.tiltDeg ?? 18,
-    pitchGain: s.pitchGain ?? 0.85,
-    maxTiltDeg: s.maxTiltDeg ?? 62,
-    fallSec: s.fallSec ?? 0.9,
-    bands: s.bands ? [...s.bands] : [],
-    color: s.color ?? '#8a6b4a',
-    cutColor: s.cutColor ?? '#e8c9a0',
-    broken: 0,
-    cutU: 1,
-    theta: 0,
-    nx: 0, ny: 1, nz: 0,
-    ax: 0, ay: 0, az: -1,
-    fall: 0,
-    brokenAt: 0,
-  }));
-}
-
-/** 把一次切割写进状态 + 发一条一次性事件（真机与调试入口共用）。 */
-function applyCut(
-  world: World, st: DestructibleState, idx: number,
-  hitY: number, dx: number, dy: number, dz: number,
-): void {
-  const p = cutPlane(
-    hitY, st.y, st.height, st.radius, dx, dy, dz,
-    {
-      tiltDeg: st.tiltDeg,
-      bands: st.bands,
-      pitchGain: st.pitchGain,
-      maxTiltDeg: st.maxTiltDeg,
-    },
-  );
-  st.broken = 1;
-  st.cutU = p.u;
-  st.theta = p.theta;
-  st.nx = p.nx; st.ny = p.ny; st.nz = p.nz;
-  st.ax = p.ax; st.ay = p.ay; st.az = p.az;
-  st.fall = 0;
-  st.brokenAt = world.time;
-
-  world.events.push({
-    type: 'break',
-    tick: world.tick,
-    x: st.x,
-    y: st.y + p.u * st.height,
-    z: st.z,
-    value: idx,
+  return specs.map((s) => {
+    const seed = s.seed ?? hashStr(s.id);
+    const arms = s.kind === 'cactus' ? makeCactusArms(s.height, s.radius, seed) : [];
+    const color = s.color ?? (
+      s.kind === 'cactus' ? '#3f8f4f'
+      : s.kind === 'button' ? '#8a8a8a'
+      : '#8a6b4a'
+    );
+    const cutColor = s.cutColor ?? (
+      s.kind === 'cactus' ? '#bfe8b0'
+      : s.kind === 'button' ? '#ff5a5a'
+      : '#e8c9a0'
+    );
+    return {
+      id: s.id,
+      kind: s.kind,
+      x: s.x, y: s.y, z: s.z,
+      height: s.height,
+      radius: s.radius,
+      tiltDeg: s.tiltDeg ?? 18,
+      pitchGain: s.pitchGain ?? 0.85,
+      maxTiltDeg: s.maxTiltDeg ?? 62,
+      fallSec: s.fallSec ?? 0.9,
+      bands: s.bands ? [...s.bands] : [],
+      color,
+      cutColor,
+      broken: 0,
+      standU: 1,
+      snx: 0, sny: 1, snz: 0,
+      cutU: 1,
+      theta: 0,
+      nx: 0, ny: 1, nz: 0,
+      ax: 0, ay: 0, az: -1,
+      brokenAt: 0,
+      fragments: [],
+      seed,
+      arms,
+      targetId: s.targetId,
+      hitArmed: false,
+    };
   });
 }
 
+/** 由片段尺寸推导确定性刚体材质（逆质量 / 逆转动惯量）。 */
+function material(hx: number, hy: number, hz: number): { invMass: number; invInertia: number } {
+  const vol = (2 * hx) * (2 * hy) * (2 * hz);
+  const mass = Math.max(1e-4, vol * DENSITY);
+  const invMass = 1 / mass;
+  const r2 = hx * hx + hy * hy + hz * hz;
+  const invInertia = (invMass * INV_I_GAIN) / Math.max(1e-4, r2);
+  return { invMass, invInertia };
+}
+
+/** FNV-1a 字符串散列 → 32 位无符号整数（确定性，用于从 id 派生种子）。 */
+function hashStr(s: string): number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/** mulberry32：确定性伪随机序列（不依赖 Math.random）。 */
+function mulberry32(a: number): () => number {
+  let s = a >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 /**
- * 调试 / 自动化入口：直接以给定命中点打断指定物件，不改 Intents、不进 step。
- * 与 `plot-spawn` 的 `spawnPlotTestUnits` 同一类运行时调试操作；
- * 走的是**同一个** `cutPlane`，所以读数与真机链路逐字节一致，可用来精确
- * 验收「高处断 / 低处断 / 切口朝向」而不用靠运气挥刀。
+ * 仙人掌侧臂：**固定、手工调好的萨瓜罗造型**（不再随机程序化生成，避免「一堆叉叉」）。
+ * 一律 2 条对侧粗短手臂位于上三分之一，手腕明显比主干细但够敦实。尺寸只由主干半径决定
+ * （确定性、可被快照 / 回放）。同一个工位上的仙人掌只差大小、不差造型，干净统一。
  */
+function makeCactusArms(height: number, radius: number, _seed: number): CactusArm[] {
+  void _seed;
+  const armRad = radius * 0.45;   // 手臂直径 ≈ 0.9×主干直径，明显敦实
+  const outLen = radius * 1.7;    // 水平伸出（明显伸出主干外再上弯）
+  const upLen = radius * 1.45;    // 末端向上弯
+  const arms: CactusArm[] = [
+    { atU: 0.58, dx: 1, dz: 0, outLen, upLen, rad: armRad },
+    { atU: 0.72, dx: -1, dz: 0, outLen, upLen, rad: armRad },
+  ];
+  arms.sort((a, b) => a.atU - b.atU);
+  void height;
+  return arms;
+}
+
+/**
+ * 把「高于断口（atU > cutU）」的侧臂转成碎片上的视觉子盒（Fragment.parts）。
+ * 每个侧臂 = 水平伸出盒 + 末端向上盒，坐标相对碎片中心（碎片未旋转盒系）。
+ * 物理只算主盒，侧臂随碎片四元数一起翻滚，保证「断块带侧臂飞出」且可序列化。
+ */
+function armParts(
+  st: DestructibleState, arms: CactusArm[], cutU: number, cy: number,
+): Fragment['parts'] {
+  const parts: NonNullable<Fragment['parts']> = [];
+  for (const a of arms) {
+    if (a.atU <= cutU) continue; // 低于断口的侧臂留在站立桩上
+    const baseY = st.y + a.atU * st.height;
+    const alongX = Math.abs(a.dx) > 0.5;
+    // 水平伸出盒（half-extent 与站立侧臂一致；表现层会再 ×2 成 full 尺寸）
+    const hxOut = alongX ? a.outLen : a.rad;
+    const hzOut = alongX ? a.rad : a.outLen;
+    parts.push({
+      x: a.dx * (st.radius + a.outLen / 2),
+      y: baseY - cy,
+      z: a.dz * (st.radius + a.outLen / 2),
+      hx: hxOut,
+      hy: a.rad,
+      hz: hzOut,
+    });
+    // 末端向上盒
+    parts.push({
+      x: a.dx * (st.radius + a.outLen),
+      y: baseY + a.upLen / 2 - cy,
+      z: a.dz * (st.radius + a.outLen),
+      hx: a.rad,
+      hy: a.upLen,
+      hz: a.rad,
+    });
+  }
+  return parts.length > 0 ? parts : undefined;
+}
+
+/** 把一次砍断写入状态并发一条一次性 break 事件。 */
+function emitBreak(world: World, st: DestructibleState, idx: number, y: number): void {
+  world.events.push({ type: 'break', tick: world.tick, x: st.x, y, z: st.z, value: idx });
+}
+
+/**
+ * 竖向砍断（旗杆 / 仙人掌共用）：把 [命中点, 当前站立顶] 之间的段切下，成为一块掉落刚体；
+ * 剩余站立段顶端更新为新的斜切面。可重复调用 → 多段砍断。
+ * 仙人掌会把高于断口的侧臂打包进 `Fragment.parts`，随断块一起翻滚飞出。
+ */
+function severVertical(
+  world: World, st: DestructibleState, idx: number,
+  hitY: number, dx: number, dy: number, dz: number,
+): void {
+  const standTopY = st.y + st.standU * st.height;
+  const cutY = clamp(hitY, st.y + MIN_STAND * st.height, standTopY);
+  const cutU = (cutY - st.y) / st.height;
+
+  // 命中点已高于当前站立顶（该段此前已被砍掉）→ 无可砍段，直接返回。
+  // 否则单次挥砍跨多帧在同一高度会重复生成「零高碎片」：表现为断枝浮空立起、越砍越多。
+  if (cutU >= st.standU - 1e-3) return;
+
+  const p = cutPlane(
+    cutY, st.y, st.height, st.radius, dx, dy, dz,
+    { tiltDeg: st.tiltDeg, bands: st.bands, pitchGain: st.pitchGain, maxTiltDeg: st.maxTiltDeg, minU: MIN_STAND, maxU: st.standU },
+  );
+
+  const segLo = cutU;
+  const segHi = st.standU;
+  const segH = (segHi - segLo) * st.height;
+  const cy = st.y + (segLo + segHi) * 0.5 * st.height;
+  const mat = material(st.radius, segH * 0.5, st.radius);
+
+  // 水平攻击方向（用于击飞与翻倒轴）
+  const hl = Math.hypot(dx, dz);
+  const dirx = hl > EPS ? dx / hl : 1;
+  const dirz = hl > EPS ? dz / hl : 0;
+
+  const parts = st.kind === 'cactus' ? armParts(st, st.arms, cutU, cy) : undefined;
+
+  const frag: Fragment = {
+    x: st.x, y: cy, z: st.z,
+    hx: st.radius, hy: segH * 0.5, hz: st.radius,
+    qw: 1, qx: 0, qy: 0, qz: 0,
+    vx: dirx * POLE_KNOCK, vy: POLE_LIFT, vz: dirz * POLE_KNOCK,
+    wx: p.ax * POLE_SPIN, wy: p.ay * POLE_SPIN, wz: p.az * POLE_SPIN,
+    invMass: mat.invMass, invInertia: mat.invInertia,
+    restitution: REST, friction: FRIC,
+    rest: 0, restT: 0,
+    parts,
+  };
+  st.fragments.push(frag);
+
+  st.standU = cutU;
+  st.snx = p.nx; st.sny = p.ny; st.snz = p.nz;
+  st.broken += 1;
+  st.cutU = cutU; st.theta = p.theta;
+  st.nx = p.nx; st.ny = p.ny; st.nz = p.nz;
+  st.ax = p.ax; st.ay = p.ay; st.az = p.az;
+  st.brokenAt = world.time;
+  emitBreak(world, st, idx, cutY);
+}
+
+/**
+ * 坛子碎裂：把整只罐子切成 N 块方碎块（确定性随机铺放），全部成为掉落刚体。
+ * 用 world.rngState 推进，因此同输入同结果、可被快照回放。
+ */
+function shatterJar(
+  world: World, st: DestructibleState, idx: number,
+  hitY: number, dx: number, dy: number, dz: number,
+): void {
+  // 由尺寸估算碎块数（小罐少、大罐多），确定性、范围夹紧。
+  const approx = Math.round(st.height * st.radius * 30);
+  const n = clamp(approx, 6, 12);
+
+  // 立方铺放网格（接近 n 的立方根）
+  let g = 2;
+  while (g * g * g < n) g++;
+  const cells = g * g * g;
+  const cellW = (2 * st.radius) / g;
+  const cellH = st.height / g;
+  const r2 = st.radius;
+
+  // 爆裂中心：命中点
+  const burstX = st.x;
+  const burstY = clamp(hitY, st.y + 0.05, st.y + st.height - 0.05);
+  const burstZ = st.z;
+
+  const frags: Fragment[] = [];
+  let made = 0;
+  for (let ix = 0; ix < g && made < cells; ix++) {
+    for (let iy = 0; iy < g && made < cells; iy++) {
+      for (let iz = 0; iz < g && made < cells; iz++) {
+        // 跳过离爆裂点太远的格子，让碎块更集中、数量更贴近 n
+        const cx = st.x - r2 + (ix + 0.5) * cellW;
+        const cy = st.y + (iy + 0.5) * cellH;
+        const cz = st.z - r2 + (iz + 0.5) * cellW;
+        const jx = (nextRandom(world) - 0.5) * cellW * 0.4;
+        const jy = (nextRandom(world) - 0.5) * cellH * 0.4;
+        const jz = (nextRandom(world) - 0.5) * cellW * 0.4;
+        const ox = cx + jx, oy = cy + jy, oz = cz + jz;
+
+        const hxf = (cellW * 0.5) * (0.72 + nextRandom(world) * 0.22);
+        const hyf = (cellH * 0.5) * (0.72 + nextRandom(world) * 0.22);
+        const hzf = (cellW * 0.5) * (0.72 + nextRandom(world) * 0.22);
+        const mat = material(hxf, hyf, hzf);
+
+        // 飞散方向：从爆裂中心指向碎块，外加一点上抛
+        let rx = ox - burstX, ry = oy - burstY, rz = oz - burstZ;
+        const rl = Math.hypot(rx, ry, rz) || 1;
+        rx /= rl; ry /= rl; rz /= rl;
+        if (rl < 1e-3) { rx = dirRand(world); ry = 0; rz = dirRand(world); }
+        const spin = 4 + nextRandom(world) * 5;
+
+        frags.push({
+          x: ox, y: oy, z: oz,
+          hx: hxf, hy: hyf, hz: hzf,
+          qw: 1, qx: 0, qy: 0, qz: 0,
+          vx: rx * JAR_KNOCK, vy: JAR_LIFT + nextRandom(world) * 1.2, vz: rz * JAR_KNOCK,
+          wx: (nextRandom(world) - 0.5) * spin,
+          wy: (nextRandom(world) - 0.5) * spin,
+          wz: (nextRandom(world) - 0.5) * spin,
+          invMass: mat.invMass, invInertia: mat.invInertia,
+          restitution: REST, friction: FRIC,
+          rest: 0, restT: 0,
+        });
+        made++;
+      }
+    }
+  }
+  st.fragments = frags;
+  st.broken = 1;
+  st.standU = 0;
+  st.cutU = 0; st.theta = 0;
+  st.nx = 0; st.ny = 1; st.nz = 0;
+  st.ax = 0; st.ay = 0; st.az = -1;
+  st.brokenAt = world.time;
+  emitBreak(world, st, idx, burstY);
+  void dx; void dy; void dz;
+}
+
+/** 确定性水平随机方向分量（[-1,1)）。 */
+function dirRand(world: World): number {
+  return nextRandom(world) * 2 - 1;
+}
+
+/** 按钮触发：被砍中后作用于 targetId 指向的物件。未断→整体砍断掉落，已断→复位。 */
+function triggerTarget(world: World, btn: DestructibleState, _idx: number): void {
+  const list = world.destructibles;
+  if (!list || !btn.targetId) return;
+  const t = list.find((s) => s.id === btn.targetId);
+  if (!t) return;
+  if (t.kind === 'pole' || t.kind === 'cactus') {
+    if (t.standU > MIN_STAND + 1e-3) {
+      const tIdx = list.indexOf(t);
+      // 整体砍断：从接近底座处把整段（含其上所有侧臂）作为一块断块掉出
+      severVertical(world, t, tIdx, t.y + (MIN_STAND + 0.001) * t.height, 1, 0, 0);
+    } else {
+      resetDestructible(world, t.id);
+    }
+    return;
+  }
+  // jar 等其它类型：直接复位
+  resetDestructible(world, t.id);
+}
+
+/** 复位单个物件到完好直立、清空片段（按钮触发 / 复位演示用）。 */
+export function resetDestructible(world: World, id: string): void {
+  const st = world.destructibles?.find((s) => s.id === id);
+  if (!st) return;
+  st.broken = 0;
+  st.standU = 1;
+  st.snx = 0; st.sny = 1; st.snz = 0;
+  st.cutU = 1; st.theta = 0;
+  st.nx = 0; st.ny = 1; st.nz = 0;
+  st.ax = 0; st.ay = 0; st.az = -1;
+  st.brokenAt = 0;
+  st.fragments = [];
+  st.hitArmed = false;
+}
+
 export function forceBreak(
   world: World, id: string, hitY: number,
   dx: number, dy: number, dz: number,
@@ -221,22 +469,28 @@ export function forceBreak(
   if (!list) return false;
   for (let i = 0; i < list.length; i++) {
     const st = list[i];
-    if (st.id !== id || st.broken !== 0) continue;
-    applyCut(world, st, i, hitY, dx, dy, dz);
-    return true;
+    if (st.id !== id) continue;
+    if (st.kind === 'pole' || st.kind === 'cactus') {
+      if (st.standU <= MIN_STAND) return false;
+      severVertical(world, st, i, hitY, dx, dy, dz);
+      return true;
+    }
+    if (st.kind === 'jar') {
+      if (st.broken !== 0) return false;
+      shatterJar(world, st, i, hitY, dx, dy, dz);
+      return true;
+    }
+    if (st.kind === 'button') {
+      triggerTarget(world, st, i);
+      return true;
+    }
   }
   return false;
 }
 
 /**
- * 每帧更新：先消费本帧 3D 命中，再推进上半截翻倒。
- *
- * 放在 step 的 hits 之后 —— 与草块同一节拍，并用 `currentMeleeShape` 作**时间闸门**：
- * 只有本帧确实有刀风（active 段 / 击地圆）才接受命中，静止或陈旧刀刃位置不会误断。
- *
- * 刻意**不再**用 `inMeleeShape` 的 2D 扇形二次否决：刀刃线段与物件轴的 3D 相交
- * 是比扇形更精确的判定（横扫能砍到侧面的瓶罐），让近似口径去否决精确结果是倒退。
- * 扇形继续服务假人命中，两者只共享「这一帧有没有挥刀」这一个事实。
+ * 每帧更新：先消费本帧 3D 命中（用 currentMeleeShape 作时间闸门），再推进所有掉落刚体。
+ * 多段砍断 / 碎裂后的物理由 `stepRigid` 确定性积分，暂停 / 慢放 / 快照回放都成立。
  */
 export function destructiblesUpdate(world: World, dt: number, intents: Intents): void {
   const list = world.destructibles;
@@ -246,41 +500,77 @@ export function destructiblesUpdate(world: World, dt: number, intents: Intents):
   const shape = hits.length > 0 ? currentMeleeShape(world) : null;
   const gate = !!shape && (shape.active || shape.slamRadius > 0);
 
+  // 本帧被刀刃命中的物件 id 集合（用于挥砍闸门：一次连续挥砍只破坏一次）
+  const hitIds = gate ? new Set<string>() : null;
+
   if (gate && shape) {
     for (let i = 0; i < hits.length; i++) {
       const hit = hits[i];
       let idx = -1;
-      for (let j = 0; j < list.length; j++) {
-        if (list[j].id === hit.id) { idx = j; break; }
-      }
+      for (let j = 0; j < list.length; j++) if (list[j].id === hit.id) { idx = j; break; }
       if (idx < 0) continue;
       const st = list[idx];
-      if (st.broken !== 0) continue;
-      applyCut(world, st, idx, hit.y, hit.dx, hit.dy, hit.dz);
+      hitIds!.add(st.id);
+      // 本段挥砍已对该物件触发过破坏 → 跳过，直到刀刃离开再重新武装。
+      // 否则一刀扫下会在多帧各砍一刀，把物件切成一堆互相重叠、初始零速的薄片：
+      // 视觉上就是「断枝浮空立起来 / 越砍越多 / 互相穿透」。
+      if (st.hitArmed) continue;
+      st.hitArmed = true;
+      if (st.kind === 'pole' || st.kind === 'cactus') {
+        if (st.standU <= MIN_STAND) continue;
+        severVertical(world, st, idx, hit.y, hit.dx, hit.dy, hit.dz);
+      } else if (st.kind === 'jar') {
+        if (st.broken !== 0) continue;
+        shatterJar(world, st, idx, hit.y, hit.dx, hit.dy, hit.dz);
+      } else if (st.kind === 'button') {
+        triggerTarget(world, st, idx);
+      }
     }
   }
 
-  // 固定步长的确定性指数逼近：暂停 / 慢放 / 快照回放都成立，不读帧时间之外的状态。
+  // 挥砍闸门清除：刀刃本帧未命中的物件，解除武装以便下次挥砍重新触发。
+  // 不在命中窗口内时也全部解除（意味刀刃已离开）。
   for (let i = 0; i < list.length; i++) {
     const st = list[i];
-    if (st.broken === 0) continue;
-    const k = 1 - Math.exp(-dt * 3 / Math.max(0.1, st.fallSec));
-    st.fall += (BREAK_FALL_TARGET - st.fall) * k;
+    if (hitIds && hitIds.has(st.id)) continue;
+    st.hitArmed = false;
+  }
+
+  // 物理推进：每个有片段的物件，把站立段当静止碰撞体并入求解。
+  const gravity = world.config.gravity;
+  for (let i = 0; i < list.length; i++) {
+    const st = list[i];
+    if (!st.fragments || st.fragments.length === 0) continue;
+    const bodies: RigidBody[] = st.fragments.slice();
+    if ((st.kind === 'pole' || st.kind === 'cactus') && st.standU > 0.02) {
+      const halfH = st.standU * st.height * 0.5;
+      bodies.push({
+        x: st.x, y: st.y + halfH, z: st.z,
+        hx: st.radius, hy: halfH, hz: st.radius,
+        qw: 1, qx: 0, qy: 0, qz: 0,
+        vx: 0, vy: 0, vz: 0, wx: 0, wy: 0, wz: 0,
+        invMass: 0, invInertia: 0, restitution: 0, friction: 0, rest: 0, restT: 0,
+      });
+    }
+    stepRigid(bodies, dt, st.y, gravity);
   }
 }
 
-/** 复位：所有物件回到完好直立（不重新随机，保证重播一致）。 */
+/** 复位：回到完好直立、清空片段。 */
 export function destructiblesReset(world: World): void {
   const list = world.destructibles;
   if (!list) return;
   for (let i = 0; i < list.length; i++) {
     const st = list[i];
     st.broken = 0;
+    st.standU = 1;
+    st.snx = 0; st.sny = 1; st.snz = 0;
     st.cutU = 1;
     st.theta = 0;
     st.nx = 0; st.ny = 1; st.nz = 0;
     st.ax = 0; st.ay = 0; st.az = -1;
-    st.fall = 0;
     st.brokenAt = 0;
+    st.fragments = [];
+    st.hitArmed = false;
   }
 }
