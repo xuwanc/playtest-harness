@@ -105,10 +105,12 @@ describe('v9s.41 连击跨步换腿', () => {
     const s3 = segs.get(3)!;
     const adv1 = wrap(s2.base - s1.base);
     const adv2 = wrap(s3.base - s2.base);
-    // 一段 = 迈一步：半圈左右（取消窗口会切掉一点，所以给 [0.5π, 1.2π]）
-    expect(Math.abs(adv1), `第 1→2 段推进 ${adv1.toFixed(2)}`).toBeGreaterThan(Math.PI * 0.5);
+    // 一段 = 迈一步：半圈左右（取消窗口会切掉一点，所以给 [0.4π, 1.2π]）
+    // v9s.55：剑盾 active 从 0.13 缩到 0.12、recovery 拉长到 0.27，取消窗口切掉的
+    // 相位多一点（实测 1.36 rad ≈ 0.43π），仍是一步的量级。
+    expect(Math.abs(adv1), `第 1→2 段推进 ${adv1.toFixed(2)}`).toBeGreaterThan(Math.PI * 0.4);
     expect(Math.abs(adv1)).toBeLessThan(Math.PI * 1.2);
-    expect(Math.abs(adv2), `第 2→3 段推进 ${adv2.toFixed(2)}`).toBeGreaterThan(Math.PI * 0.5);
+    expect(Math.abs(adv2), `第 2→3 段推进 ${adv2.toFixed(2)}`).toBeGreaterThan(Math.PI * 0.4);
     expect(Math.abs(adv2)).toBeLessThan(Math.PI * 1.2);
   });
 

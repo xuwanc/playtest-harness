@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { createVoxelRig } from '../src/presentation/voxel-rig';
 import { createDummyRig } from '../src/presentation/dummy-rig';
 import type { VoxelRig } from '../src/presentation/voxel-rig';
+import { GAIT_NO_IDLE } from './mech-gait';
 import { makeWorld } from './helpers';
 import { rigNodes } from './rig-nodes';
 import type { AppConfig, HurtState, HurtViewConfig, ProgramAnimViewConfig } from '../src/core';
@@ -21,7 +22,7 @@ function makeRig(hurt: HurtViewConfig = hurtCfg()): VoxelRig {
   const w = makeWorld();
   return createVoxelRig(
     raw.view.voxel, raw.view.colors, w.config.moveSpeed,
-    raw.view.orientation, raw.view.gait, raw.view.weaponMount, raw.view.lean, hurt,
+    raw.view.orientation, GAIT_NO_IDLE, raw.view.weaponMount, raw.view.lean, hurt,
     raw.view.animation as ProgramAnimViewConfig,
   );
 }
@@ -254,7 +255,7 @@ describe('v8f 假人与主角同构：受击也分层（#9 一致性）', () => 
     const s = w.dummies[0];
     const rig = createDummyRig(
       raw.view.voxel, raw.view.colors, '#88aa88', s.id, raw.view.dummies,
-      w.config.dummies.moveSpeed, raw.view.gait, hurtCfg(),
+      w.config.dummies.moveSpeed, GAIT_NO_IDLE, hurtCfg(),
     );
     s.hurt = hit();
     s.bodyYaw = 0;

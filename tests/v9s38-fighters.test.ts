@@ -65,7 +65,7 @@ describe('v9s.38 持械陪练：装配', () => {
 });
 
 describe('v9s.38 持械陪练：AI 用武器时序、攻击欲望更低', () => {
-  it('挥砍时长取武器配置（剑盾 0.09/0.13/0.24），不是假人的 0.34/0.18/0.4', () => {
+  it('挥砍时长取武器配置（剑盾），不是假人的 0.34/0.18/0.4', () => {
     const w = LAB();
     const s = w.dummies[w.config.dummies.count];
     // 站远一点，避免真实命中触发额外状态；mode=idle 只推进挥砍状态机
@@ -73,13 +73,18 @@ describe('v9s.38 持械陪练：AI 用武器时序、攻击欲望更低', () => 
     s.attackPhase = 'windup';
     s.attackPhaseTimer = 0;
     dummiesUpdate(w, w.config.fixedDt, EMPTY_INTENTS);
-    expect(s.combat!.timings.windup).toBeCloseTo(0.09, 6);
-    expect(s.combat!.timings.active).toBeCloseTo(0.13, 6);
-    expect(s.combat!.timings.recovery).toBeCloseTo(0.24, 6);
+    // 直接读配置：v9s.55 把剑盾时序从 0.09/0.13/0.24 调成 0.11/0.12/0.27，
+    // 起手多给两帧让「举剑蓄势」看得见；这里钉的是「取的是武器配置」，
+    // 具体数值由数据自己维护（硬编码会在每次调手感时失效）。
+    const ws = w.config.combat.weapons['sword-shield'];
+    expect(s.combat!.timings.windup).toBeCloseTo(ws.windup, 6);
+    expect(s.combat!.timings.active).toBeCloseTo(ws.active, 6);
+    expect(s.combat!.timings.recovery).toBeCloseTo(ws.recovery, 6);
     expect(s.combat!.phase).toBe('windup');
 
-    // 上面已推进 1 帧；再推 4 帧共 5 帧（0.083s）仍在起手，第 6 帧（0.1s）越过 0.09 → 命中段
-    for (let i = 0; i < 4; i++) dummiesUpdate(w, w.config.fixedDt, EMPTY_INTENTS);
+    // 已推进 1 帧；继续推到刚好越过 windup 那一帧，再确认进入 active
+    const frames = Math.max(1, Math.floor(ws.windup / w.config.fixedDt));
+    for (let i = 1; i < frames; i++) dummiesUpdate(w, w.config.fixedDt, EMPTY_INTENTS);
     expect(s.attackPhase).toBe('windup');
     dummiesUpdate(w, w.config.fixedDt, EMPTY_INTENTS);
     expect(s.attackPhase).toBe('active');

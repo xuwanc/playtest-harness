@@ -14,8 +14,22 @@ export const RAW_CONFIG = JSON.parse(
  * 但「机制本身是否存在、比例是否正确」必须用一份显式非零配置验证，
  * 不能随调优后的默认值一起漂移。所有骨架集成测试统一用这份配置。
  */
+/**
+ * v9s.55：关掉「待机斜跨站姿」的线上配置。
+ *
+ * 待机不再是「两脚并拢、全身归零」，而是斜跨（一脚前一脚后 + 重心压后腿）。
+ * 那些用来证明「某层关掉后下盘精确归零」的 A/B 对照必须把斜跨一起关掉，
+ * 否则测的就不是机制本身、而是「机制 + 站姿」。斜跨自身的行为由
+ * `v9s55-idle-stance.test.ts` 单独覆盖。
+ */
+export const GAIT_NO_IDLE: GaitViewConfig = {
+  ...RAW_CONFIG.view.gait,
+  idleStance: { ...RAW_CONFIG.view.gait.idleStance, enabled: false },
+};
+
 export const MECH_GAIT: GaitViewConfig = {
   ...RAW_CONFIG.view.gait,
+  idleStance: { ...RAW_CONFIG.view.gait.idleStance, enabled: false },
   stopBlendSec: 0.3,
   stopEnterRatio: 0.08,
   stopExitRatio: 0.18,

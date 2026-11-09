@@ -2,7 +2,7 @@
 
 用来**测试玩法与模块功能**的网页版 3D 实验台。核心目标是「核心逻辑可移植」：玩法规则放在纯 TypeScript、零依赖、不碰 DOM 与渲染库的 Core 里，Web 表现层只负责展示。
 
-当前版本 **v0.9.75**。线上固定地址：<https://xuwanc.github.io/playtest-harness/>（由仓库身份定址，换沙盒、换 agent、发多少次都不变）。
+当前版本 **v0.9.76**。线上固定地址：<https://xuwanc.github.io/playtest-harness/>（由仓库身份定址，换沙盒、换 agent、发多少次都不变）。
 
 > **新加入的 agent：先读 [`AGENTS.md`](AGENTS.md)。** 三条铁律——
 > ① 只保留**主测试场景 `index.html`**（独立演示页已删除，不要再新建第二个场景 / 演示页）；
@@ -48,6 +48,7 @@ npm run ship         # 每次任务完成必跑：构建 → 推 main → 重建
 |---|---|
 | **新加入的 agent / 拉下 git 后第一步** | [`AGENTS.md`](AGENTS.md)（3 分钟：三条铁律 + 流程） |
 | **测试场景规则 / 怎么加地块与工位** | [`docs/systems/plot-assembly.md`](docs/systems/plot-assembly.md)（动态拼合正本）· [`docs/systems/test-scene-policy.md`](docs/systems/test-scene-policy.md) |
+| **动画：站姿 / 起手收招 / 连击节奏** | [`docs/systems/idle-stance.md`](docs/systems/idle-stance.md) · [`docs/systems/pose-entry.md`](docs/systems/pose-entry.md) · [`docs/systems/animation.md`](docs/systems/animation.md) |
 | **蜘蛛主角 / 加另一副骨架** | [`docs/systems/spider-locomotion.md`](docs/systems/spider-locomotion.md) · [`docs/decisions/ADR-010`](docs/decisions/ADR-010-spider-locomotion.md) |
 | **快速试方盒子角色的造型** | [`docs/systems/voxel-forge.md`](docs/systems/voxel-forge.md)（写 JSON → 3D 预览 → 导出 TS） |
 | 有个现象要查（看不见 / 抖 / 卡 / 滑） | [`docs/INDEX.md` §2](docs/INDEX.md) |
@@ -72,7 +73,7 @@ src/app.ts          组装层（唯一同时认识 Core 与 Web 的地方）
 config/game.json    可调数值（core.* 逻辑 / view.* 表现 / scene.* 关卡；工位已迁出）
 config/plots/*.json 一地块一文件（不写世界坐标，assemblePlots 动态拼合）
 index.html          唯一主测试场景（单入口）
-tests/              vitest：100 文件 / 1007 例
+tests/              vitest：107 文件 / 1065 例
 tools/              smoke.py（53 项自检）、clip-lab（动作验证台）、ship.sh（一条命令发布）、voxel-forge（造型工坊）
 shots/              截图（唯一存放处，整目录不入库；见 docs/assets/conventions.md）
 docs/               INDEX 索引 + systems / state / decisions / journal / checklists / assets

@@ -117,10 +117,11 @@ describe('v9s.24 腕部：武器相对手的自由度', () => {
     for (let i = 1; i < frames.length; i++) {
       maxStep = Math.max(maxStep, Math.abs(frames[i].wristPitch - frames[i - 1].wristPitch));
     }
-    // 单帧最大步长出现在「腕角从 0 追到 −0.45」的第一帧：rate = 24/s、dt = 1/60
-    // → 一帧吃掉 33% 的差值 ≈ 0.15 rad。这是收敛速度，不是跳变。
-    // 换段（attackProgress 1→0）的假角速度已在 applyWrist 里按段号丢弃。
-    expect(maxStep).toBeLessThan(0.2);
+    // 单帧最大步长出现在「腕角从 0 追到目标」的第一帧：rate = 24/s、dt = 1/60
+    // → 一帧吃掉 33% 的差值。v9s.55 之后收招保持挥出满帧（不再回到「挥到一半」的
+    // 中性帧），下劈的腕部目标从 −0.45 增到约 −0.6，单帧收敛量随之到 0.20 上下。
+    // 这是**收敛速度**，不是跳变：真跳变（换段没丢假角速度）是 0.5+ rad。
+    expect(maxStep).toBeLessThan(0.24);
     rig.dispose();
   });
 

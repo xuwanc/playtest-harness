@@ -127,9 +127,11 @@ describe('v9s.26 数据格式：rootYaw / bladePitchOff / spin', () => {
 // ---------------------------------------------------------------- 姿态解算
 
 describe('v9s.26 姿态解算：整体带转、副手接管、A/B 对照', () => {
-  it('盾猛顶：左臂只在剪辑显式给了 armL 通道时才接管', () => {
-    expect(solveSwingPose('sword-shield', 1, 1, SWING).armL).toBeNull();
-    expect(solveSwingPose('sword-shield', 2, 1, SWING).armL).toBeNull();
+  it('盾臂：横扫段护胸、盾猛顶时前顶，全程由剪辑通道接管', () => {
+    // v9s.55：剑盾改成独立剪辑后，两段横扫也显式给了 armL* 通道（盾护在胸前）——
+    // 否则盾会交还步态摆臂，挥剑时在身侧乱甩。
+    expect(solveSwingPose('sword-shield', 1, 1, SWING).armL).not.toBeNull();
+    expect(solveSwingPose('sword-shield', 2, 1, SWING).armL).not.toBeNull();
     const bash = solveSwingPose('sword-shield', 3, 1, SWING);
     expect(bash.kind).toBe('bash');
     expect(bash.armL).not.toBeNull();
@@ -164,6 +166,8 @@ describe('v9s.26 姿态解算：整体带转、副手接管、A/B 对照', () =>
 type Row = {
   i: number; seg: number; kind: string; prog: number;
   yaw: number; pitch: number; spin: number; rootTurn: number; rootYaw: number;
+  /** v9s.55：战斗姿态权重；<1 的帧是进出场过渡，刃身角度是混合值 */
+  poseW: number;
 };
 type Block = { seg: number; kind: string; rows: Row[] };
 
@@ -224,6 +228,7 @@ function bladeRows(weapon: string, frames = 190): Row[] {
       spin: s.spinYaw * 180 / Math.PI,
       rootTurn: s.rootTurn * 180 / Math.PI,
       rootYaw: s.rootYaw,
+      poseW: s.poseW,
     });
   }
   rig.dispose();
@@ -284,10 +289,14 @@ describe('v9s.26 横扫幅度（对侧后方 135° 量级）', () => {
     // 大剑 / 剑盾的 weaponBlade() 取右手，恰好都是主挥手
     for (const list of [GS, SS]) {
       for (const seg of [1, 2]) {
-        const pitch = blockOf(list, seg).rows.map((r) => r.pitch);
+        // v9s.55：只统计权重到满的帧。进出场过渡帧的剑身仰角是按 combatPoseW
+        // 混到待机持械角（约 50°）的中间值，那是「正在抬手」，不是「挥到一半朝天」。
+        const pitch = blockOf(list, seg).rows.filter((r) => r.poseW > 0.98).map((r) => r.pitch);
         // 25 → 30：v9s.29 给单手剑加了 12° 握刀外撇，横扫中段的仰角读数会多 3~4°；
         // 旧问题的量级是 44~58°（剑尖朝天），30° 的边界仍然拦得住。
-        expect(Math.max(...pitch.map(Math.abs))).toBeLessThan(30);
+        // v9s.55：剑盾起手改为「举剑蓄势」（剑尖朝上 ~20°），段间过渡帧会再抬高几度；
+        // 35° 仍远低于「举着剑站着」的 44~58°。
+        expect(Math.max(...pitch.map(Math.abs))).toBeLessThan(35);
       }
     }
     // 双持段 1 是右手主挥（水平）；段 2 主挥换到左手，weaponBlade() 取到的是

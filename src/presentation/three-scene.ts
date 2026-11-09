@@ -126,6 +126,8 @@ export type SceneView = {
     phase: number;
     /** v9s.43 / v9s.44 / v9s.45：换向驱动符号、下盘偏转目标、转身闸门状态 */
     dirF: number; dirR: number; hipYawTarget: number; spin: number;
+    /** v9s.55：待机斜跨站姿权重 / 前脚左右 / 下沉 / 重心侧移 */
+    idleW?: number; idleFrontLeft?: boolean; idleSink?: number; idleShift?: number;
   };
   /**
    * v9s.50：多足骨架专有读数（8 条腿的伸展比 / 夹取数 / 步相）。

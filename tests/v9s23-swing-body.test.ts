@@ -128,7 +128,9 @@ describe('v9s.23 三段方向（纯函数）', () => {
     const ss = solveSwingPose('sword-shield', 1, 1, SWING);
     expect(Math.sign(ss.yaw)).toBe(Math.sign(gs.yaw));
     expect(Math.abs(ss.yaw)).toBeLessThan(Math.abs(gs.yaw));
-    expect(ss.armL).toBeNull(); // 剑盾左臂持盾，不由本层接管
+    // v9s.55：剑盾有了自己的横扫剪辑，盾臂由数据接管（护胸 → 前送）。
+    // 旧版沿用大剑剪辑、没有 armL 通道，盾在挥击时被交还给步态摆臂，甩得很散。
+    expect(ss.armL).not.toBeNull();
   });
 
   it('双剑段 2 换左手主挥（左右交替）', () => {
@@ -188,7 +190,11 @@ describe('v9s.23 骨架落地：身体 / 肩部', () => {
     expect(kinds.has('left-right')).toBe(true);
     expect(kinds.has('overhead')).toBe(true);
 
-    const live = frames.filter((f) => f.strike > 0.2);
+    // v9s.55：姿态采样改成「蓄势帧恒 u=0、挥出段随 active 推进」，蓄势帧的
+    // strike 是 0 —— 只筛 strike > 0.2 会把「后仰蓄势」整段排除掉。这里把 windup
+    // 阶段一起纳入：它本来就是动作的一部分（只是旧的 swingCurve 把蓄势压进了
+    // 前半程的 strike 里）。
+    const live = frames.filter((f) => f.strike > 0.2 || f.phase === 'windup');
     const ys = live.map((f) => f.upperY);
     expect(Math.max(...ys)).toBeGreaterThan(0.5);
     expect(Math.min(...ys)).toBeLessThan(-0.5);

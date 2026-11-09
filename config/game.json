@@ -66,9 +66,9 @@
       "weapons": {
         "sword-shield": {
           "moveMultiplier": 1,
-          "windup": 0.09,
-          "active": 0.13,
-          "recovery": 0.24,
+          "windup": 0.11,
+          "active": 0.12,
+          "recovery": 0.27,
           "lunge": [
             0.45,
             0.6,
@@ -1045,7 +1045,22 @@
       "backStrafeFullDeg": 132,
       "dirFlipSec": 0.16,
       "hipYawTrackRateDeg": 240,
-      "hipYawBackRateDeg": 150
+      "hipYawBackRateDeg": 150,
+      "idleStance": {
+        "enabled": true,
+        "frontPitch": 0.16,
+        "backPitch": 0.14,
+        "frontKnee": 0.03,
+        "shift": 0.03,
+        "sink": 0.012,
+        "pelvisRoll": 0.05,
+        "torsoLean": 0.06,
+        "hipYaw": 0.16,
+        "sway": 1,
+        "enterSpeed": 0.18,
+        "exitSpeed": 0.55,
+        "smoothing": 7
+      }
     },
     "animation": {
       "attack": {
@@ -1113,7 +1128,7 @@
         "segBlendMax": 0.14,
         "weaponScale": {
           "greatsword": 1.0,
-          "sword-shield": 0.78,
+          "sword-shield": 1.0,
           "dual-swords": 0.9
         },
         "combo": {
@@ -1123,8 +1138,8 @@
             "gs.overhead"
           ],
           "sword-shield": [
-            "gs.right-left",
-            "gs.left-right",
+            "ss.right-left",
+            "ss.left-right",
             "ss.shield-bash"
           ],
           "dual-swords": [
@@ -1134,6 +1149,160 @@
           ]
         },
         "clips": {
+          "ss.right-left": {
+            "kind": "right-left",
+            "note": "剑盾段 1：单手剑从右后上方横扫到左前。身体只让 35°，整体带转 20° —— 单手剑靠「肩打开 + 手臂横过身体」出弧线，不是把整个人抡转过去（那样剑会扫到身后、画面上看不见）。盾左臂从收胸到前送。",
+            "lead": "R",
+            "keys": [
+              {
+                "t": 0,
+                "ease": "in",
+                "pose": {
+                  "bodyYaw": 0.55,
+                  "bodyPitch": -0.12,
+                  "bodyRoll": -0.12,
+                  "pelvisX": 0.04,
+                  "pelvisZ": -0.05,
+                  "armPitch": -0.95,
+                  "armYaw": 0.58,
+                  "armRoll": 0.5,
+                  "elbow": -0.95,
+                  "armLPitch": -0.7,
+                  "armLYaw": 0.14,
+                  "armLRoll": 0.28,
+                  "elbowL": -1.2,
+                  "rootYaw": 0.3,
+                  "bladePitch": 0.38,
+                  "bladePitchOff": 0.0,
+                  "bladeTwist": -1.35,
+                  "bladeYaw": 0.3
+                }
+              },
+              {
+                "t": 0.5,
+                "pose": {
+                  "bodyYaw": 0.0,
+                  "bodyPitch": 0.04,
+                  "bodyRoll": 0.05,
+                  "pelvisX": 0.0,
+                  "pelvisZ": 0.02,
+                  "armPitch": -1.38,
+                  "armYaw": 0.0,
+                  "armRoll": 0.04,
+                  "elbow": -0.22,
+                  "armLPitch": -0.92,
+                  "armLYaw": 0.08,
+                  "armLRoll": 0.2,
+                  "elbowL": -0.9,
+                  "rootYaw": 0.0,
+                  "bladePitch": 0.04,
+                  "bladePitchOff": 0.0,
+                  "bladeTwist": -1.35,
+                  "bladeYaw": 0.0
+                }
+              },
+              {
+                "t": 1.0,
+                "pose": {
+                  "bodyYaw": -0.55,
+                  "bodyPitch": 0.16,
+                  "bodyRoll": 0.14,
+                  "pelvisX": -0.05,
+                  "pelvisZ": 0.08,
+                  "armPitch": -1.32,
+                  "armYaw": -0.56,
+                  "armRoll": -0.3,
+                  "elbow": -0.08,
+                  "armLPitch": -1.08,
+                  "armLYaw": -0.04,
+                  "armLRoll": 0.08,
+                  "elbowL": -0.55,
+                  "rootYaw": -0.35,
+                  "bladePitch": 0.08,
+                  "bladePitchOff": 0.02,
+                  "bladeTwist": -1.35,
+                  "bladeYaw": -0.16
+                }
+              }
+            ]
+          },
+          "ss.left-right": {
+            "kind": "left-right",
+            "note": "剑盾段 2：反手从左上扫回右下（与段 1 镜像）。肩先外展、再横过身体；盾臂向反侧送出，两条手臂在命中帧张开成 X。",
+            "lead": "R",
+            "keys": [
+              {
+                "t": 0,
+                "ease": "in",
+                "pose": {
+                  "bodyYaw": -0.55,
+                  "bodyPitch": -0.12,
+                  "bodyRoll": 0.12,
+                  "pelvisX": -0.04,
+                  "pelvisZ": -0.05,
+                  "armPitch": -0.66,
+                  "armYaw": -0.52,
+                  "armRoll": -0.46,
+                  "elbow": -0.98,
+                  "armLPitch": -0.82,
+                  "armLYaw": 0.1,
+                  "armLRoll": 0.24,
+                  "elbowL": -1.08,
+                  "rootYaw": -0.3,
+                  "bladePitch": 0.1,
+                  "bladePitchOff": 0.0,
+                  "bladeTwist": 1.35,
+                  "bladeYaw": -0.26
+                }
+              },
+              {
+                "t": 0.5,
+                "pose": {
+                  "bodyYaw": 0.0,
+                  "bodyPitch": 0.04,
+                  "bodyRoll": -0.04,
+                  "pelvisX": 0.0,
+                  "pelvisZ": 0.03,
+                  "armPitch": -1.4,
+                  "armYaw": 0.0,
+                  "armRoll": 0.02,
+                  "elbow": -0.2,
+                  "armLPitch": -0.9,
+                  "armLYaw": 0.06,
+                  "armLRoll": 0.18,
+                  "elbowL": -0.94,
+                  "rootYaw": 0.0,
+                  "bladePitch": 0.0,
+                  "bladePitchOff": 0.0,
+                  "bladeTwist": 1.35,
+                  "bladeYaw": 0.0
+                }
+              },
+              {
+                "t": 1.0,
+                "pose": {
+                  "bodyYaw": 0.55,
+                  "bodyPitch": 0.16,
+                  "bodyRoll": -0.14,
+                  "pelvisX": 0.05,
+                  "pelvisZ": 0.08,
+                  "armPitch": -1.3,
+                  "armYaw": 0.54,
+                  "armRoll": 0.28,
+                  "elbow": -0.08,
+                  "armLPitch": -1.04,
+                  "armLYaw": 0.04,
+                  "armLRoll": 0.1,
+                  "elbowL": -0.58,
+                  "rootYaw": 0.35,
+                  "bladePitch": 0.02,
+                  "bladePitchOff": 0.02,
+                  "bladeTwist": 1.35,
+                  "bladeYaw": 0.14
+                }
+              }
+            ]
+          },
           "gs.right-left": {
             "kind": "right-left",
             "note": "段 1：从右后方扫到左后方。rootYaw 整体带转 ±0.55 rad（≈31°）叠在腰椎 ±60° 上，大剑刃尖水平扫角约 210°",

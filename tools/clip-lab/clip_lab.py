@@ -245,6 +245,12 @@ def analyze(rows: list[dict], weapon: str, seg: int) -> dict:
         r["yawU"] = u
 
     pitches = [r["pitch"] for r in rows if r["pitch"] is not None]
+    # v9s.55：「平扫」判据只看挥出段（t 0.15~0.95）。
+    # 起手蓄势允许把剑举起来（单手剑的蓄势本来就在肩上方、剑尖朝上 40°+），
+    # 拿起点帧去卡「刃身基本水平」等于禁止所有反手起手。收招帧（t=1）也不在内：
+    # 挥出满帧的剑身由命中姿态决定，不是「站着举剑」。
+    band = [r["pitch"] for r in rows
+            if r["pitch"] is not None and 0.15 <= r.get("t", 0) <= 0.95]
     lefts = [r["leftPitch"] for r in rows if r["leftPitch"] is not None]
     spins = [abs(r["spinYaw"]) for r in rows]
     roots = [r["rootYaw"] for r in rows]
@@ -270,6 +276,8 @@ def analyze(rows: list[dict], weapon: str, seg: int) -> dict:
         "pitchMin": min(pitches) if pitches else 0.0,
         "pitchMax": max(pitches) if pitches else 0.0,
         "pitchSpan": (max(pitches) - min(pitches)) if pitches else 0.0,
+        "pitchMinBand": min(band) if band else 0.0,
+        "pitchMaxBand": max(band) if band else 0.0,
         "leftPitchMin": min(lefts) if lefts else None,
         "leftPitchMax": max(lefts) if lefts else None,
         "hasLeft": bool(lefts),
@@ -563,7 +571,8 @@ def judge(scan: dict) -> tuple[bool, list[str]]:
             ok = False
             notes.append(f"扫角 {scan['sweep']:.0f}° > {rule['max_sweep']}°（本该是前顶）")
     if "max_pitch" in rule:
-        worst = max(abs(scan["pitchMin"]), abs(scan["pitchMax"]))
+        worst = max(abs(scan.get("pitchMinBand", scan["pitchMin"])),
+                    abs(scan.get("pitchMaxBand", scan["pitchMax"])))
         if worst > rule["max_pitch"]:
             ok = False
             notes.append(f"刃身仰角 {worst:.0f}° > {rule['max_pitch']}°（不是平扫）")

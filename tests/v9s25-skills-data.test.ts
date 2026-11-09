@@ -114,12 +114,23 @@ describe('v9s.25 剪辑数据', () => {
     expect(validatePoseClip({ keys: [{ t: 0, pose: { bodyYaw: Number.NaN } }] })[0]).toContain('不是有限数');
   });
 
-  it('换武器只是换数据引用：短剑复用同一剪辑但幅度收敛，剑身仰角不被缩放', () => {
-    const gs = solveSwingPose('greatsword', 1, 1, SWING);
-    const ss = solveSwingPose('sword-shield', 1, 1, SWING);
-    expect(Math.abs(ss.yaw)).toBeLessThan(Math.abs(gs.yaw));
-    // 仰角是语义目标，不跟着 bodyScale / weaponScale 变
-    expect(ss.bladePitch).toBeCloseTo(gs.bladePitch!, 6);
+  it('剑身仰角是语义目标：不跟 weaponScale / bodyScale 走', () => {
+    // v9s.55：剑盾有了自己的剪辑，不再「复用大剑 + 0.78 缩放」，所以拿同一套数据、
+    // 只改幅度倍率来做对照 —— 这正是这条通道存在的意义（缩放只改幅度，不改剑的朝向）。
+    const small: typeof SWING = JSON.parse(JSON.stringify(SWING));
+    small.weaponScale = { ...(small.weaponScale ?? {}), 'sword-shield': 0.5 };
+    const a = solveSwingPose('sword-shield', 1, 1, SWING);
+    const b = solveSwingPose('sword-shield', 1, 1, small);
+    expect(Math.abs(b.yaw)).toBeLessThan(Math.abs(a.yaw));
+    expect(b.bladePitch).toBeCloseTo(a.bladePitch!, 6);
+    // 六段剪辑全都存在且可解（新剪辑漏写通道不会被静默补 0）
+    for (const [w, list] of Object.entries(SWING.combo ?? {})) {
+      for (const ref of list) {
+        const id = typeof ref === 'string' ? ref : ref.clip;
+        expect(solveSwingPose(w as never, 1, 0, SWING)).toBeTruthy();
+        expect(id.length).toBeGreaterThan(0);
+      }
+    }
   });
 });
 
@@ -128,7 +139,11 @@ describe('v9s.25 剑身仰角（前两击不再是「举着剑站着」）', () 
 
   it('段 1 / 段 2：剑身基本水平，且水平方向真的扫过一大段', () => {
     for (const seg of [1, 2]) {
-      const part = samples.filter((s) => s.seg === seg);
+      // 只看 **active**（挥出段）。
+      // v9s.55 之后蓄势帧是恒定的 u=0，收招帧是恒定的 u=1（不再回到「挥到一半」的
+      // 中性帧）—— 下劈段（段 3）因此收在刀刃朝下 -43° 的位置，下一段起手的过渡帧
+      // 要先把剑从低位抬起来。那是段间过渡，不是「这一击举着剑站着」。
+      const part = samples.filter((s) => s.seg === seg && s.phase === 'active');
       expect(part.length).toBeGreaterThan(8);
       // 全程仰角不超过 ±25°（旧版是 44~58°，剑尖在头顶）
       const maxUp = Math.max(...part.map((s) => s.pitch));

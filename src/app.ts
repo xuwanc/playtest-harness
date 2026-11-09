@@ -280,6 +280,14 @@ export function startApp(): void {
 
   (window as unknown as { __harness?: unknown }).__harness = {
     world, view, clock, input, viewConfig: VIEW_CONFIG, debug,
+    /**
+     * v9s.55：手动步进一帧（配合 `debug.paused = true`）。
+     * 验收「起手 / 收招每一帧」时，截图在软件渲染下要 3s 一张，实时抓帧必然错过；
+     * 暂停 + 逐帧推进才能精确停在某一帧。intents 只写差异字段，其余取空输入。
+     */
+    stepOnce: (patch: Record<string, unknown> = {}) => clock.singleStep(
+      { ...EMPTY_INTENTS, ...patch } as Intents,
+    ),
     getUserZoom: () => userZoom,
     // v9d：手势接口读数，技能层 / 自动化验收可直接订阅最近一次手势
     getGestures: () => lastFrame.gestures,

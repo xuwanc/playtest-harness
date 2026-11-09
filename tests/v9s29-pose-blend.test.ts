@@ -85,10 +85,13 @@ describe('v9s.29 起手 / 收招的姿态融合', () => {
   });
 
   it('收招同样平滑：最后一帧不是「啪」地回待机', () => {
+    // v9s.55 之后不再有「A/B 硬切」这个前提：权重一旦归零就交还待机，即使
+    // poseOut=0 也不会留下「权重 0 但仍在写满挥出姿态」的硬切帧。所以直接量
+    // 单帧跳变上限 —— 旧版的实测值是 1.4 rad（约 80°），肉眼就是一帧闪回。
     const smooth = run({});
     const hard = run({ poseIn: 0, poseOut: 0 });
-    expect(hard.exitDelta).toBeGreaterThan(0.3);
-    expect(smooth.exitDelta).toBeLessThan(hard.exitDelta * 0.7);
+    expect(smooth.exitDelta).toBeLessThan(0.25);
+    expect(hard.exitDelta).toBeLessThan(0.25);
   });
 
   it('融合只是过渡：淡出结束后确实回到待机（不会停在半途）', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createVoxelRig } from '../src/presentation/voxel-rig';
 import type { VoxelRig } from '../src/presentation/voxel-rig';
+import { GAIT_NO_IDLE } from './mech-gait';
 import { makeWorld, intent, run } from './helpers';
 import { rigNodes } from './rig-nodes';
 import type { AppConfig, ProgramAnimViewConfig, World } from '../src/core';
@@ -20,7 +21,7 @@ function makeRig(anim: ProgramAnimViewConfig = animCfg()): VoxelRig {
   const w = makeWorld();
   return createVoxelRig(
     raw.view.voxel, raw.view.colors, w.config.moveSpeed,
-    raw.view.orientation, raw.view.gait, raw.view.weaponMount, raw.view.lean, raw.view.hurt,
+    raw.view.orientation, GAIT_NO_IDLE, raw.view.weaponMount, raw.view.lean, raw.view.hurt,
     anim,
   );
 }

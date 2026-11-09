@@ -31,6 +31,7 @@ import {
   stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir,
   stopYawFade, solveTurnStep, slewDirSign, slewHipTarget, turnSpinGate,
   hipFlipWeight, hipTrackRate, slewGate,
+  idleStanceConfig, idleStanceTarget, leadFootIsLeft, mixIdleStance, solveIdleStance,
 } from './gait';
 import type { GaitInput } from './gait';
 import {
@@ -78,6 +79,8 @@ export type VoxelRig = {
     /** 触发落地时读到的落地前垂直速度（m/s，负 = 下落） */
     impactVy: number;
   };
+  /** v9s.55：本帧待机斜跨站姿读数（权重 / 前脚 / 下沉 / 侧移）。 */
+  idleStance(): { weight: number; frontLeft: boolean; sink: number; shift: number };
   /** v8c：攻击姿态混合系数 0..1（0 = 完全由步态 / 静止基准接管）。 */
   attackBlend(): number;
   /** v8d：两个下半身权重与本帧攻击等效驱动读数，供验收「权重是否真的生效」。 */
@@ -126,6 +129,11 @@ export type VoxelRig = {
     pitch: number;
     roll: number;
     strike: number;
+    /**
+     * v9s.55：战斗姿态权重 0..1。剑身三通道（仰角 / 外撇 / 滚转）与整体带转都按它
+     * 缩放，所以「过渡帧」量出来的刃身角度是混合值 —— 测稳态幅度要先按它筛帧。
+     */
+    poseW: number;
     /** v9s.29：刃面滚转（主/副）与刃身外撇（主/副），验收「刃口是否迎着挥击方向」 */
     bladeTwist: number;
     bladeTwistOff: number;
@@ -192,6 +200,9 @@ export type VoxelRig = {
     hipYawTarget: number;
     /** v9s.45：转身闸门状态 0..1（1 = 身体在转、下盘目标冻结）。验收「慢放不抖」读它。 */
     spin: number;
+    /** v9s.55：待机斜跨（权重 / 前脚是否左 / 下沉 / 重心侧移 / 下半身偏转） */
+    idleW: number; idleFrontLeft: boolean; idleSink: number; idleShift: number;
+    idleHipYaw: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
    *  供验收「腿摆动方向」：投影基准必须与腿所在坐标系一致，否则非正前方时方向被歪。 */
@@ -798,6 +809,21 @@ export function createVoxelRig(
   /** v9s：本帧原地转身踏步脉冲强度（诊断用） */
   let lastTurnStep = 0;
 
+  // ---- v9s.55 · 待机斜跨站姿（纯表现层状态，不进 Core / 快照）----
+  /** 斜跨参数（配置缺省 = null，整层关闭，几何逐字节回到旧待机） */
+  const idleCfg = idleStanceConfig(gaitCfg);
+  /** 前脚是不是左腿：停步那帧按「最后踩出去的那只脚」锁定，之后保持不变 */
+  let idleFrontLeft = true;
+  /** 本帧斜跨权重 0..1（按速度平滑） */
+  let idleStanceW = 0;
+  /** 斜跨的独立计时器（秒）：驱动站立微摆，暂停时随 dt 冻结 */
+  let idleT = 0;
+  /** 本帧斜跨带来的骨盆下沉 / 重心侧移（在 IK 基准之后叠加，脚不跟着动） */
+  let idleSink = 0;
+  let idleShift = 0;
+  /** 本帧斜跨的下半身偏转（rad，叠在 hipYaw 上；站定时才非零） */
+  let idleHipYaw = 0;
+
   // ---- v9s.22 squash & stretch 状态（纯表现，不进 Core / 快照）----
   /** 本帧输出的形变量（诊断用） */
   let lastStretch: StretchPose = { ...NEUTRAL_STRETCH };
@@ -1050,6 +1076,33 @@ export function createVoxelRig(
    * 剑还在半路，真正挥到位发生在 recovery（既无位移也无判定），读起来就是「挥了个寂寞」。
    * 现在 active 末 swing ≈ 0.9，命中那一帧手臂、躯干、刀光基本同时到位。
    */
+  /**
+   * v9s.55 · 本帧的「剪辑时间轴」0..1（0 = 蓄势满，1 = 挥出满）。
+   *
+   * 用阶段与阶段内进度决定，而不是从 attackProgress 反推：`attackProgress` 把
+   * windup / active / recovery 三段按**时长**压成 0..1，而剪辑的关键帧是**动作弧线**
+   * 上的位置，两者不是一条线性关系（剑盾 windup 只有 0.09s，占整段 20%，却要独享
+   * 蓄势帧）。按阶段取才能让「蓄势 → 挥出 → 保持」与 Core 的判定节奏严格对齐。
+   */
+  function posePhaseU(combat: CombatState): number {
+    const t = combat.timings;
+    const total = t.windup + t.active + t.recovery;
+    // 夹具 / clip-lab 只写 phase + attackProgress（timings 全 0）时退回旧的刻度曲线，
+    // 否则「progress 0.45 = 已挥出满」这类基于绝对刻度的读数会全部失准。
+    if (!(total > 1e-4)) return clamp((swingCurve(combat.attackProgress) + 1) / 2, 0, 1);
+    // 直接由 attackProgress 换算成「动作本体已走过的时间」，再按阶段切分。
+    // 不用 phaseTimer 是因为它只在 Core 的推进里同步，夹具 / clip-lab 只写
+    // attackProgress 时两者会脱节 —— 姿态采样必须只依赖一个真实来源。
+    const elapsed = clamp(combat.attackProgress, 0, 1) * total;
+    if (elapsed <= t.windup) return 0;                       // 蓄势帧
+    const inActive = elapsed - t.windup;
+    // 挥出在 active 的前 70% 完成、后 30% 保持满幅：`cancelWindow`（默认 progress 0.45）
+    // 允许玩家在最晚这一刻接下一段，此时剑必须已经挥到位，否则换段就是「抡到一半改道」。
+    // 这也是旧 `swingCurve` 的观感（0.42 走满），只是现在由阶段时间表达、不再靠魔数刻度。
+    if (inActive < t.active) return clamp(inActive / Math.max(t.active * 0.7, 1e-4), 0, 1);
+    return 1;                                                 // recovery / settle：保持挥出满
+  }
+
   function swingCurve(t: number): number {
     if (t < 0.22) return -1;
     // v9s.28：挥出从 0.22~0.50 提前到 0.22~0.42。
@@ -1373,10 +1426,20 @@ export function createVoxelRig(
       return Math.sign(zBase) * Math.min(Math.abs(zBase), cap);
     };
 
+    // ---- v9s.55：剑身三通道也要跟着 combatPoseW 淡 ----
+    // 手臂 / 躯干 / 骨盆由 blendCombatPose 按权重混合，剑身这几条却是直接写绝对值：
+    // 收招时权重已经掉到 0.05，剑还停在剪辑末帧的仰角上，等 w 归零那一帧一步跳回
+    // 待机基准 —— 实测剑盾单帧剑身跳 62°、整体带转 20°。这是「结束 Pose 接不上待机」
+    // 的最后一处，也是唯一不在姿态交叉淡出覆盖范围内的一处。
+    const wBlend = clamp(combatPoseW, 0, 1);
+
     // ---- 主手 ----
     // v9s.32：非攻击帧叠加该武器的持械仰角（例如大剑待机时剑尖压得更低），
     // 攻击帧仍以挥击剪辑的 bladePitch 为准，偏移自然让位。
-    const e = (swingBladePitch ?? (mountBasePitch(w) + stancePitch)) + drag;
+    const baseE = mountBasePitch(w) + stancePitch + drag;
+    const e = swingBladePitch === null
+      ? baseE
+      : baseE + (swingBladePitch + drag - baseE) * wBlend;
     // 刻意**不**把腕角算进补偿链：腕滞后是「剑比手慢半拍」的那一层，
     // 抵消掉它就等于把 v9s24 的白做了（实测剑尖相对手只差 1cm）。这里只抵消
     // 躯干 + 肩 + 肘，让剑停在目标仰角附近，再叠加腕部的甩动。
@@ -1388,12 +1451,17 @@ export function createVoxelRig(
     // 反解基准按武器几何区分：剑是「长轴 +Y」→ 基准 π/2（0 = 剑水平）；
     // 盾是「法线 +Z」的平板 → 基准 = 默认挂点角（0 = 盾面正对前方），
     // 于是盾猛顶时数据只要写 0，盾面就始终保持朝前，不管左臂前顶到哪个角度。
-    const eo = swingBladePitchOff ?? (w === 'sword-shield' ? null : mountOffBasePitch(w) + stancePitchOff);
+    const eoRaw = swingBladePitchOff;
+    const eoBase = mountOffBasePitch(w) + (w === 'sword-shield' ? 0 : stancePitchOff);
+    const eo = eoRaw === null ? null : eoBase + (eoRaw - eoBase) * wBlend;
     const offChain = torsoPitch + offArm.root.rotation.x + offArm.joint.rotation.x;
     if (w === 'sword-shield') {
-      offMount.rotation.x = eo === null
-        ? mountOffBasePitch(w)
-        : mountOffBasePitch(w) - eo - offChain;
+      // 盾没有「世界仰角」语义：没数据时就让盾跟着小臂走（不补偿手臂链），
+      // 有数据时反解成「盾面朝前」。两条路径的输出端做混合，w=0 与旧行为逐字节相同。
+      const outBase = mountOffBasePitch(w);
+      offMount.rotation.x = eoRaw === null
+        ? outBase
+        : outBase - (eoRaw + offChain) * wBlend;
     } else {
       offMount.rotation.set(
         Math.PI / 2 - (eo ?? 0) - offChain, 0,
@@ -1409,10 +1477,11 @@ export function createVoxelRig(
     // 绕小臂转，刀尖在锥面上打转（实测让横扫段仰角多塌 4°）；放在 grip 上才是
     // 「相对手的固定夹角」，不随手臂姿态漂移。
     const cant = mountCant(w);
-    const yawMain = swingBladeYaw ?? 0;
-    const yawOff = swingBladeYawOff ?? 0;
-    const twMain = swingBladeTwist ?? 0;
-    const twOff = swingBladeTwistOff ?? 0;
+    // 基准是 0（待机不撇不滚），所以按权重直接缩放即可；w=1 时与旧值完全相同。
+    const yawMain = (swingBladeYaw ?? 0) * wBlend;
+    const yawOff = (swingBladeYawOff ?? 0) * wBlend;
+    const twMain = (swingBladeTwist ?? 0) * wBlend;
+    const twOff = (swingBladeTwistOff ?? 0) * wBlend;
     // 符号：grip 的 +Z 旋转把刀尖推向 −X（角色左侧），所以右手（+X 侧）外撇取负，
     // 左手取正。写反的话两把刀会向中线内收，双持反而更「合」。
     if (leadR) {
@@ -1447,7 +1516,12 @@ export function createVoxelRig(
     // playerRoot，两者叠加，不冲突）。rootYaw 是随挥击曲线摆的带转，spinYaw 是
     // 按攻击进度单调推的整圈；两者直接相加，收招时 spinYaw=2π≡0、rootYaw=0，
     // root 自动回正，不需要额外的归零过渡。
-    lastRootTurn = p.rootYaw + p.spinYaw;
+    //
+    // v9s.55：带转同样按 combatPoseW 缩放。update() 每帧把 root.rotation.y 归零，
+    // 收招淡出期间权重已经很低、带转却还是满值，w 归零那帧直接抹掉 0.35 rad（20°）
+    // —— 与剑身仰角是同一个毛病。spin 不缩放：它是整圈，末帧 2π≡0，缩放反而会让
+    // 角色「倒着转回来」。
+    lastRootTurn = p.rootYaw * clamp(combatPoseW, 0, 1) + p.spinYaw;
     root.rotation.y = lastRootTurn;
     upper.rotation.y += p.yaw;
     upper.rotation.x += p.pitch;
@@ -1477,9 +1551,19 @@ export function createVoxelRig(
    * 段内的挥出速度完全不受影响（不引入逐帧平滑，否则会吃掉冲击力）。
    */
   function solveSwingFor(combat: CombatState, dt: number): SwingPose {
-    const swingT = clipLabT ?? swingCurve(combat.attackProgress);
+    // v9s.55：姿态采样改成「按阶段推进的剪辑时间轴」，不再走 `swingCurve`。
+    //
+    // 旧链路是 swing ∈ [−1, 1] 过 `(swing+1)/2` 映射到剪辑 t，于是：
+    //   · 起手 t<0.22 恒为 −1（u=0，蓄势）—— 正确，但只有 0.1s 的 poseIn 去接；
+    //   · **收势** swing 从 +1 掉到 0 ⇒ u 从 1 回到 **0.5**，停在「挥到中途」那一帧
+    //     （手臂还举着、身体已转回正前），再淡出到待机 —— 这是「结束 Pose 接不上」
+    //     的直接原因；settle 阶段还把这个半挥姿态定格了整整 0.16s。
+    // 现在按阶段取 u：蓄势段恒 0、挥出段随 active 进度 0→1、收招段恒 1。收势
+    // 交给 `combatPoseW` 的交叉淡出（待机 ↔ 挥出满），时长跟 recovery 走。
+    // clip-lab 的 `setClipT` 语义同步修正为「剪辑时间轴 0..1」（见 app.ts clipLab.preview）。
+    const u = clipLabT !== null ? clamp(clipLabT, 0, 1) : posePhaseU(combat);
     const target = solveSwingPose(
-      combat.weapon, combat.comboIndex, swingT, swingCfg,
+      combat.weapon, combat.comboIndex, u * 2 - 1, swingCfg,
       combat.attackProgress,
     );
     if (combat.comboIndex !== swingSeg) {
@@ -1840,7 +1924,11 @@ export function createVoxelRig(
 
     // v9s.29：收招淡出期间（combatPoseW > 0）继续写战斗姿态，让交叉淡出有「来源」；
     // 权重归零后才清状态。否则最后一帧直接跳回待机，淡出就白做了。
-    if (combat.phase === 'idle' && combatPoseW <= 0.001) {
+    // v9s.55：权重归零就交还待机 —— 不再要求 phase 先回 idle。
+    // 旧条件会在 `settle` 期间「权重已是 0、却仍写满挥出姿态」：混合函数在 w=0 时
+    // 不再被调用，骨骼就停在挥出帧上，直到 settle 结束那一帧被 update 开头整体归零
+    // —— 收招最后一帧硬切（实测单帧 1.4 rad，比硬切 A/B 还差）。
+    if (combatPoseW <= 0.001) {
       // 收招：清空段间过渡状态，下次起手从本段起手帧开始（不继承上一轮收势）
       swingFrom = null;
       swingPose = null;
@@ -2353,6 +2441,10 @@ export function createVoxelRig(
         stopT = 0;
         stopPhase0 = c.gaitPhase;
         stopPhaseEnd = nextFeetTogetherPhase(c.gaitPhase);
+        // v9s.55：斜跨的前脚 = 停步相位里更靠前的那只（= 最后踩出去的那只）。
+        // 与 solveStopInertia 的 leadLeft 同一判据 —— 惯性把左脚踩出去、斜跨却把
+        // 右脚留在前面，会读成收相结束时脚自己换了一次。
+        idleFrontLeft = leadFootIsLeft(c.gaitPhase, gaitCfg.plantLock);
         stopSpeed0 = speed;
         stopStride0 = Math.max(c.stride, EPS);
         stopFwd = realDrive.localForward;   // gait 局部，给 solveStopGait 用
@@ -2455,6 +2547,32 @@ export function createVoxelRig(
           grounded: c.grounded,
         }, gaitCfg);
         gaitPose = mixLowerGait(gaitPose, realPose, legTakeoverSm);
+      }
+
+      // ---- v9s.55 · 待机斜跨站姿 ----
+      // 站定时把「两脚并拢、全身归零」换成「一脚前一脚后、重心压在承重腿」。
+      // 权重按速度平滑：走路时精确为 0（几何与旧版逐字节相同），停步 / 收招 / 站桩时升到 1。
+      // 与攻击 / 转身互斥 —— 那两种状态本来就要动腿，叠一个站姿只会互相抵消。
+      idleT += dt;
+      idleSink = 0;
+      idleShift = 0;
+      idleHipYaw = 0;
+      if (idleCfg) {
+        const idleAllowed = c.grounded && !attacking && !knockActive && !turnActive;
+        const targetIdle = idleAllowed ? idleStanceTarget(speed, idleCfg) : 0;
+        // 进入略慢（重心沉下去）、退出略快（起步先把腿交给步态），两端都不会突跳
+        const rate = targetIdle > idleStanceW ? idleCfg.smoothing : idleCfg.smoothing * 0.85;
+        idleStanceW += (targetIdle - idleStanceW) * (1 - Math.exp(-rate * Math.max(0, dt)));
+        if (idleStanceW < 1e-4) idleStanceW = 0;
+        if (idleStanceW > 0) {
+          const st = solveIdleStance(
+            idleFrontLeft, idleStanceW, Math.sin(idleT * 1.15), idleCfg,
+          );
+          gaitPose = mixIdleStance(gaitPose, st.pose, idleStanceW);
+          idleSink = st.sink * idleStanceW;
+          idleShift = st.shift * idleStanceW;
+          idleHipYaw = st.hipYaw * idleStanceW;
+        }
       }
 
       const gait = scaleGaitPose(gaitPose, weights.gaitScale);
@@ -2601,6 +2719,15 @@ export function createVoxelRig(
         lower.position.x -= stopBodyX;
         lower.position.z -= stopBodyZ;
       }
+      // v9s.55：斜跨的下沉 / 重心侧移同样写在 IK 基准之后 —— 锚点取的是「还没沉、
+      // 还没偏」的脚位，所以脚被钉在原地，IK 把差值反解成承重腿的屈膝与髋侧摆。
+      // 写进步态层（pelvisY / pelvisX）会连脚一起搬走，等于把走歪的落点当成正确落点。
+      if (idleSink > 0 || idleShift !== 0) {
+        pelvis.position.y -= idleSink;
+        lower.position.y += idleSink * (1 - clamp(ikW, 0, 1));
+        pelvis.position.x += idleShift;
+        if (ikW <= 0) lower.position.x -= idleShift;
+      }
 
       // 1.5) v8g 惯性分层：盆骨带一点倾斜 + 小幅重心平移 + 移动时略微下沉。
       // 旧版只把惯性倾到 upper，盆骨完全不动，像「上身自己往前折」。现在同一份惯性
@@ -2633,11 +2760,24 @@ export function createVoxelRig(
       //    写完战斗姿态后按权重混合，待机 ↔ 起手 / 收招不再单帧换姿势。
       const combatActive = combat.phase !== 'idle'
         || (combat.charging && combat.weapon === 'bow');
-      const fadeTarget = combatActive ? 1 : 0;
-      const fadeDur = Math.max(1e-3,
-        fadeTarget > combatPoseW
-          ? (swingCfg.poseIn ?? 0.1)
-          : (swingCfg.poseOut ?? 0.16));
+      // v9s.55：战斗姿态的进出改成「跟阶段等长」。
+      //
+      // 旧版淡入固定 0.1s、淡出固定 0.16s，与动作本身的节奏无关：剑盾 windup 只有
+      // 0.09s，0.1s 淡入等于整个起手都在混合里（永远走不到蓄势帧）；大剑 windup 0.16s
+      // 却只给 0.1s，从垂手到高举 1.5 rad 被压进 6 帧 —— 读起来是「啪一下抬手」。
+      // 现在起手跨满 windup、收招跨满 recovery（+ 半个 settle），交叉淡出就是动作本身。
+      const fadeTarget = (combatActive
+        && combat.phase !== 'recovery' && combat.phase !== 'settle') ? 1 : 0;
+      const poseIn = Number.isFinite(swingCfg.poseIn) ? (swingCfg.poseIn as number) : 0.1;
+      const poseOut = Number.isFinite(swingCfg.poseOut) ? (swingCfg.poseOut as number) : 0.16;
+      const windupDur = Math.max(0.02, combat.timings.windup);
+      const recoverDur = Math.max(0.02, combat.timings.recovery + combat.timings.settle * 0.5);
+      // 显式配 0 = 关掉过渡（A/B 对照用，等价于硬切）；否则与阶段等长
+      // 起手只占 windup 的前 75%：剩下 1/4 留在蓄势帧上，「抬手 → 定住 → 挥出」
+      // 才有节奏。淡入铺满整个 windup 的话，蓄势姿态刚到位就开始挥，等于没有蓄势。
+      const fadeDur = fadeTarget > combatPoseW
+        ? (poseIn <= 0 ? 1e-3 : clamp(Math.max(poseIn, windupDur * 0.75), 0.05, 0.30))
+        : (poseOut <= 0 ? 1e-3 : clamp(Math.max(poseOut, recoverDur * 0.85), 0.08, 0.42));
       if (combatPoseW !== fadeTarget) {
         const step = dt / fadeDur;
         combatPoseW = clamp(
@@ -2769,7 +2909,8 @@ export function createVoxelRig(
       //    下盘 = 上面算出的连续 hipYaw（v8b：跟随移动方向带转，但绝不跨 ±π 跳变）；
       //    头部先于身体转向目标（补偿攻击旋身，仍用 wrapAngle 走最短弧，但其限幅很小、
       //    受 headTurnRate 平滑，不会造成可见跳变）。
-      lower.rotation.y = hipYaw;
+      // v9s.55：站定时下半身斜对前方一点（斜跨），走路时 idleHipYaw 精确为 0
+      lower.rotation.y = hipYaw + idleHipYaw;
       // v9o：胸随下盘按配置比例带转（下盘转得多、胸转得少），避免「只有腿在偏、
       // 上身还正对前方」的拧巴感。hipYaw 已平滑，线性缩放不会引入跳变。
       chestYaw = chestYawFromHip(hipYaw, gaitCfg.chestYawScale, gaitCfg.chestYawMaxDeg);
@@ -2977,12 +3118,19 @@ export function createVoxelRig(
         pitch: p?.pitch ?? 0,
         roll: p?.roll ?? 0,
         strike: p?.strike ?? 0,
+        poseW: combatPoseW,
         bladeTwist: p?.bladeTwist ?? 0,
         bladeTwistOff: p?.bladeTwistOff ?? 0,
         bladeYaw: p?.bladeYaw ?? 0,
         bladeYawOff: p?.bladeYawOff ?? 0,
         shoulderL: { x: lastShoulder.lx, y: lastShoulder.ly, z: lastShoulder.lz },
         shoulderR: { x: lastShoulder.rx, y: lastShoulder.ry, z: lastShoulder.rz },
+      };
+    },
+    idleStance(): { weight: number; frontLeft: boolean; sink: number; shift: number } {
+      return {
+        weight: idleStanceW, frontLeft: idleFrontLeft,
+        sink: idleSink, shift: idleShift,
       };
     },
     attackBlend(): number {
@@ -3043,6 +3191,8 @@ export function createVoxelRig(
         phase: lastDrive.phase,
         dirF: dirDriveF, dirR: dirDriveR,
         hipYawTarget: lastHipYawTarget, spin: spinBlend,
+        /** v9s.55：待机斜跨站姿（权重 / 前脚是否左 / 下沉 / 重心侧移） */
+        idleW: idleStanceW, idleFrontLeft, idleSink, idleShift, idleHipYaw,
       };
     },
     gaitYaw(): number {

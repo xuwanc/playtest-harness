@@ -1,4 +1,4 @@
-import type { GaitViewConfig } from '../core';
+import type { GaitViewConfig, IdleStanceViewConfig } from '../core';
 
 /**
  * 程序化步态解算器（Overgrowth 式思路），纯函数：无 THREE、无本地时间、无随机。
@@ -754,5 +754,180 @@ export function solveStopInertia(
     bodyDip: Math.max(0, cfg.stopBodyDip) * env,
     chestPitch: Math.max(0, cfg.stopChestPitch) * env,
     leadLeft, fwdN, rightN, env,
+  };
+}
+
+/* -------------------------------------------------------------------------- *
+ * v9s.55 · 待机斜跨站姿（contrapposto）
+ * -------------------------------------------------------------------------- *
+ * 旧的待机是「两脚并拢、全零」：走路时一直在动看不出来，一停下来就变成一个
+ * 笔直的方块人正面朝前，像刚被摆到展台上。真人站定会自然把重心交给一条腿，
+ * 另一条脚往前虚点，骨盆一侧抬高、上身反向倾回去 —— 也就是斜跨站姿。
+ *
+ * 这里把它做成**步态层之上的一个姿态**（GaitPose 同构），好处是腿、骨盆、侧倾
+ * 全部走既有通道：足部 IK、平衡读数、受击 / 惯性叠加都不用改一行。
+ *
+ * 两个刻意的取舍：
+ *  1) **不写 pelvisY / pelvisX**。它们会导致脚跟着下沉 / 平移（FK 腿挂在下盘上），
+ *     而 IK 锚点是在写腿之后才捕获的，等于「把走歪的脚位当成正确落点」——
+ *     脚要么穿地、要么滑步。所以下沉 sink、侧移 shift 单独返回，由骨架层在
+ *     IK 基准**之后**叠加（与驼背 kneeSink / 停步惯性同一套机制）。
+ *  2) **不写膝角**。承重腿的屈膝由 sink + 足部 IK 反解出来：脚钉在原地，骨盆沉
+ *     多少、膝就弯多少。写死角度会和「驼背屈膝」「落地缓冲」抢同一根骨头。
+ *
+ * 前脚是谁不是随机的：骨架层在停步那帧用 `leadFootIsLeft(停步相位)` 锁定，
+ * 于是「最后踩出去的那只脚」留在前面，停步到站定是一次连续的重心转移。
+ */
+export type IdleStancePose = {
+  /** 腿 / 骨盆侧倾 / 上身侧倾（不含 sink / shift） */
+  pose: GaitPose;
+  /** 骨盆下沉（m，正值；骨架层在 IK 基准之后 -= ） */
+  sink: number;
+  /** 重心向承重腿侧移（m，正值 = 角色右侧；骨架层在 IK 基准之后 += ） */
+  shift: number;
+  /** 下半身偏转（rad，正值 = 朝角色右侧）—— 直接叠在 lower.rotation.y 上 */
+  hipYaw: number;
+};
+
+const IDLE_DEFAULTS: Required<IdleStanceViewConfig> = {
+  enabled: true,
+  frontPitch: 0.16,
+  backPitch: 0.14,
+  frontKnee: 0.03,
+  shift: 0.03,
+  sink: 0.012,
+  pelvisRoll: 0.05,
+  torsoLean: 0.06,
+  hipYaw: 0.16,
+  sway: 1,
+  enterSpeed: 0.18,
+  exitSpeed: 0.55,
+  smoothing: 7,
+};
+
+/** 配置缺省 / 写坏时的安全兜底（NaN 会一路污染到腿角，必须挡在入口）。 */
+export function idleStanceConfig(cfg: GaitViewConfig): Required<IdleStanceViewConfig> | null {
+  const raw = cfg.idleStance;
+  if (!raw || raw.enabled === false) return null;
+  const pick = (v: number | undefined, d: number): number => (Number.isFinite(v) ? (v as number) : d);
+  return {
+    enabled: true,
+    frontPitch: Math.max(0, pick(raw.frontPitch, IDLE_DEFAULTS.frontPitch)),
+    backPitch: Math.max(0, pick(raw.backPitch, IDLE_DEFAULTS.backPitch)),
+    frontKnee: Math.max(0, pick(raw.frontKnee, IDLE_DEFAULTS.frontKnee)),
+    shift: Math.max(0, pick(raw.shift, IDLE_DEFAULTS.shift)),
+    sink: Math.max(0, pick(raw.sink, IDLE_DEFAULTS.sink)),
+    pelvisRoll: pick(raw.pelvisRoll, IDLE_DEFAULTS.pelvisRoll),
+    torsoLean: pick(raw.torsoLean, IDLE_DEFAULTS.torsoLean),
+    hipYaw: pick(raw.hipYaw, IDLE_DEFAULTS.hipYaw),
+    sway: clamp(pick(raw.sway, IDLE_DEFAULTS.sway), 0, 2),
+    enterSpeed: Math.max(0, pick(raw.enterSpeed, IDLE_DEFAULTS.enterSpeed)),
+    exitSpeed: Math.max(0, pick(raw.exitSpeed, IDLE_DEFAULTS.exitSpeed)),
+    smoothing: Math.max(0.1, pick(raw.smoothing, IDLE_DEFAULTS.smoothing)),
+  };
+}
+
+/**
+ * 停步相位里更靠前的是不是左腿。
+ *
+ * 与 `solveStopInertia` 的 `leadLeft` 用同一条判据（`footOffset(phase) > 0`），
+ * 只是抽出来给「斜跨前脚」复用 —— 两处必须一致，否则会出现「惯性把左脚踩出去、
+ * 斜跨却把右脚留在前面」这种自相矛盾的收相。
+ */
+export function leadFootIsLeft(phase: number, plantLock = 1): boolean {
+  const p = ((phase % TAU) + TAU) % TAU;
+  return footOffset(p, plantLock) > 0;
+}
+
+/** 该速度下斜跨站姿的权重 0..1（速度越低越像站定）。 */
+export function idleStanceTarget(speed: number, cfg: Required<IdleStanceViewConfig>): number {
+  const span = cfg.exitSpeed - cfg.enterSpeed;
+  if (span <= EPS) return speed <= cfg.enterSpeed ? 1 : 0;
+  return clamp((cfg.exitSpeed - speed) / span, 0, 1);
+}
+
+/**
+ * 解出斜跨站姿。返回的是**满权重**姿态（各量都是「站定后应有的值」），
+ * 权重由调用方通过 `mixIdleStance` / 直接相乘来施加 —— 这样同一份姿态既能整体淡入，
+ * 也能单独给 sink / shift 乘权重，不必在两个地方各乘一遍（漏乘就是半截姿态）。
+ *
+ * @param frontLeft 前脚是不是左腿（停步时锁定，之后保持不变）
+ * @param weight    权重 0..1，仅用于「0 时精确短路成零姿态」
+ * @param sway      −1..1 的缓慢微摆（由骨架层的本地计时器给，暂停时保持不动）
+ */
+export function solveIdleStance(
+  frontLeft: boolean,
+  weight: number,
+  sway: number,
+  cfg: Required<IdleStanceViewConfig>,
+): IdleStancePose {
+  const w = clamp(weight, 0, 1);
+  const zero = (): GaitPose => ({
+    legL: { pitchX: 0, rollZ: 0, kneeX: 0 },
+    legR: { pitchX: 0, rollZ: 0, kneeX: 0 },
+    pelvisX: 0, pelvisY: 0, pelvisRoll: 0, sideLean: 0,
+    armL: 0, armR: 0, strafe: 0, backward: 0,
+  });
+  if (w <= 1e-6 || !cfg.enabled) return { pose: zero(), sink: 0, shift: 0, hipYaw: 0 };
+
+  // 承重腿 = 后腿：frontLeft 时右腿在后（角色右侧 = +X）
+  const loadSide = frontLeft ? 1 : -1;
+  const s = clamp(sway, -1, 1) * cfg.sway;
+  // 微摆：重心在承重腿附近画一个很小的椭圆（前后 ±4mm、左右 ±3mm），
+  // 周期由骨架层给（约 5s）—— 站着不动的方块人只要有一点点起伏就不僵。
+  const micro = 0.008 * s;
+
+  const front = { pitchX: -cfg.frontPitch, rollZ: 0, kneeX: cfg.frontKnee };
+  const back = { pitchX: cfg.backPitch, rollZ: 0, kneeX: 0 };
+
+  return {
+    pose: {
+      legL: frontLeft ? front : back,
+      legR: frontLeft ? back : front,
+      pelvisX: 0,
+      pelvisY: 0,
+      pelvisRoll: loadSide * cfg.pelvisRoll + s * 0.006,
+      // upper.rotation.z 正 = 上身向角色左侧倒；重心在右侧时上身向右侧（负）压回去
+      sideLean: -loadSide * cfg.torsoLean + s * 0.007,
+      armL: 0, armR: 0, strafe: 0, backward: 0,
+    },
+    sink: cfg.sink + micro * 0.6,
+    shift: loadSide * cfg.shift + micro,
+    // 承重腿侧的胯略往前送，整个人斜对前方一点 —— 正面才看得出来是「斜跨」而不是
+    // 「两脚前后站」。只转下半身：胸口仍朝目标，这是格斗站姿而非休闲站姿。
+    hipYaw: loadSide * cfg.hipYaw + s * 0.012,
+  };
+}
+
+/**
+ * 把斜跨站姿按权重叠进当前步态姿态（全字段混合，含侧倾）。
+ *
+ * 为什么不用 `mixLowerGait`：那个函数刻意保留 a 的 sideLean（它服务于「攻击时只接管
+ * 下盘」的语义）。站姿的侧倾是整体体态，必须一起混进来，否则「腿站过去了、上身还正
+ * 着」，看起来像两次独立的位移拼在一起。
+ */
+export function mixIdleStance(a: GaitPose, b: GaitPose, k: number): GaitPose {
+  const t = clamp(k, 0, 1);
+  if (t <= 0) return a;
+  const mix = (x: number, y: number): number => x + (y - x) * t;
+  return {
+    legL: {
+      pitchX: mix(a.legL.pitchX, b.legL.pitchX),
+      rollZ: mix(a.legL.rollZ, b.legL.rollZ),
+      kneeX: mix(a.legL.kneeX, b.legL.kneeX),
+    },
+    legR: {
+      pitchX: mix(a.legR.pitchX, b.legR.pitchX),
+      rollZ: mix(a.legR.rollZ, b.legR.rollZ),
+      kneeX: mix(a.legR.kneeX, b.legR.kneeX),
+    },
+    pelvisX: mix(a.pelvisX, b.pelvisX),
+    pelvisY: mix(a.pelvisY, b.pelvisY),
+    pelvisRoll: mix(a.pelvisRoll, b.pelvisRoll),
+    sideLean: mix(a.sideLean, b.sideLean),
+    armL: a.armL,
+    armR: a.armR,
+    strafe: a.strafe,
+    backward: a.backward,
   };
 }
