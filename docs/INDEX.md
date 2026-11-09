@@ -42,6 +42,7 @@
 | 草割断后「长回来」太突然 / 想缓慢长高 | `core/grass.ts`、`presentation/grass-layer.ts` | `grassGrowth`、`GRASS_GROWTH_STAGGER`、`sampleHeight` | [systems/grass-growth-pivot.md](systems/grass-growth-pivot.md) §1 | `tests/grass-growth-pivot.test.ts`、`__harness.grassDebug().sampleHeight` |
 | 风把草每节 box 拉歪 / 想要一节一节弯且保持方块 | 同上 | `windPivotAngles`、`windPivotEffLength`、`windPivotRotate`、`<project_vertex>` | 同上 §2 | `tests/grass-growth-pivot.test.ts`、`__harness.grassDebug().wind.mode` |
 | 多个 agent 同时开发 / 怎么合并提交 | `tools/gh-commit.mjs`、冲突分类 | `--apply`、ref SHA 乐观锁 | [systems/multi-agent-workflow.md](systems/multi-agent-workflow.md) | `node tools/gh-commit.mjs`（dry-run） |
+| 用户通知 push 后怎么推到功能分支（`git push` 无凭证） | `tools/push-branch.py`、GitHub MCP 网关 | `push_files` / `delete_file`、tree 一致校验 | 同上 §1 | `python3.11 tools/push-branch.py --dry` → 去掉 `--dry` |
 | 测试场景该用哪个 / 新功能要加测试环境 | `config/plots/*.json`、`core/plot-assembly.ts` | 主场景 `index.html`、一地块一文件 | [systems/plot-assembly.md](systems/plot-assembly.md) | 只保留主场景、单入口 build |
 | 两边同时加同一位置地块 / 不想写绝对坐标 | `core/plot-assembly.ts`、`src/config.ts` | `assemblePlots`、`PLOT_ASSEMBLY`、`plotDebug()` | [systems/plot-assembly.md](systems/plot-assembly.md) §2/§4 | `tests/plot-assembly.test.ts`、`__harness.plotDebug()` |
 | 工位传送没跟着地块走 / 拼合后坐标不对 | `lab-panel.ts` 的 `goto()` | `StationSpec.spawnX/spawnZ` | 同上 §4 | `__harness.lab.goto(id)` + `plotDebug()` |
@@ -122,8 +123,9 @@
 | `npm run verify` | build → test → portable → docs → smoke 全链 | **发布前必跑** |
 | `npm run publish:preview` | 同步线上静态预览 + 校验资源 + **打印公网链接** | **每次任务完成必跑**，把链接贴进回复 |
 | `npm run docs:check` | README 行数 / INDEX 链接 / 单文件 300 行 | 改文档后 |
-| `node tools/gh-commit.mjs` | REST 提交网关（**默认 dry-run**，`--apply` 才写远端） | 多 agent 提交 / 用户批准后 |
+| `node tools/gh-commit.mjs` | REST 提交网关（**默认 dry-run**，`--apply` 才写远端，需自备 token） | 网络受限兜底 / 用户批准后 |
 | `node tools/gh-commit.mjs --list` | 只列待提交文件（不联网） | 分工前 |
+| `python3.11 tools/push-branch.py` | **协同推送**：走 GitHub MCP 网关推同名功能分支、不动 main（`--dry` 看计划） | **用户通知 push 后**；推完 fetch + diff + reset 对齐 |
 | `npm run clip:lab:check` | 九段挥击剪辑回归 | 动动画数据后 |
 | `npm run sweep -- --check` | 扫掠角曲线与真实 `bladeWorld()` 的偏差 | 动挥击数据 / 卡肉后 |
 

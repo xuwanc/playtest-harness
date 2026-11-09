@@ -4,10 +4,34 @@
 > 3 分钟入口：[`../../AGENTS.md`](../../AGENTS.md)（拉下 git 先读它）；
 > 测试场景规则正本：[`test-scene-policy.md`](test-scene-policy.md)。
 
-## 1. 通道：标准 git（网络已恢复）
+## 1. 通道：读用标准 git，写走 GitHub MCP 网关
 
-`github.com:443` 于 2026-11-09 实测连通，`git fetch` / `clone` / `push` / `ls-remote` 均可用。
-**优先标准 git**；`tools/gh-commit.mjs`（REST / Git Data API 提交网关）降为网络受限时的兜底。
+2026-11-09 实测：`github.com:443` **读**可用（`fetch` / `clone` / `ls-remote`），
+但 `git push` **没有写凭证**，报 `could not read Username for 'https://github.com'`。
+凭证助手（`git-credential-helper`）只覆盖读，`gh` 未登录、环境里也没有 `GITHUB_TOKEN`。
+
+所以协同推送走本会话已授权的 **GitHub MCP 网关**（`~/.codebuddy/.mcp.json` 的 `github` connector，
+`http://github.agent-gateway.auth-proxy.local/mcp`）。固化脚本 `tools/push-branch.py`：
+
+```bash
+python3.11 tools/push-branch.py --dry         # 先看计划
+python3.11 tools/push-branch.py               # 推同名功能分支（不存在则基于 main 建，绝不动 main）
+git fetch origin <分支>
+git diff --stat HEAD origin/<分支>            # 必须为空 → tree 逐字节一致
+git reset --hard origin/<分支>                # 本地与远端对齐
+```
+
+| 通道 | 读 | 写 | 备注 |
+|---|---|---|---|
+| 标准 git | ✅ `fetch` / `ls-remote` | ❌ `push` 无凭证 | 拉分支、看远端状态用它 |
+| `tools/push-branch.py`（MCP 网关） | — | ✅ | **协同推送首选**；内容从磁盘读，可搬大文件，不需要 token |
+| `tools/gh-commit.mjs`（REST 网关） | — | ✅ 需自备 token | 兜底；且只提交「工作区未提交的差异」，推不了本地 commit 链 |
+
+> **重要**：MCP 网关推上去的 commit 是 API 重建的，SHA 与本地不同，但 **tree 一致**。
+> 所以推完必须 `fetch` + `git diff --stat`（应为空）+ `reset --hard` 对齐，
+> 否则本地会显示「ahead N / behind M」的假分叉。推送前把本地分层 commit
+> `git branch backup/<名字> <SHA>` 留个备份，可随时找回。
+> 2026-11-09 首次实战：`feat/integration-grass-wind` 主干树 `4843ea5b…` 与本地完全一致。
 
 早期工作区是 `codeload` 归档 + `git init` 的**独立快照**，与远端无共同祖先，
 直接 `git merge` 会走 unrelated-histories，把几十个文件误判成「双方新增」。

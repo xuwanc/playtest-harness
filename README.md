@@ -83,6 +83,10 @@ docs/               INDEX 索引 + systems / state / decisions / journal / check
   自动分配位置与工位，不新建演示页、不手写绝对坐标（见 `AGENTS.md`）。
 - **每次任务完成都要更新线上并贴链接**：`npm run publish:preview` 同步静态预览 + 打印公网地址；
   这与 GitHub push 是两回事（push 仍需用户明确通知）。
+- **协同推送**：本沙箱 `git push` 无写凭证（读可用），用户通知后跑
+  `python3.11 tools/push-branch.py` 走已授权的 GitHub MCP 网关推到**同名功能分支**（不动 main），
+  再 `git fetch` → `git diff --stat`（应为空）→ `git reset --hard` 对齐。详见
+  [`docs/systems/multi-agent-workflow.md`](docs/systems/multi-agent-workflow.md) §1。
 - 每批交付都给「框架风险 + 优化方向」，滚动记录在 [`docs/risk-review.md`](docs/risk-review.md)。
 - 版本号由 integrator 统一改 `package.json`；发布产物只看 `dist/`（`npm run build` 单入口）。
 - GitHub push / REST 网关 `--apply` **需用户明确通知**；本地功能分支 commit 不受此限。

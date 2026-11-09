@@ -28,10 +28,11 @@
 > 为什么：多套场景让「看到的」≠「主线接入的」；手写绝对坐标 + 共改一个数组是多 agent
 > 冲突的根源；只 commit 不同步线上，别人和用户没法快速验证。
 
-## 二、开工标准流程（标准 git 已恢复）
+## 二、开工标准流程（读通 / 写走 MCP 网关）
 
-`github.com:443` 于 2026-11-09 实测连通，**用标准 git**；
-`tools/gh-commit.mjs`（REST 提交网关）降为网络受限时的兜底。
+2026-11-09 实测：`github.com:443` **读**可用（`fetch` / `clone` / `ls-remote`），
+但**写没有 git 凭证**——`git push` 会报 `could not read Username for 'https://github.com'`。
+因此读操作用标准 git，**协同推送走已授权的 GitHub MCP 网关**：
 
 ```bash
 git fetch origin
@@ -41,8 +42,16 @@ git fetch origin                            # 提交前再看有无新推送
 npm run verify
 npm run publish:preview                      # 更新线上预览，把打印的链接贴进任务回复
 git add -A && git commit -m "..."
+python3.11 tools/push-branch.py              # 用户通知 push 后：推到同名功能分支（绝不动 main）
+git fetch origin <分支> && git diff --stat HEAD origin/<分支>   # 必须为空（树一致）
+git reset --hard origin/<分支>               # 本地与远端对齐（远端 commit 由 API 重建，SHA 不同但 tree 相同）
 ```
 
+- `tools/push-branch.py`：走 MCP `create_branch` / `push_files` / `delete_file`，
+  内容从磁盘读（可搬 800KB+ 构建产物），不依赖 token、不需要对话上下文。
+  先 `--dry` 看计划。详见 [`docs/systems/multi-agent-workflow.md`](docs/systems/multi-agent-workflow.md) §1。
+- `tools/gh-commit.mjs`（REST 网关）是**需要自备 token 的兜底**，且它只提交
+  「工作区未提交的差异」，推不了本地已有的 commit 链 —— 协同推送优先用 `push-branch.py`。
 - **不要** `git init` + 导入代码快照：那会生成与远端无共同祖先的历史，
   合并时几十个文件被误判成「双方新增」（本项目踩过，见 `docs/journal/`）。
 - 每天 rebase 一次 `origin/main`，别攒几十个文件再合。
