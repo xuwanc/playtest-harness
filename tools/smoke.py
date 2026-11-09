@@ -794,14 +794,17 @@ def main() -> int:
                   return { base, after, items };
                 }""")
                 cuts = {c["id"]: c for c in br["after"]["cuts"]}
-                check("可破坏物件已装配且初始完好（5 件 / 0 已断）",
-                      br["base"]["count"] == 5 and br["base"]["broken"] == 0,
+                # 数量随地块增长（x-destructibles 5 件 + zz-cactus-test 4 件），
+                # 断言「装配数 == Core 状态数 == 渲染数」，不写死具体件数。
+                check(f"可破坏物件已装配且初始完好（{br['base']['count']} 件 / 0 已断）",
+                      br["base"]["count"] >= 5 and br["base"]["broken"] == 0
+                      and len(br["items"]) == br["base"]["count"],
                       f"count={br['base']['count']} broken={br['base']['broken']}")
                 # 回归护栏：完好态也必须画在地块绝对坐标上。曾经 root 没定位，
                 # 5 件全叠在世界原点（中央 8 向区冒出一根杆子、地块反而空）。
                 pos = {p["id"]: p for p in br["base"]["rendered"].get("positions", [])}
                 check("完好态就画在地块坐标（不再叠在世界原点 / 与 Core 状态一致）",
-                      len(pos) == 5
+                      len(pos) == br["base"]["count"]
                       and all(any(abs(p["x"] - s["x"]) < 1e-6 and abs(p["z"] - s["z"]) < 1e-6
                                  for s in br["items"]) for p in pos.values())
                       and sum(1 for p in pos.values() if abs(p["x"]) < 0.5 and abs(p["z"]) < 0.5) == 0,
@@ -816,10 +819,13 @@ def main() -> int:
                       and cuts["pole-a"]["nx"] > 0 and cuts["pole-c"]["nx"] < 0
                       and all(c["ny"] > 0.5 for c in cuts.values()),
                       str({k: (v["nx"], v["ny"]) for k, v in cuts.items()}))
-                check("瓶罐命中高度吸附到预设断裂带",
-                      "jar-a" in cuts
-                      and any(abs(cuts["jar-a"]["cutU"] - b) < 1e-6 for b in (0.35, 0.62)),
-                      f"jar-a cutU={cuts.get('jar-a', {}).get('cutU')}")
+                # v9s.56 起 jar 从「斜切两段 + 断裂带吸附」改为「爆裂成 6–12 块碎块」，
+                # 语义变了：不再有 cutU 断口，断言换成碎块数量与站立段归零。
+                check("瓶罐碎块爆裂（不再走斜切断裂带）",
+                      "jar-a" in cuts and cuts["jar-a"]["broken"] == 1
+                      and cuts["jar-a"]["standU"] == 0
+                      and 6 <= cuts["jar-a"]["fragments"] <= 12,
+                      f"jar-a={cuts.get('jar-a', {})}")
                 rendered = br["after"]["rendered"]
                 check("斜切两段真的画出来了（表现层与 Core 断裂数一致）",
                       rendered["broken"] == 4 and rendered["drawCalls"] >= 9,
