@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <link rel="icon" href="data:," />
+    <title>3D 玩法实验台 · Playtest Harness</title>
+    <script type="module" crossorigin src="./assets/main-DjV57SkO.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/main-BHEfa-io.css">
+  </head>
+  <body>
+    <div id="app"></div>
+    <!-- v9e：左下角半透明版本徽标，随时确认线上跑的是哪一版 -->
+    <!-- v9f：徽标同时是诊断入口，点开可「复制摘要」导出最近 20 秒的输入 / 位移 / 异常 -->
+    <button id="version-badge" type="button" data-ui-button aria-label="打开诊断记录"></button>
+
+    <!-- v9r：三个调试入口收成一排胶囊，默认全部收起；点开才在下方展开对应面板。
+         旧「操作说明」#hint 判定为不必要已移除：手机有屏幕按钮、按钮带 aria-label，
+         完整按键表见 docs/systems/input-controls.md，版本说明见 README；那块默认收起、8s 自动收回的长文案从未被看到。 -->
+    <div id="panel-row" data-ui-region>
+      <button id="lab-toggle" class="fold-pill" data-ui-button type="button" aria-expanded="false" aria-controls="lab-panel" aria-label="展开测试工位">工位 ▸</button>
+      <button id="hud-toggle" class="fold-pill" data-ui-button type="button" aria-expanded="false" aria-controls="hud" aria-label="展开状态读数">状态 ▸</button>
+      <button id="motiondbg-toggle" class="fold-pill" data-ui-button type="button" aria-expanded="false" aria-controls="motiondbg" aria-label="展开手感调试面板">手感 ▸</button>
+      <button id="debug-toggle" class="fold-pill" data-ui-button type="button" aria-expanded="false" aria-controls="debug-panel" aria-label="展开调试面板">调试 ▸</button>
+      <!-- v9s.32：体型切换从「只有 B 键」补上可见入口；点击循环、快捷键 B 同步 -->
+      <button id="body-toggle" class="fold-pill body-pill" data-ui-button type="button" aria-label="切换体型">体型 标准</button>
+      <!-- v9s.42：风吹麦浪开关，默认开。此前只有独立演示页有按钮，主场景真机测试找不到入口；
+           运行时只改 world.config.grass.wind.enabled，草层每帧从同一处读 uniform，无需重建。 -->
+      <button id="wind-toggle" class="fold-pill wind-pill" data-ui-button type="button" aria-label="关闭风吹麦浪（当前开启，快捷键 G）">风：开</button>
+    </div>
+    <div id="panel-stack" data-ui-region>
+      <div id="lab-panel" class="panel"></div>
+      <div id="hud" class="panel is-compact" aria-live="off"></div>
+      <div id="motiondbg" class="panel is-off"></div>
+      <div id="debug-panel" class="panel"></div>
+    </div>
+
+    <div id="weapon-bar" data-ui-region>
+      <button class="wp is-active" data-weapon="1" data-ui-button type="button" aria-label="剑与盾">剑盾</button>
+      <button class="wp" data-weapon="2" data-ui-button type="button" aria-label="双持剑">双剑</button>
+      <button class="wp" data-weapon="3" data-ui-button type="button" aria-label="双手剑">大剑</button>
+      <button class="wp" data-weapon="4" data-ui-button type="button" aria-label="法杖">法杖</button>
+      <button class="wp" data-weapon="5" data-ui-button type="button" aria-label="弓箭">弓</button>
+    </div>
+
+    <div id="pad-left" data-ui-region>
+      <button id="btn-sprint" class="btn" data-ui-button type="button" aria-label="冲刺">冲</button>
+      <button id="btn-jump" class="btn" data-ui-button type="button" aria-label="跳跃">跳</button>
+      <button id="btn-reset" class="btn btn-small" data-ui-button type="button" aria-label="复位">复位</button>
+    </div>
+
+    <div id="pad-right" data-ui-region>
+      <button id="btn-skill2" class="btn btn-cast" data-ui-button type="button" aria-label="副技能">技2</button>
+      <button id="btn-attack" class="btn btn-attack" data-ui-button type="button" aria-label="攻击">攻击</button>
+    </div>
+
+  </body>
+</html>
