@@ -52,7 +52,7 @@ import {
 import type { StretchConfig, StretchPose } from './limb-stretch';
 import { autoSegBlend, blendSwingPose, segEase, solveSwingPose } from './swing-pose';
 import type { SwingPose } from './swing-pose';
-import { createBeardState, solveBeard } from './beard';
+import { beardAvoidAt, createBeardState, solveBeard } from './beard';
 import type { BeardState } from './beard';
 
 export type VoxelRig = {
@@ -356,6 +356,7 @@ export function createVoxelRig(
   const beardLen = Math.max(0, style?.beard ?? 0);
   const hunch = Math.max(0, style?.hunch ?? 0);
   const kneeSink = Math.max(0, style?.kneeSink ?? 0);
+  const breathOn = !!style?.breath;
   const legLen = v.legLength;
   const armLen = v.armLength;
   const t = v.limbThickness;
@@ -436,6 +437,8 @@ export function createVoxelRig(
   // 胡子只用 3 节锥形盒，靠物理摆动而不是分节数量传达「长」。
   const beardPivots: THREE.Object3D[] = [];
   let beardState: BeardState | null = null;
+  /** v9s.54：避让计算复用的临时向量（每帧 2 次，不在热路径里 new） */
+  const beardTmp = new THREE.Vector3();
   if (style?.balding) {
     const hairColor = style.hairColor ?? '#e8e8e8';
     // 头发面全是背光面（后脑 / 侧后），纯 Lambert 在暗场景里会读成「灰帽子」而不是白发，
@@ -602,7 +605,7 @@ export function createVoxelRig(
   // 挂在胸段而不是 shoulder 关节上：挂关节会跟着抬臂翻起来，反而暴露「肩块是手臂的一部分」。
   if (style?.spaulder) {
     for (const sx of [-1, 1]) {
-      const sp = makeBox(t * 1.35, t * 1.35, bodyW * 0.44, colors.body);
+      const sp = makeBox(t * 1.2, t * 1.1, bodyW * 0.40, colors.body);
       sp.name = sx < 0 ? 'spaulderL' : 'spaulderR';
       sp.position.set(sx * (bodyW / 2 + t * 0.4), bodyH - 0.05 - chestPivotY, 0);
       torsoRoot.add(sp);
@@ -782,8 +785,16 @@ export function createVoxelRig(
   let lastGateResume = false;
   let lastSpeed = 0;
   let lastPrevSpeed = 0;
-  /** v9s.52：胡子驱动用的上一帧速度（仅带胡子造型时有意义） */
-  let lastBeardSpeed = 0;
+  /**
+   * v9s.54：胡子驱动用的上一帧读数（仅带胡子造型时有意义）。
+   * 存的是**角色局部**的前 / 右速度分量和朝向角 —— 世界速度投影到局部，
+   * 转身时纵向分量不会因为「人转了个方向」凭空产生一次假加速。
+   */
+  let lastBeardF = 0;
+  let lastBeardR = 0;
+  let lastBeardYaw = 0;
+  /** v9s.54：呼吸相位（秒），只累加 dt，不读墙钟 —— 确定性快照才稳。 */
+  let breathT = 0;
   /** v9s：本帧原地转身踏步脉冲强度（诊断用） */
   let lastTurnStep = 0;
 
@@ -1981,6 +1992,33 @@ export function createVoxelRig(
     };
   }
 
+  /** v9s.54：驱动量死区 —— 小于 0.6 rad/s² 的输入推不动一根胡子，留着只会慢慢漂。 */
+  const deadzone = (v: number): number => (Math.abs(v) < 0.6 ? 0 : v);
+
+  /**
+   * v9s.54：手臂避让 —— 手挥到脸前时把胡子推向另一侧，否则剑会从胡子中间穿过去。
+   *
+   * 判据是手在**头部局部坐标**里的位置：在前方（z > 0）、横向够近（|x| < 0.3）、
+   * 低于下巴（y < 0.06），三者同时成立才算威胁。不做真正的碰撞求解 ——
+   * 方块风格里「看起来躲开了」就够了，代价只有每帧 2 次 getWorldPosition。
+   */
+  function beardAvoid(): { pitch: number; roll: number } {
+    if (!beardPivots.length) return { pitch: 0, roll: 0 };
+    headPivot.updateWorldMatrix(true, false);
+    let push = 0;
+    let side = 0;
+    for (const limb of [armL, armR]) {
+      limb.hand.getWorldPosition(beardTmp);
+      headPivot.worldToLocal(beardTmp);
+      const a = beardAvoidAt(beardTmp.x, beardTmp.y, beardTmp.z);
+      if (a.push > 0) {
+        push = Math.max(push, a.push);
+        side += a.side;
+      }
+    }
+    return { pitch: push * 5, roll: clamp(side, -1, 1) * 8 };
+  }
+
   return {
     group: root,
     update(
@@ -2804,14 +2842,52 @@ export function createVoxelRig(
       // 5) v9s.33：平衡读数放在最后 —— 质点位置要读 IK 之后的真实脚位 / 手位。
       updateBalance(c, dt);
 
-      // 5.5) v9s.52：胡子摆动（仅带胡子造型）。驱动量是**本帧速度差分**，
-      //      与步态 / 攻击解耦：加速时整条胡子往后甩，站住后自动回正。
+      // 5.5) v9s.54：胡子摆动。两个通道，都是**本帧差分**，与步态 / 攻击解耦：
+      //      pitch（rotation.x）= 前后：起步往后甩、急停往前栽；
+      //      roll （rotation.z）= 左右：侧移 / 转身的切向 / 手臂避让。
+      //      速度先投影到角色局部，否则「原地转身」会被当成一次纵向加速。
       if (beardState && beardPivots.length === 3) {
-        const accel = (speed - lastBeardSpeed) / Math.max(dt, 1e-4);
-        const ang = solveBeard(beardState, dt, clamp(accel * 0.3, -9, 9));
-        for (let i = 0; i < 3; i++) beardPivots[i].rotation.x = ang[i];
+        const yaw = c.bodyYaw ?? 0;
+        const sy = Math.sin(yaw);
+        const cy = Math.cos(yaw);
+        const vx = c.velocity?.x ?? 0;
+        const vz = c.velocity?.z ?? 0;
+        const vF = vx * sy + vz * cy;     // 纵向分量（正 = 朝前）
+        const vR = vx * cy - vz * sy;     // 横向分量（正 = 朝角色右侧）
+        const h = Math.max(dt, 1e-4);
+        const aF = (vF - lastBeardF) / h;
+        const aR = (vR - lastBeardR) / h;
+        // yaw 差分必须回绕：±π 处直接相减会冒出几千 rad/s 的假转身
+        const dYaw = Math.atan2(Math.sin(yaw - lastBeardYaw), Math.cos(yaw - lastBeardYaw));
+        const yawRate = clamp(dYaw / h, -14, 14);
+        lastBeardF = vF;
+        lastBeardR = vR;
+        lastBeardYaw = yaw;
+        // 转身的切向加速度 ≈ ω × r；r 取胡子质心到颈轴的水平距离（约 0.18m）。
+        // 系数 30 是「让人真能看出来」的观测量：6 rad/s 的急转 → 稳态约 14°。
+        const spinA = yawRate * 0.18 * 30;
+        const avoid = beardAvoid();
+        // 死区：站定时 Core 仍会有毫米级的速度 / 朝向收敛，不让它们把胡子慢慢推歪
+        const ang = solveBeard(
+          beardState, dt,
+          deadzone(clamp(aF * 0.3 - avoid.pitch, -9, 9)),
+          // 横向通道的上限单列：前后摆受步态影响大，横向（尤其转身）需要更大的行程
+          // aR 取负：向右加速时胡子因惯性往**左**拖（rotation.z 正 = 下端向角色右侧）
+          deadzone(clamp(-aR * 0.5 + spinA + avoid.roll, -26, 26)),
+        );
+        for (let i = 0; i < 3; i++) {
+          beardPivots[i].rotation.x = ang.pitch[i];
+          beardPivots[i].rotation.z = ang.roll[i];
+        }
       }
-      lastBeardSpeed = speed;
+
+      // 5.6) v9s.54：静止呼吸。只在几乎站定时叠加，幅度 2% 躯干厚度 ——
+      //      再大就成「喘」。写 scale 不写旋转：不会与脊柱拆分 / 足部 IK 抢同一根骨头。
+      if (breathOn) {
+        breathT += dt;
+        const idleW = clamp(1 - speed / 0.6, 0, 1);
+        torso.scale.z = 1 + Math.sin(breathT * 1.4) * 0.02 * idleW;
+      }
 
       // 6) v9s.34：脊柱拆分一致性守卫。
       //    splitSpine() 之后任何一层再把 `upper` 当总角写（少 42%）都会被这里抓到：

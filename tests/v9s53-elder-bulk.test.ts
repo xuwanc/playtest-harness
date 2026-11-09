@@ -59,11 +59,12 @@ describe('v9s.53 造型加量：发帽一体 / 肩甲 / 躯干跟随宽度', () 
     expect(l.parent!.name).not.toBe('shoulderL');
   });
 
-  it('躯干深度跟随宽度：elder 比默认厚，默认仍是 0.28', () => {
+  it('躯干深度跟随宽度：不比默认宽就不加厚（默认仍是 0.28）', () => {
     const dElder = size(makeRig(elderVoxel).group.getObjectByName('torsoLower')!).d;
     const dDefault = size(makeRig().group.getObjectByName('torsoLower')!).d;
     expect(dDefault).toBeCloseTo(0.28, 6);
-    expect(dElder).toBeGreaterThan(0.30);
+    // elder 现在比默认窄（0.44 < 0.46），系数夹到 1 —— 厚度与默认相同，侧面不会更薄
+    expect(dElder).toBeCloseTo(0.28, 6);
   });
 
   it('默认体型不产生发帽 / 肩甲节点', () => {

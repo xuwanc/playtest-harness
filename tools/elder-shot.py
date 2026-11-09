@@ -69,6 +69,17 @@ def main() -> int:
             "() => +Math.hypot(window.__harness.world.character.velocity.x,"
             " window.__harness.world.character.velocity.z).toFixed(2)"))
 
+        # 5) 急转中段：v9s.54 新加的横向通道 —— 胡子因惯性甩向转身的反侧
+        cam(10, 0, face=0.0)
+        yaw0 = page.evaluate("() => window.__harness.world.character.bodyYaw")
+        page.evaluate("() => { window.__harness.world.character.facing = -2.2; }")
+        page.wait_for_timeout(240)
+        yaw1 = page.evaluate("() => window.__harness.world.character.bodyYaw")
+        print('turn yaw', round(yaw0, 2), '->', round(yaw1, 2),
+              '| beard roll', page.evaluate(
+                  "() => +(window.__harness.view.heroGroup().getObjectByName('beard0').rotation.z).toFixed(3)"))
+        page.screenshot(path=str(OUT / '05-turn.png'))
+
         print('errors =', errors)
         browser.close()
     return 0

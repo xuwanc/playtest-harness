@@ -17,6 +17,7 @@
 
 | 现象 / 关键词 | 先看哪里 | 符号 | 详细文档 | 验收 |
 |---|---|---|---|---|
+| 胡子只会前后摆 / 转身时不甩 / 静止慢慢偏 | `presentation/beard.ts`、`voxel-rig.ts` 的 5.5 段 | `solveBeard`、`aF`/`aR`、`deadzone`、`beardAvoidAt` | [systems/character-style.md](systems/character-style.md) §3.1–3.2 | `tests/v9s54-beard-motion.test.ts` |
 | 造型部件像浮着 / 某块完全看不见 | `presentation/voxel-rig.ts` 的 `style` 段 | `hairCap`、`pivot.position.z`、`torsoD` | [systems/character-style.md](systems/character-style.md) §2.1 | `__harness.view.heroGroup()` 遍历 mesh 打印世界坐标 |
 | 特效在某些地块上看不见 / 被地面盖掉 | `presentation/fx-layer.ts`、`presentation/three-scene.ts` | `FX_ORDER`、`setCollidersVisible` | [systems/presentation-fx.md](systems/presentation-fx.md) §1 | `npm run smoke`「地块走不透明通道」 |
 | 贴地特效埋进台阶 / 高台里 | `core/collision.ts`、`three-scene.ts` | `groundHeightAt()`、`groundFxY()` | [systems/presentation-fx.md](systems/presentation-fx.md) §2 | `npm run smoke`「特效层级单调」+ 截图 `shots/v9s38/02,03,10` |
@@ -97,7 +98,7 @@
 | `fx-layer.ts` | **特效层级唯一来源** | `FX_ORDER`、`setFxOrder` |
 | `voxel-rig.ts` | 人形主角骨架装配 + 逐帧姿态解算 | `createVoxelRig`、`rig.update`、`bladeWorld` |
 | `spider-rig.ts` | **8 腿主角骨架**：两节身体 + 三角步态 + 每腿两骨闭式解（按 `bodyTypes.rig` 切换） | `createSpiderRig`、`solveLeg`、`debug()`、`legs()` |
-| `beard.ts` / `voxel-rig.ts` 的 `style` 段 | **造型特征**：驼背 / 屈膝 / 地中海（一盒穿三面）/ 长白胡子（三节二阶弹簧）/ 肩甲 | `CharacterStyle`、`solveBeard`、`createBeardState` |
+| `beard.ts` / `voxel-rig.ts` 的 `style` 段 | **造型特征**：驼背 / 屈膝 / 地中海（一盒穿三面）/ 长白胡子（三节 × 前后左右两通道）/ 肩甲 / 呼吸 | `CharacterStyle`、`solveBeard`、`beardAvoidAt`、`createBeardState` |
 | `rig-parts.ts` | 体素零件几何（剑 / 大剑 / 盾 / 杖 / 弓 / 箭），无状态 | `makeSword`、`makeBow`、`makeArrow` |
 | `fighter-rig.ts` / `dummy-rig.ts` | 陪练适配（复用 `voxel-rig`）/ 普通假人轻量骨架 | `createFighterRig`、`createDummyRig` |
 | `debug-panel.ts` | lil-gui 调试面板（7 个一级分类） | `createDebugPanel`、`DebugActions` |

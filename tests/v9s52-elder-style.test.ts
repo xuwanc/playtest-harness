@@ -95,7 +95,9 @@ describe('v9s.52 胡子物理：二阶弹簧', () => {
 
     // 模拟「起步」：0.15s 内从 0 匀加速到 3.6 m/s（≈24 m/s²，接近真实起步）
     for (let i = 1; i <= 9; i++) {
-      w.character.velocity.x = 3.6 * (i / 9);
+      // 角色朝 +Z，前进就是 velocity.z（v9s.54 起胡子按局部前后 / 左右分解，
+      // 写 x 会被正确识别成「侧移」而不再驱动 pitch 通道）
+      w.character.velocity.z = 3.6 * (i / 9);
       step(rig, w, 1);
     }
     const kicked = p0.rotation.x as number;
