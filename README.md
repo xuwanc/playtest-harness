@@ -2,7 +2,7 @@
 
 用来**测试玩法与模块功能**的网页版 3D 实验台。核心目标是「核心逻辑可移植」：玩法规则放在纯 TypeScript、零依赖、不碰 DOM 与渲染库的 Core 里，Web 表现层只负责展示。
 
-当前版本 **v0.9.61**。线上地址通过项目内部渠道获取（仓库不收录访问链接与凭据）。
+当前版本 **v0.9.66**。线上地址通过项目内部渠道获取（仓库不收录访问链接与凭据）。
 
 > **新加入的 agent：先读 [`AGENTS.md`](AGENTS.md)。** 三条铁律——
 > ① 只保留**主测试场景 `index.html`**（独立演示页已删除，不要再新建第二个场景 / 演示页）；
@@ -69,7 +69,8 @@ src/app.ts          组装层（唯一同时认识 Core 与 Web 的地方）
 config/game.json    可调数值（core.* 逻辑 / view.* 表现 / scene.* 关卡；工位已迁出）
 config/plots/*.json 一地块一文件（不写世界坐标，assemblePlots 动态拼合）
 index.html          唯一主测试场景（单入口）
-tools/              smoke.py、publish-preview.mjs（线上发布）、clip-lab、gh-commit.mjs（REST 兜底）
+tests/              vitest：99 文件 / 977 例
+tools/              smoke.py（41 项自检）、clip-lab（动作验证台）、publish-preview.mjs（线上发布）
 shots/              截图（唯一存放处，整目录不入库；见 docs/assets/conventions.md）
 docs/               INDEX 索引 + systems / state / decisions / journal / checklists / assets
 ```

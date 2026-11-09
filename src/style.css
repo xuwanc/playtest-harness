@@ -777,12 +777,15 @@ html, body {
   display: block;
   width: 240px;
   max-width: 100%;
-  height: 92px;
+  /* v9s.42：三区高度（速度 / Δv / 相位），必须与 CSS_H 常量一致，否则画布被拉伸 */
+  height: 128px;
   border-radius: 4px;
 }
 #motiondbg-read {
   width: 100%;
   font-size: 10px;
+  /* v9s.42：读数两行（速度 / 相位），靠 textContent 里的 \\n 分隔 */
+  white-space: pre-line;
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
   color: rgba(206, 220, 234, 0.85);

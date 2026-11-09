@@ -17,7 +17,8 @@ import type {
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
   backHipYawTarget,
-  stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir, stopYawFade,
+  stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir, stopYawFade, slewDirSign, slewHipTarget, turnSpinGate,
+  hipFlipWeight, hipTrackRate, slewGate,
 } from './gait';
 import type { GaitInput } from './gait';
 import { solveHurtPose } from './hurt-pose';
@@ -31,8 +32,10 @@ function clamp(v: number, lo: number, hi: number): number {
 
 export type DummyRig = {
   group: THREE.Group;
-  /** 姿态完全由 Core 状态驱动，无本地时间累积（flash 除外，纯视觉衰减）。 */
-  update(s: DummyState, frameDt: number): void;
+  /** 姿态完全由 Core 状态驱动，无本地时间累积（flash 除外，纯视觉衰减）。
+   *  v9s.45：`coreTime` 可选（Core 的 world.time）—— 转身闸门要用**游戏时间**角速度，
+   *  慢放时才能与常速一致；不传时退化为按 frameDt 计算（单测路径）。 */
+  update(s: DummyState, frameDt: number, coreTime?: number): void;
   /**
    * v9s.18 · 命中点落在哪一根肢体上。
    *
@@ -224,6 +227,13 @@ export function createDummyRig(
   let stopDirWZ = 1;
   /** 下盘侧移偏转的平滑状态（与主角同构，避免单帧跳变） */
   let sideYaw = 0;
+  /** v9s.44：下盘偏转**目标**（限速后的值），与 sideYaw 分开存 */
+  let sideYawTarget = 0;
+  /** v9s.44：上一帧 bodyYaw，用于算身体角速度（决定下盘目标要不要限速） */
+  let prevHipBodyYaw = 0;
+  /** v9s.45：转身闸门的一阶状态 / 上一帧 Core 时间（游戏时间角速度，慢放不半开） */
+  let spinBlend = 0;
+  let prevHipCoreTime = -1;
   /** v9o：上一帧速度，用于区分「减速停步」与「KEEP DIST 低速横移」（后者不该收相） */
   let prevSpeed = 0;
   // ---- v9s：停步下盘偏差消化窗口（与主角同构，全部纯表现层状态）----
@@ -234,6 +244,11 @@ export function createDummyRig(
   let lastGateResume = false;
   let lastSpeed = 0;
   let lastPrevSpeed = 0;
+  /** v9s.43：前后 / 左右摆腿的驱动符号（−1..1，线性）。与主角同构：
+   *  KEEP DIST 从「退」切到「进」时硬翻符号会让整条腿位镜像（会抽一下），
+   *  这里按 gaitCfg.dirFlipSec 逐帧走过 0，摆幅跟着收放。 */
+  let dirDriveF = 1;
+  let dirDriveR = 1;
 
   return {
     group: root,
@@ -287,7 +302,11 @@ export function createDummyRig(
       }
       return best ? { node: best, point: closest.clone() } : null;
     },
-    update(s, frameDt): void {
+    update(s, frameDt, coreTime?): void {
+      const gameDt = coreTime === undefined || prevHipCoreTime < 0
+        ? frameDt
+        : clamp(coreTime - prevHipCoreTime, 0, 0.1);
+      if (coreTime !== undefined) prevHipCoreTime = coreTime;
       root.position.set(s.position.x, s.position.y, s.position.z);
       // 身体用平滑朝向（bodyYaw），头相对身体再补一个差值，实现头身分离（v7b#9）
       root.rotation.y = s.bodyYaw;
@@ -378,10 +397,29 @@ export function createDummyRig(
       const strafeSide = strafeHipYaw(
         latRatio, gaitCfg.strafeHipScale, gaitCfg.strafeHipMaxDeg, gaitCfg.strafeHipBoost,
       );
-      const targetSide = backHipYawTarget(
-        bodyFwdRatio, latRatio, strafeSide, backKeep,
-      ) * yawFade;
-      sideYaw += (targetSide - sideYaw) * (1 - Math.exp(-12 * Math.max(0, frameDt)));
+      // v9s.44：与主角同构 —— 身体自己在转时停用「后退族」翻转，并给目标限速
+      const bodyYawRate = gameDt > 1e-6
+        ? wrapAngle(s.bodyYaw - prevHipBodyYaw) / gameDt
+        : 0;
+      prevHipBodyYaw = s.bodyYaw;
+      // 一个开关管住整套对策：拉到 0 = 精确回到旧行为（A/B 用）
+      const hipRate = (gaitCfg.hipYawTrackRateDeg ?? 0) * Math.PI / 180;
+      const hipBackRate = (gaitCfg.hipYawBackRateDeg ?? 0) * Math.PI / 180;
+      // v9s.45：与主角同构 —— 闸门用游戏时间 + 一阶状态，前 / 后相位各一档限速
+      const dtw = gameDt > 1e-6 ? gameDt : frameDt;
+      spinBlend = hipRate > 0 ? slewGate(spinBlend, turnSpinGate(bodyYawRate), dtw) : 0;
+      const flip = hipFlipWeight(backKeep, spinBlend);
+      // 与主角同构：方向比值在速度趋零时是噪声，按速度大小淡出偏转目标
+      const hipSpeedFade = clamp(speed / 0.5, 0, 1);
+      const rawTargetSide = backHipYawTarget(
+        bodyFwdRatio, latRatio, strafeSide, flip,
+      ) * yawFade * hipSpeedFade;
+      const targetSide = slewHipTarget(
+        sideYawTarget, rawTargetSide,
+        hipTrackRate(hipRate, hipBackRate, flip), dtw, spinBlend,
+      );
+      sideYawTarget = targetSide;
+      sideYaw += (targetSide - sideYaw) * (1 - Math.exp(-12 * Math.max(0, dtw)));
       lower.rotation.y = sideYaw;
 
       const gaitYaw = s.bodyYaw + sideYaw;
@@ -434,12 +472,26 @@ export function createDummyRig(
       lastSpeed = speed;
       lastPrevSpeed = oldPrevSpeed;
 
+      // ---- v9s.43 · 换向融合（与主角同构）----
+      // 假人在 KEEP DIST / FOLLOW 里频繁「够近了退、拉开了进」，硬符号换向时
+      // 整条腿位会一帧镜像过去 —— 站在近处的陪练最容易被看到抽腿。
+      const flipSec = Math.max(0, gaitCfg.dirFlipSec ?? 0);
+      if (flipSec > 0) {
+        dirDriveF = slewDirSign(dirDriveF, localForward >= 0 ? 1 : -1, frameDt, flipSec);
+        dirDriveR = slewDirSign(dirDriveR, localRight >= 0 ? 1 : -1, frameDt, flipSec);
+      } else {
+        dirDriveF = localForward >= 0 ? 1 : -1;
+        dirDriveR = localRight >= 0 ? 1 : -1;
+      }
+
       const gaitInput: GaitInput = inStop ? {
         phase: stopPhase0,
         speed: stopSpeed0,
         moveSpeed: referenceSpeed,
         localForward: stopFwd,
         localRight: stopRight,
+        dirF: dirDriveF,
+        dirR: dirDriveR,
         legLength: v.legLength,
         stride: stopStride0,
         grounded: true,
@@ -449,6 +501,8 @@ export function createDummyRig(
         moveSpeed: referenceSpeed,
         localForward,
         localRight,
+        dirF: dirDriveF,
+        dirR: dirDriveR,
         legLength: v.legLength,
         stride: s.stride,
         grounded: true,

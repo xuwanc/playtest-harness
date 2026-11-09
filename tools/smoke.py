@@ -451,6 +451,280 @@ def main() -> int:
                       str(cleared))
                 check("v9s.43 全段无新增页面异常", not errors, str(errors[:2]))
 
+                # ---- v9s.41：连击跨步换腿（第 1/2/3 段跨出去的是不同的腿）----
+                # 旧行为：攻击相位是「0→π→0 往返」，每段都从同一姿态摆出去再摆回来，
+                # 连段时第二刀与第一刀的腿完全重合；且在 recovery 中途接续那一帧，
+                # 相位被硬拽回基准，实测腿角单帧跳 0.82 rad（脚像被拽回去）。
+                # 现在相位「每段单向推进 π = 迈一步」，起点接上一段停下的相位。
+                page.evaluate(
+                    "() => {"
+                    "  const h = window.__harness, w = h.world, c = w.character;"
+                    "  for (const d of w.dummies) { d.mode = 'idle'; d.position.x = 60; d.position.z = 60; }"
+                    "  w.combat.phase = 'idle'; w.combat.phaseTimer = 0; w.combat.comboIndex = 0;"
+                    "  w.combat.comboWindow = 0; w.combat.queued = false;"
+                    "  w.combat.weapon = 'sword-shield';"
+                    # 记「每段起手时的跨步相位」：一段 = 迈一步（+π），下一段从上一段停下的相位
+                    # 接着走 —— 所以相邻段的起始相位差应该 ≈π；旧版每段都回到同一基准（差 0）。
+                    "  window.__legProbe = { base: {}, boundary: 0, prevSeg: 0, prevL: null, frames: 0, t0: w.time };"
+                    "  const tick = () => {"
+                    "    const g = h.gaitDebug();"
+                    "    const k = w.combat;"
+                    "    const P = window.__legProbe;"
+                    "    if (k.phase !== 'idle') {"
+                    # 段边界那一帧：换腿如果靠「硬切」，这里会跳出一大截
+                    "      if (P.prevSeg !== 0 && k.comboIndex !== P.prevSeg && P.prevL !== null) {"
+                    "        P.boundary = Math.max(P.boundary, Math.abs(g.legLPitch - P.prevL));"
+                    "      }"
+                    "      if (k.comboIndex !== P.prevSeg) {"
+                    "        P.base[k.comboIndex] = h.view.diagnostics().attackWeights.strideBase;"
+                    "      }"
+                    "      P.prevSeg = k.comboIndex; P.prevL = g.legLPitch; P.frames += 1;"
+                    "    }"
+                    "    P.raf = requestAnimationFrame(tick);"
+                    "  };"
+                    "  tick();"
+                    "  const j = (type) => window.dispatchEvent(new KeyboardEvent(type, { key: 'j', code: 'KeyJ', bubbles: true }));"
+                    "  window.__legMash = setInterval(() => { j('keydown'); j('keyup'); }, 80);"
+                    "}"
+                )
+                page.wait_for_function(
+                    "() => Object.keys(window.__legProbe.base).length >= 3"
+                    " && window.__harness.world.time > window.__legProbe.t0 + 2.0",
+                    timeout=90000,
+                )
+                legs = page.evaluate(
+                    "() => {"
+                    "  clearInterval(window.__legMash);"
+                    "  cancelAnimationFrame(window.__legProbe.raf);"
+                    "  const B = window.__legProbe.base;"
+                    "  const wrap = (a) => { const T = Math.PI * 2; return ((a + Math.PI) % T + T) % T - Math.PI; };"
+                    "  return { bases: [1, 2, 3].map((i) => (B[i] === undefined ? null : +B[i].toFixed(2))),"
+                    "    d12: B[1] !== undefined && B[2] !== undefined ? +wrap(B[2] - B[1]).toFixed(2) : null,"
+                    "    d23: B[2] !== undefined && B[3] !== undefined ? +wrap(B[3] - B[2]).toFixed(2) : null,"
+                    "    boundary: +window.__legProbe.boundary.toFixed(3),"
+                    "    frames: window.__legProbe.frames };"
+                    "}"
+                )
+                lo, hi = math.pi * 0.5, math.pi * 1.2
+                steps_ok = all(
+                    v is not None and lo < abs(v) < hi for v in (legs["d12"], legs["d23"])
+                )
+                check(
+                    "连击跨步左右换腿（相邻段起始相位差 ≈π = 迈一步）",
+                    steps_ok,
+                    f"bases={legs['bases']} d12={legs['d12']} d23={legs['d23']}",
+                )
+                check(
+                    "换段不拽腿（段边界单帧腿角跳变 ≤ 0.12 rad）",
+                    legs["boundary"] <= 0.12,
+                    f"boundary={legs['boundary']} rad",
+                )
+                page.evaluate("() => { window.__harness.world.combat.phase = 'idle'; }")
+
+                # ---- v9s.42：手感面板的相位曲线（sin φ）+ 踩地分色 ----
+                # 面板第三区画的是「真正喂给 solveGait 的相位」的 sin 曲线：一个周期一步，
+                # 正半周 = 左脚支撑相（琥珀）、负半周 = 右脚支撑相（紫）。
+                # 判据不截图，直接读采样：站定应判双踩；走路时左右脚都要出现且反复交替。
+                page.evaluate(
+                    "() => {"
+                    "  const h = window.__harness, w = h.world, c = w.character;"
+                    "  for (const d of w.dummies) { d.mode = 'idle'; d.position.x = 60; d.position.z = 60; }"
+                    "  w.combat.phase = 'idle'; w.combat.phaseTimer = 0; w.combat.queued = false;"
+                    "  c.velocity.x = 0; c.velocity.z = 0;"
+                    "  h.motionDebug.setEnabled(true);"
+                    "  window.__phaseStillT0 = w.time;"
+                    "}"
+                )
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__phaseStillT0 + 1.0",
+                    timeout=90000,
+                )
+                still = page.evaluate(
+                    "() => { const s = window.__harness.motionDebug.last();"
+                    "  return { stance: s.stance, phase: +s.phase.toFixed(3) }; }"
+                )
+                check("手感面板：站着不动判「双踩」（相位冻住不该随便判左右脚）",
+                      still["stance"] == "both", str(still))
+
+                page.evaluate(
+                    "() => {"
+                    "  const w = window.__harness.world;"
+                    "  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', code: 'KeyW', bubbles: true }));"
+                    "  window.__walkT0 = w.time;"
+                    "}"
+                )
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__walkT0 + 2.0",
+                    timeout=90000,
+                )
+                walk = page.evaluate(
+                    "() => {"
+                    "  window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w', code: 'KeyW', bubbles: true }));"
+                    "  const S = window.__harness.motionDebug.samples();"
+                    "  const seen = new Set();"
+                    "  let flips = 0; let badPhase = 0;"
+                    "  for (let i = 0; i < S.length; i++) {"
+                    "    const st = S[i].stance;"
+                    "    if (st === 'L' || st === 'R') seen.add(st);"
+                    "    if (i > 0 && (st === 'L' || st === 'R') && st !== S[i - 1].stance) flips += 1;"
+                    "    if (!Number.isFinite(S[i].phase)) badPhase += 1;"
+                    "  }"
+                    "  return { n: S.length, seen: [...seen].sort(), flips, badPhase };"
+                    "}"
+                )
+                check("手感面板：走路时相位曲线左右脚交替（L/R 都出现且换脚 ≥ 3 次）",
+                      len(walk["seen"]) == 2 and walk["flips"] >= 3 and walk["badPhase"] == 0,
+                      str(walk))
+
+                # ---- v9s.43：换向融合（前进 ⇄ 后退，腿不能抽一下）----
+                # 旧行为：摆腿方向是硬符号（localForward >= 0 ? +1 : -1），速度穿过 0 的那一帧
+                # 整条腿位镜像过去 —— 实测单帧腿角跳 1.06~1.26 rad（正常跨步只有 0.53）。
+                # 现在符号在 dirFlipSec 内走过 0，摆幅跟着收放。
+                # 判据按「每逻辑步」归一：软件渲染下一帧会跑多个固定步，直接比逐帧差会误判。
+                page.evaluate(
+                    "() => {"
+                    "  const h = window.__harness, w = h.world, c = w.character;"
+                    "  for (const d of w.dummies) { d.mode = 'idle'; d.position.x = 60; d.position.z = 60; }"
+                    "  w.combat.phase = 'idle'; w.combat.phaseTimer = 0; w.combat.comboIndex = 0;"
+                    "  w.combat.queued = false;"
+                    "  c.position.x = 0; c.position.z = 9; c.position.y = 0;"
+                    "  c.velocity.x = 0; c.velocity.z = 0;"
+                    "  c.bodyYaw = Math.PI; c.facing = Math.PI;"
+                    "  window.__flipProbe = { rows: [], t0: w.time };"
+                    "  const tick = () => {"
+                    "    const g = h.gaitDebug();"
+                    "    const P = window.__flipProbe;"
+                    "    P.rows.push({ t: w.time, d: g.legLPitch - g.legRPitch, dir: g.dirF,"
+                    "      spd: Math.hypot(c.velocity.x, c.velocity.z) });"
+                    "    P.raf = requestAnimationFrame(tick);"
+                    "  };"
+                    "  tick();"
+                    "  const key = (type, k, code) => window.dispatchEvent("
+                    "    new KeyboardEvent(type, { key: k, code, bubbles: true }));"
+                    "  key('keydown', 's', 'KeyS');"
+                    "  window.__flipPhase2 = () => {"
+                    "    key('keyup', 's', 'KeyS');"
+                    "    key('keydown', 'w', 'KeyW');"
+                    "    window.__flipProbe.t1 = w.time;"
+                    "  };"
+                    "  window.__flipEnd = () => {"
+                    "    key('keyup', 'w', 'KeyW');"
+                    "    cancelAnimationFrame(window.__flipProbe.raf);"
+                    "  };"
+                    "}"
+                )
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__flipProbe.t0 + 1.0",
+                    timeout=90000,
+                )
+                page.evaluate("() => window.__flipPhase2()")
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__flipProbe.t1 + 1.0",
+                    timeout=90000,
+                )
+                flip = page.evaluate(
+                    "() => {"
+                    "  window.__flipEnd();"
+                    "  const h = window.__harness, P = window.__flipProbe;"
+                    "  const dt = h.world.config.fixedDt;"
+                    "  let worst = 0, moving = 0, wp = null, base = 0;"
+                    "  const dirs = [];"
+                    "  for (let i = 1; i < P.rows.length; i++) {"
+                    "    const a = P.rows[i - 1], b = P.rows[i];"
+                    "    const steps = Math.max(1, Math.round((b.t - a.t) / dt));"
+                    "    const jump = Math.abs(b.d - a.d) / steps;"
+                    "    if (b.spd > 0.3 || a.spd > 0.3) { if (jump > worst) { worst = jump; wp = [+a.t.toFixed(3), +b.t.toFixed(3), steps, +a.d.toFixed(3), +b.d.toFixed(3), +(b.t - a.t).toFixed(4)]; } moving += 1; }"
+                    # 同一次采样里的「正常跨步」基线：两端 dirF 都是满值（没在换向）的那几帧。
+                    # 软件渲染 ~13fps，每个 rAF 跨 4~5 个固定步，基线会随步幅 / 采样相位浮动，
+                    # 所以判据用「相对基线」而不是写死的绝对值（mirror 会到 2 rad+，仍然拦得住）。
+                    "    if (Math.abs(a.dir) > 0.999 && Math.abs(b.dir) > 0.999) base = Math.max(base, jump);"
+                    "    dirs.push(b.dir);"
+                    "  }"
+                    "  const mid = dirs.filter((v) => Math.abs(v) > 0.15 && Math.abs(v) < 0.85).length;"
+                    "  return { worst: +worst.toFixed(3), base: +base.toFixed(3), moving, mid, wp,"
+                    "    lo: +Math.min(...dirs).toFixed(2), hi: +Math.max(...dirs).toFixed(2),"
+                    "    sec: h.viewConfig.gait.dirFlipSec, n: P.rows.length };"
+                    "}"
+                )
+                lim = max(0.62, flip["base"] * 1.3)
+                check(f"换向不抽腿（单步腿角跳变 {flip['worst']:.2f} ≤ 上限 {lim:.2f} rad；"
+                      f"同次采样正常跨步 {flip['base']:.2f}）",
+                      flip["worst"] <= lim, str(flip))
+                # 软件渲染下 1s 游戏时间只有 ~12 个 rAF 样本，中间态可能只被采到 2 帧；
+                # 所以判「出现过中间态 + 两端符号都到过」，不要求逐帧序列完整。
+                check("换向融合真的在跑（dirF 经过中间态，两端符号都出现过）",
+                      flip["mid"] >= 2 and flip["hi"] >= 0.85 and flip["lo"] <= -0.15, str(flip))
+
+                # ---- v9s.45：慢放转身时下盘不许再抖一下 ----
+                # 0.25× 慢放下把摇杆从 W 切到 A（移动方向 90°，身体跟着转）：
+                # 旧版闸门用**渲染帧 dt** 算身体角速度，慢放时角速度只有常速的 1/4，
+                # 闸门半开 → 下盘目标在转身中途被放行 → 单帧 18~24°、整体 −20° 的「拧一下」。
+                # 现在闸门走游戏时间 + 一阶状态、限速率与放行程度线性挂钩，判据读 hipYaw 的
+                # 单步增量（除以固定步数，避免软件渲染帧率影响）。
+                page.evaluate(
+                    "() => {"
+                    "  const h = window.__harness, w = h.world, c = w.character;"
+                    "  for (const d of w.dummies) { d.mode = 'idle'; d.position.x = 60; d.position.z = 60; }"
+                    "  w.combat.phase = 'idle'; w.combat.phaseTimer = 0; w.combat.queued = false;"
+                    "  c.position.x = 0; c.position.z = 9; c.position.y = 0;"
+                    "  c.velocity.x = 0; c.velocity.z = 0;"
+                    "  c.bodyYaw = Math.PI; c.facing = Math.PI;"
+                    "  window.__hipProbe = { rows: [], t0: w.time };"
+                    "  const tick = () => {"
+                    "    const g = h.gaitDebug(), P = window.__hipProbe;"
+                    "    P.rows.push({ t: w.time, hip: g.hipYaw, tgt: g.hipYawTarget, spin: g.spin,"
+                    "      sp: Math.hypot(c.velocity.x, c.velocity.z) });"
+                    "    P.raf = requestAnimationFrame(tick);"
+                    "  };"
+                    "  tick();"
+                    "  const key = (type, k, code) => window.dispatchEvent("
+                    "    new KeyboardEvent(type, { key: k, code, bubbles: true }));"
+                    "  key('keydown', 'w', 'KeyW');"
+                    "  window.__hipPhase2 = () => {"
+                    "    key('keyup', 'w', 'KeyW'); key('keydown', 'a', 'KeyA');"
+                    "    window.__hipProbe.t1 = w.time;"
+                    "  };"
+                    "  window.__hipEnd = () => {"
+                    "    key('keyup', 'a', 'KeyA');"
+                    "    cancelAnimationFrame(window.__hipProbe.raf);"
+                    "  };"
+                    "}"
+                )
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__hipProbe.t0 + 0.7",
+                    timeout=90000,
+                )
+                page.evaluate("() => window.__hipPhase2()")
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__hipProbe.t1 + 0.9",
+                    timeout=90000,
+                )
+                hipd = page.evaluate(
+                    "() => {"
+                    "  window.__hipEnd();"
+                    "  const h = window.__harness, P = window.__hipProbe;"
+                    "  const dt = h.world.config.fixedDt;"
+                    "  let worst = 0, lo = 0, hi = 0, n = 0, spinMax = 0;"
+                    "  for (let i = 1; i < P.rows.length; i++) {"
+                    "    const a = P.rows[i - 1], b = P.rows[i];"
+                    "    const steps = Math.max(1, Math.round((b.t - a.t) / dt));"
+                    "    const d = Math.abs(b.hip - a.hip) / steps * 180 / Math.PI;"
+                    "    if (b.sp > 0.3 || a.sp > 0.3) { if (d > worst) worst = d; n += 1; }"
+                    "    lo = Math.min(lo, b.hip * 180 / Math.PI);"
+                    "    hi = Math.max(hi, b.hip * 180 / Math.PI);"
+                    "    spinMax = Math.max(spinMax, b.spin);"
+                    "  }"
+                    "  return { worst: +worst.toFixed(2), lo: +lo.toFixed(1), hi: +hi.toFixed(1),"
+                    "    spin: +spinMax.toFixed(2), n };"
+                    "}"
+                )
+                # 240°/s 上限在 1/60 步下也就是 4°/步；实测 ~0.2°/步（旧版 ~4°/步）。
+                check(f"慢放转身下盘不抖（单步 ≤ 1.5°，实测 {hipd['worst']:.2f}°）",
+                      hipd["worst"] <= 1.5, str(hipd))
+                # 转身途中不该再把胯拖到后退族的 −48° 再拖回来
+                check(f"慢放转身下盘不「拧出去再拧回来」（最低 {hipd['lo']:.1f}° > −6°）",
+                      hipd["lo"] > -6, str(hipd))
+
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
                       f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}",
                       " 命中 progress", f"{hit_prog:.3f}" if hit_prog is not None else "-")

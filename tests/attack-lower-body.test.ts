@@ -142,8 +142,10 @@ describe('v8d 攻击下半身：两条权重路径各自都能驱动下盘', () 
     expect(s.stableMaxRoll).toBeLessThan(1e-9);
     expect(s.stableMaxKnee).toBeLessThan(1e-9);
     // 进出攻击的过渡帧允许有界的平滑残留（gaitScale 淡出 × 等效驱动淡入交叉所致），
-    // 不能为 0，否则进出攻击就会单帧跳变；幅度 < 0.12 rad（约 7°）肉眼几乎不可见。
-    expect(s.maxX).toBeLessThan(0.12);
+    // 不能为 0，否则进出攻击就会单帧跳变；幅度 < 0.16 rad（约 9°）肉眼几乎不可见。
+    // v9s.41 实测 0.141：相位改为单向推进后，淡出期相位差从 0 变成最多 π，
+    // 交叉窗口里多扫几度；稳定态仍然是精确 0（上面三条断言）。
+    expect(s.maxX).toBeLessThan(0.16);
   });
 
   it('两个都开时幅度大于任一单层（可叠加）', () => {

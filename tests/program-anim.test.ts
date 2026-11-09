@@ -153,18 +153,24 @@ describe('v8d 攻击等效步态驱动：绕过 Core 锁速、两端同相、方
     expect(oldPose.legR.kneeX).toBe(0);
   });
 
-  it('v9p：progress=0/1 两端相位回到同一基准（单次往返跨步，进出攻击不跳变）', () => {
-    const a = attackGaitDrive(locked, 0, 1, 1, stCfg);
-    const b = attackGaitDrive(locked, 1, 1, 1, stCfg);
-    expect(a.phase).toBeCloseTo(locked.phase, 12);
-    // v9p：不再是「差整数个 TAU」——那个差值在 blend 淡出时会让相位绕一整圈、
-    // 收势腿抽一下；现在精确回到基准，淡出时相位差 0。
-    expect(b.phase).toBeCloseTo(locked.phase, 12);
-    expect(gaitFrom(a).legL.pitchX).toBeCloseTo(gaitFrom(b).legL.pitchX, 10);
-    // 中段确实走出去过（不是恒为静止），峰值 = π × 四舍五入后的 cycles。
-    // 相位差经最短弧折叠，±π 边界上符号可能为负，姿态等价，故取绝对值。
-    const mid = attackGaitDrive(locked, 0.5, 1, 1, stCfg);
-    expect(Math.abs(mid.phase - locked.phase)).toBeCloseTo(Math.PI * Math.round(stCfg.cycles), 10);
+  // v9s.41：一段攻击 = 迈一步。相位单向推进 π×cycles 后**不回零**，终点是「另一条腿
+  // 在前」；下一段由调用方从这个终点接着走，连段才会左右换腿（旧版往返归零，
+  // 每段都从同一姿态出发，连着打两刀腿完全重合）。
+  it('v9s.41：相位单向推进 π×cycles，终点 = 另一条腿在前（不再往返归零）', () => {
+    const base = 0.4;
+    const r = { ...locked, phase: base };
+    const half = Math.PI * Math.round(stCfg.cycles);
+    const a = attackGaitDrive(r, 0, 1, 1, stCfg, base);
+    const b = attackGaitDrive(r, 1, 1, 1, stCfg, base);
+    const mid = attackGaitDrive(r, 0.5, 1, 1, stCfg, base);
+    // 返回的 phase 折过最短弧，只能比姿态（cos/sin），不能比原始角
+    expect(a.phase).toBeCloseTo(base, 12);
+    expect(Math.cos(b.phase)).toBeCloseTo(Math.cos(base + half), 8);
+    expect(Math.sin(b.phase)).toBeCloseTo(Math.sin(base + half), 8);
+    expect(Math.cos(mid.phase)).toBeCloseTo(Math.cos(base + half / 2), 8);
+    // 两端速度为 0：起手 / 收尾各 2% 进度只走掉很小一截
+    expect(Math.abs(attackGaitDrive(r, 0.02, 1, 1, stCfg, base).phase - base)).toBeLessThan(0.01);
+    expect(Math.abs(attackGaitDrive(r, 0.98, 1, 1, stCfg, base).phase - (base + half))).toBeLessThan(0.01);
   });
 
   it('blend=0 原样返回真实输入；中间值四个量都有限且单调插值', () => {
@@ -189,11 +195,11 @@ describe('v8d 攻击等效步态驱动：绕过 Core 锁速、两端同相、方
 
   it('cycles 非整数被四舍五入为 >=1 的整数，strideSpeed 负值夹到 0', () => {
     const d = attackGaitDrive(locked, 1, 1, 1, { ...stCfg, cycles: 0.2, strideSpeed: -5 });
-    expect(d.phase).toBeCloseTo(locked.phase, 12);
+    // cycles 0.2 → 1，所以整段仍然迈满一步（半圈）
+    expect(Math.cos(d.phase)).toBeCloseTo(Math.cos(locked.phase + Math.PI), 8);
     expect(d.speed).toBe(0);
-    // 峰值幅度仍由四舍五入后的 cycles 决定（最短弧折叠后取绝对值）
     const mid = attackGaitDrive(locked, 0.5, 1, 1, { ...stCfg, cycles: 0.2 });
-    expect(Math.abs(mid.phase - locked.phase)).toBeCloseTo(Math.PI, 10);
+    expect(Math.cos(mid.phase)).toBeCloseTo(Math.cos(locked.phase + Math.PI / 2), 8);
   });
 });
 

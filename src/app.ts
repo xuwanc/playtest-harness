@@ -90,6 +90,9 @@ export function startApp(): void {
     deadZone: () => VIEW_CONFIG.joystick.deadZone,
     container: document.getElementById('motiondbg') ?? undefined,
     toggle: document.getElementById('motiondbg-toggle') ?? undefined,
+    // v9s.42：相位取「真正喂给 solveGait 的那个」，攻击段由等效跨步驱动在走，
+    // Core 的 gaitPhase 在这段时间是冻住的，拿它画曲线会是一条平线。
+    phaseSource: () => view.gaitDebug().phase,
   });
   // 切后台回来时不要把它当成「单帧 300ms」的掉帧异常
   document.addEventListener('visibilitychange', () => {

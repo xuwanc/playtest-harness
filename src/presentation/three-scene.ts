@@ -96,6 +96,10 @@ export type SceneView = {
     stopT: number; hipYaw: number; chestYaw: number; speed: number; gaitSpeed: number;
     stopStep: number; stopShift: number; stopDip: number;
     legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
+    /** v9s.42：本帧喂给 solveGait 的相位（rad，未归一化），手感面板画 sin 曲线用 */
+    phase: number;
+    /** v9s.43 / v9s.44 / v9s.45：换向驱动符号、下盘偏转目标、转身闸门状态 */
+    dirF: number; dirR: number; hipYawTarget: number; spin: number;
   };
   /** 表现层诊断读数：惯性倾斜、斩击弧世界法线、弓/箭世界前向、冲刺视觉、下盘偏航、智能相机，纯观测用。 */
   diagnostics(): {
@@ -109,6 +113,8 @@ export type SceneView = {
     /** v8d：两个下半身权重与本帧步态等效驱动，供验收「权重是否真的生效」 */
     attackWeights: {
       gaitScale: number; attackLegWeight: number; driveSpeed: number; stridePhase: number;
+      /** v9s.41：本段跨步的起始相位 / 单调步序 */
+      strideBase: number; stepIndex: number;
     };
     /** v8c：跳跃 / 落地蓄力缓冲脉冲读数（纯表现，不进 Core） */
     landing: {
@@ -1277,6 +1283,7 @@ export function createSceneView(
       attackBlend: number;
       attackWeights: {
         gaitScale: number; attackLegWeight: number; driveSpeed: number; stridePhase: number;
+        strideBase: number; stepIndex: number;
       };
       landing: {
         pulse: number; remaining: number; kind: 'none' | 'land' | 'jump'; impactVy: number;

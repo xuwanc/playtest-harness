@@ -50,12 +50,12 @@ export type GaitDrive = {
  *
  * 这里不碰 Core，只在表现层把 gaitInput 的量按 attackBlend 平滑替换成
  * 由 attackProgress 派生的「攻击跨步」驱动：
- *  - phase: 起手锁定基准 + 单次往返跨步脉冲 0→π×cycles→0（两段 smoothstep，
- *    两端值与导数都为 0）。v9p 起不再随 progress 单向累加，也不叠加实时 Core
- *    gaitPhase —— 旧版两者叠加会让 active 段步频翻倍、整段摆近 1.5 个周期（碎步），
- *    且淡出时相位差一整圈、收势腿会抽一下；现在只做一次干净的大跨步。
+ *  - phase: 从**本段起点**单向推进半圈 π×cycles（smoothstep，两端速度为 0）
+ *    = 迈一步。v9s.41 起不再往返归零 —— 往返会让每段攻击都从同一姿态出发、
+ *    同一姿态收尾，连段时腿完全不换（用户反馈的「没有换腿跨步」）。
+ *    段起点由调用方接上一段停下的相位，因此第 N 段永远从第 N−1 段的对面腿起步。
  *  - speed: 等效步速 strideSpeed，让 solveGait 输出可见摆幅。
- *  - 方向: 前冲为主（forwardBias）+ 连击左右交替侧跨（comboIndex 奇偶）。
+ *  - 方向: 前冲为主（forwardBias）+ 每段左右交替侧跨（stepIndex 奇偶）。
  *  - stride: v9p 追加放大的等效步幅（strideScale），让跨步走物理步幅路径、步子更大。
  * 全部量都按 blend 与真实输入线性插值，进出攻击连续；全部由 Core 量派生，
  * 无本地时间、无随机，暂停 / 时间缩放下仍同步且确定。
@@ -63,7 +63,7 @@ export type GaitDrive = {
 export function attackGaitDrive(
   real: GaitDrive,
   progress: number,
-  comboIndex: number,
+  stepIndex: number,
   blend: number,
   cfg: AttackStrideViewConfig,
   phaseBase: number = real.phase,
@@ -73,27 +73,29 @@ export function attackGaitDrive(
   const p = clamp01(progress);
   const cycles = Math.max(1, Math.round(cfg.cycles));
   const speed = Math.max(0, cfg.strideSpeed);
-  const lead = comboIndex % 2 === 0 ? 1 : -1;
+  // stepIndex = 单调步序（每段攻击 +1），不是 comboIndex：后者 3 连击后回到 1，
+  // 第 3 段与下一轮第 1 段同为奇数 → 连续两刀跨同一条腿。
+  const lead = stepIndex % 2 === 0 ? 1 : -1;
   const fb = clamp01(cfg.forwardBias);
   // v9p：攻击跨步改走「物理步幅」路径。strideScale=0 → stride=0（旧回退路径，
   // 摆幅随速度）；拉大时连续放大脚前伸距离（stride × reachRatio），步子不再碎。
   // 攻击时 Core 锁自主移速 → real.stride 恒为基准步幅，乘积稳定不抖。
   const realStride = Math.max(0, real.stride ?? 0);
   const stride = Math.max(0, cfg.strideScale ?? 0) * realStride;
-  // v9p：相位改为「起手锁定基准 + 单次往返跨步脉冲」，不再随 progress 单向累加。
-  // 旧版 p×TAU×cycles 让整段攻击腿来回摆近 1.5 个周期，active 段还叠加 Core
-  // gaitPhase 的双重推进（步频翻倍 = 真机「步子太碎」）；现在只做 0→π×cycles→0
-  // 一次完整跨步（迈出去、撑住、收回），两段 smoothstep 使两端值与导数都为 0：
-  //   - 进出攻击相位回到同一基准，不跨相位跳变；
-  //   - 淡出时 drive.phase 与 real.phase 差 0，不再绕一整圈（收势腿不抽）；
-  //   - 连击段切换 p 重置为 0 时相位连续。
-  // 不传 phaseBase 时退化为 real.phase，保持既有纯函数语义可单测。
-  const q = p <= 0.5 ? p * 2 : (p - 0.5) * 2;
-  const sm = q * q * (3 - 2 * q);
-  const bump = p <= 0.5 ? sm : 1 - sm;
+  // v9s.41：相位改为**单向推进半圈（π）= 迈一步**，不再往返归零。
+  //
+  // 旧版是 0→π×cycles→0 的往返脉冲：每段攻击从同一基准摆出去再摆回来，整段结束
+  // 又回到出发姿态 → 连着打两段时，第二段与第一段的腿完全重合（用户反馈
+  // 「再接跨步攻击没有换腿跨步」）。而且连段在 recovery 中途取消时，相位被硬拽
+  // 回基准，实测单帧腿角跳 0.8 rad（≈47°），读起来是「脚被拽回去」。
+  //
+  // 现在每段只走半圈：起点 = 上一段停下的相位（voxel-rig 传进来），终点 = 起点 + π，
+  // 正好是「这条腿迈出去、重心换到前脚」的一次完整跨步；下一段从对面那条腿继续，
+  // 腿自然交替。smoothstep 让两端速度为 0（起手不抢步、收势不甩腿）。
+  const sm = p * p * (3 - 2 * p);
   const drive: GaitDrive = {
     speed,
-    phase: phaseBase + ((TAU * cycles) / 2) * bump,
+    phase: phaseBase + ((TAU * cycles) / 2) * sm,
     localForward: speed * fb,
     localRight: speed * (1 - fb) * lead,
     stride,

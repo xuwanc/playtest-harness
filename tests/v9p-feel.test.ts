@@ -412,18 +412,23 @@ describe('v9p 攻击步幅与相位纯函数', () => {
     expect(attackGaitDrive(locked, 0.5, 1, 0, st, 0)).toBe(locked);
   });
 
-  it('相位做单次往返：p=0/1 回到基准，p=0.5 走出去 π×cycles', () => {
+  // v9s.41：一段 = 一步。相位单向走 π×cycles 停在「另一条腿在前」，不再往返归零 ——
+  // 往返会让每段都从同一姿态出发，连段时第二刀与第一刀的腿完全重合。
+  it('相位单向推进：p=0 在基准，p=1 停在基准 + π×cycles（换腿）', () => {
     const base = 1.2;
     const r = { ...locked, phase: base };
+    const half = Math.PI * Math.round(st.cycles);
     expect(attackGaitDrive(r, 0, 1, 1, st, base).phase).toBeCloseTo(base, 9);
-    expect(attackGaitDrive(r, 1, 1, 1, st, base).phase).toBeCloseTo(base, 9);
+    const end = attackGaitDrive(r, 1, 1, 1, st, base);
+    expect(Math.cos(end.phase)).toBeCloseTo(Math.cos(base + half), 8);
+    expect(Math.sin(end.phase)).toBeCloseTo(Math.sin(base + half), 8);
     const mid = attackGaitDrive(r, 0.5, 1, 1, st, base);
-    expect(Math.abs(mid.phase - base)).toBeCloseTo(Math.PI * Math.round(st.cycles), 9);
+    expect(Math.cos(mid.phase)).toBeCloseTo(Math.cos(base + half / 2), 8);
   });
 
   it('最短弧插值：b=1 时姿态与 drive.phase 等价（差整数个 TAU）', () => {
     const r = { ...locked, phase: 2.9 };
-    const d = attackGaitDrive(r, 0.5, 1, 1, st, 0);
+    const d = attackGaitDrive(r, 1, 1, 1, st, 0);
     expect(Math.cos(d.phase)).toBeCloseTo(Math.cos(Math.PI), 8);
     expect(Math.sin(d.phase)).toBeCloseTo(Math.sin(Math.PI), 8);
   });

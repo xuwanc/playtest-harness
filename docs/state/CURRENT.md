@@ -1,67 +1,75 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-09（协同推送后）。
+> 最后更新：2026-11-09 16:10。
 
 ## 一句话
 
-用户明确通知后，已把 v9s.43 + v9s.44 全部改动**推送到远程功能分支**
-`feat/integration-grass-wind`（基于 `main` `5a320f4`，**main 未被触碰**）。
-远端树 `4843ea5b…` 与本地 HEAD **逐字节一致**（263 文件、`git diff` 为空）。
-本地已 `reset --hard` 对齐远端、设置跟踪分支，分层 commit 留在备份分支。
-线上静态预览仍是 v0.9.63（源码零变化；`publish:preview` 重新 build 仅使 `buildTime`
-时间戳变化 → 产物 hash 变为 `main-B1_t5k_a.js`，已同步线上与远端分支，三者一致）。
+v0.9.66 已发布：**慢放回看时下盘不再抖那一下** —— v9s.44 把朝向切换时下盘自己拧的问题
+修好了，但闸门用的是「渲染帧 dt」算身体角速度，0.25× 慢放下角速度只剩 1/4、闸门半开
+（限速率 `free·3400°/s` 又在这时等于放行），单帧 18.6°、摆幅 25°。现在角速度走**游戏
+时间**、闸门是一阶状态、限速率线性挂钩、前 / 后相位各一档上限（240 / 150 °/s），
+单帧 18.6° → 1.4°、摆幅 25° → 4.5°。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.63`（本次纯协同流程，未 bump；dist 仅 buildTime 变 → 新 hash `main-B1_t5k_a.js`） |
-| 当前分支 | `feat/integration-grass-wind` @ `9fb9e45`，跟踪 `origin/feat/integration-grass-wind` |
-| 远程 `main` | `5a320f4`（**未变**，无远端写入 main） |
-| 远程功能分支 | `feat/integration-grass-wind` @ `9fb9e45`（新增，3 个 API 重建 commit） |
-| 本地分层历史备份 | `backup/local-v9s43-v9s44` @ `f8281ae`（`a596084`/`7e52761`/`733f21c`/`f8281ae`） |
-| 线上静态预览 | `index.html` 与 `main.html` 都指向唯一主场景；root / main 均 200 |
-| 推送通道 | `tools/push-branch.py`（GitHub MCP 网关；`git push` 在本沙箱无写凭证） |
-
-## 本轮做了什么（[`../journal/2026-11-09-05-push-branch.md`](../journal/2026-11-09-05-push-branch.md)）
-
-- 回答「协同是否要推分支」：**是**，但应推**独立功能分支**而非 main，
-  供他人 `fetch` / review / 开 PR；不污染主线、多 agent 不互相覆盖。
-- 实测澄清通道：`github.com:443` 只读可用，`git push` 缺凭证失败；
-  `gh` 未登录、无 `GITHUB_TOKEN`、`gh-commit.mjs` 推不了本地 commit 链。
-  改用已授权的 GitHub MCP 网关（`create_branch` / `push_files` / `delete_file`），
-  一次写入 57 文件 / 1.55MB（含 835KB 构建产物）+ 删除 2 个旧 hash 产物。
-- 固化 `tools/push-branch.py`（可复用协同推送，`--dry` 看计划）；
-  修正 `AGENTS.md` / `README.md` / `multi-agent-workflow.md` / `docs/INDEX.md`
-  里过时的「标准 git push 可用 / 未 push」描述。
-- 推送后校验 tree 一致 → 本地 `reset --hard` 对齐 → 设置 upstream，
-  避免「ahead/behind 假分叉」。
+| `package.json` 版本 | `0.9.66` |
+| 线上徽标 | `v0.9.66`（构建时间随发布变化） |
+| 发布方式 | `npm run build` → `node /root/.codebuddy/skills/sites/scripts/publish.js --dir dist --language static`（覆盖更新，不换链接） |
+| 线上链接 | 通过项目内部渠道获取（仓库不存凭据） |
 
 ## 验证基线（改完必须复跑）
 
 | 命令 | 当前结果 |
 |---|---|
-| `npx tsc --noEmit` | 0 error（对齐后工作区未变） |
-| `npx vitest run` | 948 通过，golden `5562e496…` 未变 |
-| `npm run verify:portable` / `docs:check` | PASS |
-| `npm run smoke` / `npm run verify` | 33 项 / 全链通过 |
-| 远端 tree 校验 | `git diff --stat HEAD origin/feat/integration-grass-wind` **为空** |
-| 线上预览 | `npm run publish:preview` 同步，root / main 200 |
+| `npx tsc --noEmit` | 0 error |
+| `npx vitest run` | 95 文件 / 922 例全绿 |
+| `npm run verify:portable` | PASS（Core 25 文件边界未破） |
+| `npm run smoke` | 27/27 PASS |
+| `npm run docs:check` | PASS |
+| `npm run clip:lab:check` | 9 段全 PASS |
+| `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 
-## 正在做 / 下一步
+## 正在做
 
-1. **等用户决定是否开 PR 合并到 `main`**（本次只推功能分支，未合并、未开 PR）。
-   合并入口：`https://github.com/xuwanc/playtest-harness/compare/main...feat/integration-grass-wind`。
-2. 别的 agent 拉下 git 先读 [`../../AGENTS.md`](../../AGENTS.md)：三条铁律 +
-   「读用标准 git、协同推送走 `tools/push-branch.py`」。
-3. 若想让再生更慢：优先调 Core `grassGrowth()` 曲线 / `GRASS_GROWTH_STAGGER`；
-   改 `core.grass.regrowSec` 属配置变更，会让 golden 漂移（需 `-u` + 记契约变更）。
-4. 默认布局最多放 5 个 auto 地块，超出会报 `diagnostics.unplaced`（由 integrator 调布局）。
-5. 临时 PAT 曾明文出现，建议轮换。
+- 无。v9s.45 已完成（`docs/journal/2026-11-09-06.md`）。
+- 规则写在 [`../systems/animation.md`](../systems/animation.md) §1.7 与
+  [`../systems/animation-notes-4.md`](../systems/animation-notes-4.md) §20：
+  **任何跟手感有关的时间常数都吃「游戏时间」**（`ΔbodyYaw / Δworld.time`），
+  渲染帧 dt 只许用于「这一帧画成什么样」；**限速率必须和放行程度线性挂钩**，
+  不能留「半开 ≈ 不限速」的逃生口。
+- 读数接口：`__harness.gaitDebug()` 新增 `spin`（转身闸门状态 0..1）；调试面板
+  「程序化步态」新增「后退相位上限 (°/s)」滑杆（默认 150，拉 0 = 关掉限速）。
+
+## 下一步（按投入产出排序）
+
+1. **`spar` 站位带感知空间**（约 1 小时）。大剑 standoff 3.4m，而「地形 / 门洞」工位宽 2.4m，
+   陪练会顶墙（顶墙时径向持续朝外、被边界清掉 → 仍有空踩风险）。做法：起手前查背后 0.8m
+   是否有墙，有就收缩 standoff。
+2. **陪练按武器给不同攻击间隔**（约半天）。现在三个都是 3.4s，混战读起来节奏一样。
+   目标：双刀 2.4s / 剑盾 3.2s / 大剑 4.2s。**注意**：一轮 3 刀，改间隔前先按
+   `attackInterval + 一轮时长` 算总占空比。
+3. **`renderOrder` 收成编译期约束**（约半天）。`FX_ORDER` 目前只是约定。
+4. 陪练卡肉（只给**玩家受击**短卡肉，别给 AI —— 三个互相拖慢会变成慢动作）。
+5. `groundHeightAt` 只按中心点取高，环跨台阶边缘会一半埋进去（低优先）。
+6. 面板相位图例可以再明确一点（现在只有左边缘 L / R 小字，没有「L = 左脚踩地」的说明）。
 
 ## 已知未关闭的结构性风险
 
-见 [`../risk-review.md`](../risk-review.md)。摘要：`transparent` 编译期属性、
-`FX_ORDER` 无强制入口、`spar` 站位带顶墙、连击让单轮伤害事件 ×3、
-`groundHeightAt` 只按中心点取高。
+见 [`../risk-review.md`](../risk-review.md) 的「当前活跃风险」。摘要：
+
+- `transparent` 是编译期属性，改它不 `needsUpdate` 会静默无效；
+- `FX_ORDER` 无强制入口，裸数字可绕过；
+- `spar` 站位带在窄地形顶墙（v9s.40 的连续径向缓解了「抽搐」，但空踩风险还在）；
+- 连击让单轮伤害事件 ×3，混战占空比要按「轮」而不是「刀」评估；
+- 收势淡出会把相位「扫回」真实步态（最多 π；静止收招看不出来，边走边收招 0.28 rad/帧）；
+- 面板的「踩地」是**相位判据**不是脚的真实高度（极端姿态下可能不一致）；
+- 换向融合有 0.16s 的「收腿窗」（已知取舍，`dirFlipSec` 可调，拉 0 回到硬符号）；
+- 下盘偏转的时间常数全部吃游戏时间：**暂停（timeScale = 0）时它们会冻住**（想要），
+  但新加骨架必须传 `coreTime`，漏传不会崩、只是那个单位慢放仍会抖；
+- 速度 < 0.5 m/s 时偏转目标按比例淡出 ——「贴墙慢慢蹭」的下盘观感变了；
+- 前后相位两档限速（240 / 150 °/s）是手调值，后退档偏低会让「斜后快切正后」晚 0.2s 对轴；
+- 下盘转向对策只认「身体角速度」一个信号：极慢地原地画圈（< 30°/s）仍会跟着 θ 走；
+- `groundHeightAt` 只按中心点取高。

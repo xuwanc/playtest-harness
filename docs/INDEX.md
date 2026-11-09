@@ -28,6 +28,13 @@
 | 连击接不上第二段 | 同上 + `desiredDirection` | `COMBO_CHASE`、`comboGap`、`hits.reach` | 同上「连击」四条规则 | `npm run smoke`「陪练一轮打出多段连击」 |
 | 陪练「保持距离」时疯狂碎步 / 磨脚 | `core/dummies.ts` | `strafeGate`、`SPAR_STRAFE`、`RADIAL_GAIN` | [systems/dummies-fighters.md](systems/dummies-fighters.md)「对峙时走走停停」 | `tests/v9s40-standoff-gait.test.ts`、`npm run smoke`「对峙时走走停停」 |
 | 陪练挨打时腿抽风（步频翻倍） | `presentation/fighter-rig.ts` | `cs.velocity` 不叠 knock | 同上「踩过的坑」8 | `__harness.dummyRigDebug(id).gaitSpeed` |
+| 手感面板想看相位 / 不知道哪只脚在踩地 | `presentation/motion-debug.ts` | `stanceOf`、`PHASE_MOVING_EPS`、`STANCE_LINE` | [systems/animation-notes-3.md](systems/animation-notes-3.md) §17 | `tests/v9s42-motion-phase.test.ts`、`npm run smoke`「手感面板：走路时相位曲线左右脚交替」 |
+| 手感面板相位是一条平线 | `voxel-rig.gaitDebug().phase` | 别读 Core `gaitPhase`（攻击时冻住） | 同上 §17 坑 1 | `__harness.gaitDebug().phase` vs `world.character.gaitPhase` |
+| 连击每一刀都迈同一条腿 / 换段时脚被拽回去 | `presentation/program-anim.ts`、`voxel-rig.ts` | `attackGaitDrive`、`attackPhaseBase`、`attackStepIndex` | [systems/animation.md](systems/animation.md) §1.4 | `tests/v9s41-attack-step-legs.test.ts`、`npm run smoke`「连击跨步左右换腿」 |
+| 连击换段时身体往回弹一下 | `voxel-rig.ts` | `applyStep`、`stepZ/stepX/stepDip` | 同上 §1.4 末段 | `tests/v9s41-attack-step-legs.test.ts`「换段不推人」 |
+| 朝向切换（锁定 / 拖拽 / 攻击锁朝向）时下盘晃一下 | `presentation/gait.ts` | `turnSpinGate`、`slewGate`、`slewHipTarget`、`hipFlipWeight` | [systems/animation-notes-4.md](systems/animation-notes-4.md) §19 | `tests/v9s44-hip-yaw-track.test.ts` |
+| **慢放**回看时下盘还抖一下 / 贴着墙时下盘乱拧 | `presentation/gait.ts`、`voxel-rig.ts` | `slewGate`、`hipTrackRate`、`gameDt`、`hipSpeedFade` | [systems/animation-notes-4.md](systems/animation-notes-4.md) §20 | `tests/v9s45-slowmo-hip.test.ts`、`npm run smoke`「慢放转身下盘不抖」 |
+| 前进切后退（或左右换向）时腿抽一下 | `presentation/gait.ts` | `slewDirSign`、`dirDrive`、`GaitInput.dirF` | [systems/animation-notes-4.md](systems/animation-notes-4.md) §18 | `tests/v9s43-reverse-blend.test.ts`、`npm run smoke`「换向不抽腿」 |
 | 截图放哪 / 能不能入库 | `shots/`（`.gitignore` 已挡） | — | [assets/conventions.md](assets/conventions.md) | `git status` 里不该出现 png |
 | 刀光 / 斩击弧不出现 | `presentation/three-scene.ts` | `weapon-trail.ts`、`FX_ORDER.trail / slash` | [systems/presentation-fx.md](systems/presentation-fx.md) | `__harness.fxDebug()` |
 | 调试面板某项不知道去哪了 | `presentation/debug-panel.ts` | 7 个 `top()` 一级分类 | 本页 §3.4 | 截图 `shots/v9s38/07,08` |
@@ -94,8 +101,8 @@
 | `config/plots/*.json` | 一地块一文件（不写世界坐标，`assemblePlots()` 动态拼合成工位 / 草块） |
 | `src/app.ts` | 组装层 + `window.__harness`（所有 `*Debug()` 验收接口在这里暴露） |
 | `tests/` | vitest；`tests/helpers.ts` 的 `FIXTURE_CORE_PATCH` 是**冻结夹具**，另用同一套拼合器注入线上配置 |
-| `tools/smoke.py` | 线上自检；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样 |
-| `tools/publish-preview.mjs` | **每次任务完成的发布闸门**：build → 同步线上预览 → 校验资源 → 打印公网链接 |
+| `tools/smoke.py` | 线上自检（41 项）；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样 |
+| `tools/publish-preview.mjs` | **每次任务完成的发布闸门**：build → 发布 `dist/` → 校验资源 → 打印公网链接 |
 
 ### 3.4 调试面板分组
 
@@ -116,12 +123,12 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（88 文件 / 876 例） | 提交前 |
+| `npm test` | vitest 全量（95 文件 / 922 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
-| `npm run smoke` | 起 `dist/`，跑画面层 + 契约自检 | 发布前 |
+| `npm run smoke` | 起 `dist/`，跑 41 项画面层 + 契约自检 | 发布前 |
 | `npm run verify` | build → test → portable → docs → smoke 全链 | **发布前必跑** |
-| `npm run publish:preview` | 同步线上静态预览 + 校验资源 + **打印公网链接** | **每次任务完成必跑**，把链接贴进回复 |
+| `npm run publish:preview` | 发布 `dist/` 到唯一线上地址 + 校验资源 + **打印公网链接** | **每次任务完成必跑**，把链接贴进回复 |
 | `npm run docs:check` | README 行数 / INDEX 链接 / 单文件 300 行 | 改文档后 |
 | `node tools/gh-commit.mjs` | REST 提交网关（**默认 dry-run**，`--apply` 才写远端，需自备 token） | 网络受限兜底 / 用户批准后 |
 | `node tools/gh-commit.mjs --list` | 只列待提交文件（不联网） | 分工前 |
@@ -163,7 +170,7 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/core-contract.md`](systems/core-contract.md) | 跨语言重写的逐项对照表 |
 | [`systems/combat.md`](systems/combat.md) | 武器、连击、命中、受击、击退 |
 | [`systems/animation.md`](systems/animation.md) | 连击骨架锚点 / 平衡 / 节奏 / 加动作清单（规范） |
-| [`systems/animation-notes-1/2/3.md`](systems/animation-notes-1.md) | 按版本追加的动画落地细节（补充，非规范） |
+| [`systems/animation-notes-1/2/3/4.md`](systems/animation-notes-1.md) | 按版本追加的动画落地细节（补充，非规范） |
 | [`systems/movement-facing.md`](systems/movement-facing.md) | 移动 / 朝向四角 / 分离 / 边界 |
 | [`systems/camera-targeting.md`](systems/camera-targeting.md) | 智能相机、软锁定、两级注视 |
 | [`systems/presentation-fx.md`](systems/presentation-fx.md) | 特效层级与贴地高度 |
@@ -172,13 +179,14 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/verification.md`](systems/verification.md) | 自动 / 量化 / 移植验收 |
 | [`systems/known-limits.md`](systems/known-limits.md) | 已知限制（现状，不是待办） |
 | [`systems/grass.md`](systems/grass.md) | 体素草块：压开 / 割断 / 实例化渲染 / 风吹麦浪 / 性能结论 |
-| [`systems/grass-growth-pivot.md`](systems/grass-growth-pivot.md) | v9s.44 缓慢连续生长 + 枢轴顶点动画（每节 box 刚体旋转，实现正本） |
+| [`systems/grass-growth-pivot.md`](systems/grass-growth-pivot.md) | v9s.46 缓慢连续生长 + 枢轴顶点动画（每节 box 刚体旋转，实现正本） |
 | [`systems/test-scene-policy.md`](systems/test-scene-policy.md) | 单一主测试场景 + 三条规则（规则正本） |
 | [`systems/plot-assembly.md`](systems/plot-assembly.md) | 动态地块拼合 / 工位传送 / 测试按钮 / 每次任务更新线上（实现正本） |
-| [`systems/multi-agent-workflow.md`](systems/multi-agent-workflow.md) | 多 agent 分支、契约先行、冲突分类、REST 提交网关、发布闸门 |
-| [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 89 步手动验收 |
+| [`systems/multi-agent-workflow.md`](systems/multi-agent-workflow.md) | 多 agent 分支、版本号分配、契约先行、冲突分类、合并闸门 |
+| [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 108 步手动验收 |
 | [`state/CURRENT.md`](state/CURRENT.md) | 当前状态 + 下一步（覆盖写） |
-| [`risk-review.md`](risk-review.md) | 活跃风险 + 历史关闭记录 |
+| [`risk-review.md`](risk-review.md) | **当前**活跃风险 + 处置优先级 |
+| [`risk-history.md`](risk-history.md) | 已关闭风险的归档（按版本） |
 | [`assets/conventions.md`](assets/conventions.md) | 路径与命名规范 |
 | [`decisions/ADR-001`](decisions/ADR-001-docs-layout.md) | 文档分层：README 只当地图 |
 | [`decisions/ADR-002`](decisions/ADR-002-core-boundary.md) | Core 与表现层单向依赖 |
@@ -187,5 +195,4 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`decisions/ADR-005`](decisions/ADR-005-ground-height.md) | 贴地高度查询放 Core |
 | [`decisions/ADR-006`](decisions/ADR-006-fixed-step-events.md) | 固定步长 + 显式事件队列 |
 | [`decisions/ADR-007`](decisions/ADR-007-knockback-default.md) | 默认配置反映真实手感 |
-| [`decisions/ADR-008`](decisions/ADR-008-grass.md) | 草块状态在 Core、几何在表现层、判定复用 hits |
-| [`journal/`](journal/) | 按日期的迭代记录（2026-11-05 起；`-02` 是场景收敛与集成规则）。文件名带主题后缀，避免 add/add 撞车 |
+| [`journal/`](journal/) | 按日期的迭代记录（32 份，2026-11-05 起；`-00` 是功能总表，`-02` 是 v9s.41 换腿、`-06` 是 v9s.45 慢放；带 `<主题>` 后缀的按内容命名） |

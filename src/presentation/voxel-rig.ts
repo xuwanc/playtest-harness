@@ -29,7 +29,8 @@ import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
   backHipYawTarget,
   stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir,
-  stopYawFade, solveTurnStep,
+  stopYawFade, solveTurnStep, slewDirSign, slewHipTarget, turnSpinGate,
+  hipFlipWeight, hipTrackRate, slewGate,
 } from './gait';
 import type { GaitInput } from './gait';
 import {
@@ -85,6 +86,9 @@ export type VoxelRig = {
     driveSpeed: number;
     /** 本帧喂给 solveGait 的相位 */
     stridePhase: number;
+    /** v9s.41：本段跨步的起始相位（连段时接上一段停下的相位）/ 单调步序（奇偶决定哪条腿领先） */
+    strideBase: number;
+    stepIndex: number;
   };
   /** v8f：本帧分层受击姿态的诊断读数（不进 Core / 快照）。 */
   hurt(): HurtPose;
@@ -173,6 +177,19 @@ export type VoxelRig = {
     legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
     /** v9s.33：腿部被真实步态接管的比例（0 = 攻击姿态，1 = 完全真实步态） */
     legTakeover: number;
+    /**
+     * v9s.42：本帧真正喂给 solveGait 的相位（rad，未归一化，可能超出 0..TAU）。
+     * 手感面板用它画 sin 曲线 —— 读 Core 的 `gaitPhase` 不行：攻击时 Core 锁移速、
+     * 相位冻住，而这一段腿其实由 `attackGaitDrive` 的等效驱动在走。
+     */
+    phase: number;
+    /** v9s.43：本帧的换向驱动符号（−1..1）。稳态恒为 ±1；换向途中经过 0，
+     *  前后摆幅按 |该值| 淡出（0.16s 走完）。验收「换向不抽腿」直接读它。 */
+    dirF: number; dirR: number;
+    /** v9s.44：本帧下盘偏转目标（rad，相对身体）。hipYaw 是它的指数平滑结果。 */
+    hipYawTarget: number;
+    /** v9s.45：转身闸门状态 0..1（1 = 身体在转、下盘目标冻结）。验收「慢放不抖」读它。 */
+    spin: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
    *  供验收「腿摆动方向」：投影基准必须与腿所在坐标系一致，否则非正前方时方向被歪。 */
@@ -601,6 +618,15 @@ export function createVoxelRig(
   let hipYaw = 0;
   /** 本帧 gait 投影基准（诊断用，等于 bodyYaw + hipYaw），随 update 刷新 */
   let lastGaitYaw = 0;
+  /** v9s.44：本帧下盘偏转的**目标值**（诊断用）。hipYaw 是它的指数平滑结果，
+   *  目标本身若在几十毫秒内扫过上百毫秒，观感就是「下盘整体晃一下」。 */
+  let lastHipYawTarget = 0;
+  /** v9s.45：转身闸门的一阶状态（0..1）。不再直接拿瞬时角速度当权重 ——
+   *  那个量在转身尾部掉得很快，「半开」的几帧足以让目标蹿出去十几度。 */
+  let spinBlend = 0;
+  /** v9s.45：上一帧的 Core 时间，用来把身体角速度换算到**游戏时间**。
+   *  慢放 0.25× 时用渲染帧 dt 算，角速度只有常速的 1/4，闸门会半开（抖动根因）。 */
+  let prevCoreTime = -1;
 
   // ---- v9n 停步收相状态（纯表现层，不进 Core / 快照）----
   /** <0 = 未接管；0..1 = 收相进度；=1 后保持输出待机，直到重新起跑 */
@@ -622,8 +648,21 @@ export function createVoxelRig(
   let chestYaw = 0;
 
   // ---- v9p：停步惯性 / 攻击相位基准（全部纯表现，不进 Core / 快照）----
-  /** 进入攻击那一帧锁定的 Core gaitPhase，避免 lunge 位移造成双重相位推进 */
+  /** 本段攻击跨步的起始相位（v9s.41：连段时接上一段停下的相位，不再每段重置） */
   let attackPhaseBase = 0;
+  /** 上一帧实际输出的攻击相位：换段 / 换次攻击时用它接续，保证腿不跳 */
+  let attackPhasePrev = 0;
+  /** 是否已经有过一次攻击（第一刀没有「上一段」可接，对齐真实步态相位） */
+  let attackPhaseSeen = false;
+  /** 单调步序：每次起手 / 每段连击 +1。奇偶决定这一刀哪条腿领先。
+   *  不能用 comboIndex —— 3 连击后它回到 1，第 3 段与下一轮第 1 段同奇偶。 */
+  let attackStepIndex = 0;
+  /** 已处理的 Core attackId，用于识别「新的一段」（连击取消窗口提前接续也算新段） */
+  let lastAttackId = -1;
+  /** v9s.41：跨步偏移量的平滑值（前 / 侧 / 下沉）。段间靠它连续，段内包络不变。 */
+  let stepZ = 0;
+  let stepX = 0;
+  let stepDip = 0;
   let wasAttacking = false;
   /** 本帧停步惯性脉冲：前脚额外前伸量 / 身体前移量 / 骨盆下沉量（诊断用） */
   let lastStopStep = 0;
@@ -751,6 +790,14 @@ export function createVoxelRig(
   let balanceBodyZ = NaN;
   /** 本帧喂给 solveGait 的四个等效驱动量（诊断用） */
   let lastDrive: GaitDrive = { speed: 0, phase: 0, localForward: 0, localRight: 0 };
+  /**
+   * v9s.43：前后 / 左右摆腿的**驱动符号**（−1..1，线性，未做形状映射）。
+   * 硬符号在速度穿过 0 时会一帧取反 = 整条腿位镜像（实测单帧腿角跳 1.2 rad）；
+   * 这里按 `gaitCfg.dirFlipSec` 逐帧推进，交给 `solveGait` 用 smoothstep 收放摆幅。
+   * 初值取 +1：出生时站在待机姿态，第一帧即使方向相反也只是多淡 0.16s，无跳变。
+   */
+  let dirDriveF = 1;
+  let dirDriveR = 1;
   /** v9n：本帧实际写入双腿的姿态（诊断用） */
   let lastLegs = { lp: 0, lr: 0, rp: 0, rr: 0 };
   /** 不传 coreTime 时（单测）使用的本地时间累加器 */
@@ -1384,14 +1431,18 @@ export function createVoxelRig(
     lastShoulder = { lx, ly, lz, rx, ry, rz };
   }
 
-  /** 攻击跨步：每段攻击在挥出时向前跨一步，连击左右腿交替（combo 段奇偶决定方向），
+  /** 攻击跨步：每段攻击在挥出时向前跨一步，连击左右腿交替（单调步序的奇偶决定方向），
    * 同时重心下沉，让「每一次前移动画都表现出一个跨步」，且连击节奏连贯而非原地比划。 */
-  function applyStep(combat: CombatState): void {
-    if (combat.phase === 'idle' || combat.charging) return;
+  function applyStep(combat: CombatState, stepDir: number, dt: number): void {
+    if (combat.phase === 'idle' || combat.charging) {
+      stepZ = 0; stepX = 0; stepDip = 0;
+      return;
+    }
     const p = combat.attackProgress;
     const swing = swingCurve(p);
     const forth = Math.max(0, swing);
-    const stepDir = combat.comboIndex % 2 === 0 ? 1 : -1; // 偶数段向右跨、奇数段向左跨
+    // v9s.41：方向由 attackStepIndex 的奇偶给（每段 +1），不再用 comboIndex ——
+    // 后者 3 连击后会回到 1，第 3 段与下一轮第 1 段同向跨步，看着像「同一个方向连跨两次」。
     // v8g：幅度外置 + 收敛（旧版硬编码 0.17 / 0.14 / 0.05 在重击时推得过远）。
     // 大剑额外乘 heavyScale：双手大抡配小跨步，脚由 IK 钉地、身体只小幅前移，
     // 不会再出现「身体离开腿」。数值缺省时回落到旧值，兼容外部构造的配置对象。
@@ -1401,9 +1452,17 @@ export function createVoxelRig(
     const dip = Number.isFinite(cfg.stepDipReach) ? cfg.stepDipReach : 0.05;
     const heavy = combat.weapon === 'greatsword'
       ? clamp(Number.isFinite(cfg.heavyScale) ? cfg.heavyScale : 1, 0, 1) : 1;
-    pelvis.position.z += reach * forth * heavy;                    // 向前跨步（+Z = 前）
-    pelvis.position.x += stepDir * side * forth * heavy;           // 左右交替跨步
-    pelvis.position.y -= dip * Math.sin(Math.PI * p) * heavy;      // 重心下沉
+    // v9s.41：段间连续。连击在 recovery 中途接续时 progress 归零，`swingCurve` 从
+    // 0.6 直接掉到 0（|swing|≤1 的蓄势段）—— 骨盆一帧内退回 8.7cm、下沉 4cm、
+    // 侧跨方向直接翻号，读起来是「人被打回原地重新起步」。
+    // 段内包络不动，只把三个偏移量做指数趋近（τ≈85ms），换段变成 0.2 秒的体重转移。
+    const k = 1 - Math.exp(-12 * Math.max(0, dt));
+    stepZ += (reach * forth * heavy - stepZ) * k;
+    stepX += (stepDir * side * forth * heavy - stepX) * k;
+    stepDip += (dip * Math.sin(Math.PI * p) * heavy - stepDip) * k;
+    pelvis.position.z += stepZ;                                    // 向前跨步（+Z = 前）
+    pelvis.position.x += stepX;                                    // 左右交替跨步
+    pelvis.position.y -= stepDip;                                  // 重心下沉
   }
 
   // v8d：攻击姿态对腿的写入不再零散塞在各武器分支里（旧版只有大剑 / 三连击第 3 段
@@ -1763,7 +1822,7 @@ export function createVoxelRig(
     }
 
     // 各武器统一的跨步覆盖（在武器姿态之上再叠加前向 / 左右步幅）
-    applyStep(combat);
+    applyStep(combat, attackStepIndex % 2 === 0 ? 1 : -1, dt);
   }
 
   /**
@@ -1830,6 +1889,14 @@ export function createVoxelRig(
       turn?: TurnInPlaceState,
     ): void {
       setWeapon(combat.weapon);
+      // v9s.45：**游戏时间**步长。慢放 / 暂停 / 单步都走 Core 的 world.time，
+      // 与 frameDt 的关系是 gameDt = frameDt × timeScale（常速下两者逐位相同）。
+      // 只有转身闸门需要它：判定「身体在不在自己转」必须与时间缩放无关，
+      // 否则 0.25× 慢放会把角速度除以 4，闸门半开 → 下盘在转身中途被放行。
+      const gameDt = coreTime === undefined || prevCoreTime < 0
+        ? frameDt
+        : clamp(coreTime - prevCoreTime, 0, 0.1);
+      if (coreTime !== undefined) prevCoreTime = coreTime;
       // v9s.26：整体转体每帧归零，只有 writeSwingPose 会写它。
       // 不能靠 idle 分支单独清 —— 换武器 / 受击 / 引导等早退分支都会跳过挥击层，
       // 残留的 root.rotation.y 会让角色「斜着站」。
@@ -1934,6 +2001,11 @@ export function createVoxelRig(
       const az = clamp(rawAz, -60, 60);
       const along = ax * fx + az * fz;
       const turnRate = wrapAngle(c.bodyYaw - prevBodyYaw) / dt;
+      /** v9s.45：同一段转角按**游戏时间**再算一次 —— 只给转身闸门用。
+       *  常速下 gameDt ≡ frameDt，两者逐位相同；慢放时闸门才不会半开。 */
+      const turnRateGame = gameDt > 1e-6
+        ? wrapAngle(c.bodyYaw - prevBodyYaw) / gameDt
+        : 0;
       const leanSpeed = Math.hypot(c.velocity.x, c.velocity.z);
       const maxF = (leanCfg.maxForwardDeg * Math.PI) / 180;
       const maxS = (leanCfg.maxSideDeg * Math.PI) / 180;
@@ -2019,10 +2091,39 @@ export function createVoxelRig(
       const strafeYaw = strafeHipYaw(
         latRatio, ori.legYawScale, ori.hipYawMaxDeg, gaitCfg.strafeHipBoost,
       );
-      const targetHipYaw = backHipYawTarget(
-        bodyFwdRatio, latRatio, strafeYaw, backKeep,
-      ) * yawFade;
-      hipYaw += (targetHipYaw - hipYaw) * (1 - Math.exp(-ori.hipYawSmoothing * dt));
+      // v9s.44：身体自己在转的时候（朝向切换），① 不让「后退族」把胯拧向移动方向的反侧，
+      // ② 目标推进限速 —— 两者合起来，转身只是一个干净的单向带转，不再「拧出去再拧回来」。
+      // 一个开关管住整套对策：拉到 0 = 精确回到旧行为（A/B 用）
+      const hipRate = (gaitCfg.hipYawTrackRateDeg ?? 0) * Math.PI / 180;
+      const hipBackRate = (gaitCfg.hipYawBackRateDeg ?? 0) * Math.PI / 180;
+      // v9s.45：闸门改成**一阶状态**（上升 0.06s / 下降 0.22s），并用游戏时间角速度判定。
+      // 旧的瞬时值会在转身尾部几帧里从 1 掉到 0，「半开」时目标一帧能蹿 18~24°。
+      /** 表现层「游戏时间」步长：常速下等于 frameDt，慢放时按时间缩放缩短。
+       *  所有跟手感有关的积分（闸门、目标限速、下盘平滑）都用它 —— 慢放才是纯放大，
+       *  不会把时间常数摊薄成「跟不上」。 */
+      const dtw = gameDt > 1e-6 ? gameDt : frameDt;
+      spinBlend = hipRate > 0
+        ? slewGate(spinBlend, turnSpinGate(turnRateGame), dtw)
+        : 0;
+      // v9s.45：前 / 后相位共用一个权重（目标与限速必须一致，否则互相打架）
+      const flip = hipFlipWeight(backKeep, spinBlend);
+      // v9s.45：`latRatio` / `bodyFwdRatio` 都是**方向比值**，速度趋零时方向全是噪声
+      // （贴着墙被夹住时 v 只剩 1e-5，方向能一夜之间翻 90°）。按速度大小淡出偏转目标：
+      // 正常走起来（>0.5 m/s）逐位不变，停下 / 被挡住时下盘回到正中，不再被噪声带着拧。
+      const hipSpeedFade = clamp(speed / 0.5, 0, 1);
+      const rawTargetHipYaw = backHipYawTarget(
+        bodyFwdRatio, latRatio, strafeYaw, flip,
+      ) * yawFade * hipSpeedFade;
+      // v9s.44/v9s.45：目标限速（度/秒 → rad/s）。短促的方向扫掠会被它削平：身体转身时
+      // 下盘不再「先朝一侧拧过去、再拧回来」；后退相位单独一档更慢的上限。
+      const targetHipYaw = slewHipTarget(
+        lastHipYawTarget, rawTargetHipYaw,
+        hipTrackRate(hipRate, hipBackRate, flip), dtw, spinBlend,
+      );
+      lastHipYawTarget = targetHipYaw;
+      // v9s.45：平滑也用游戏时间 —— 慢放时下盘的跟随速度与常速逐位一致，
+      // 否则 0.25× 会把 83ms 的时间常数摊成 330ms，看起来「跟不上、追得慢」。
+      hipYaw += (targetHipYaw - hipYaw) * (1 - Math.exp(-ori.hipYawSmoothing * dtw));
 
       // ---- 程序化步态（v8 / v8b）----
       // 关键：腿挂在 lower 下（lower.rotation.y = hipYaw），所以腿的局部坐标系朝向是
@@ -2048,22 +2149,51 @@ export function createVoxelRig(
         localRight: gaitVX * rightX + gaitVZ * rightZ,
         stride: c.stride,
       };
-      // v9p：相位基准只在「刚进入攻击」那一帧锁定，攻击主体（含连击段切换、
-      // 淡出期）始终保持不变 —— 若退出时把它改成实时 c.gaitPhase，基准本身会
-      // 瞬跳（起手 0 → 结束 2.9 rad），腿就跟着跳一下。相位差改由 attackGaitDrive
-      // 内部的最短弧插值吸收，基准无需再对齐。
-      if (attacking && !wasAttacking) attackPhaseBase = c.gaitPhase;
+      // v9s.41：每段攻击 = 迈一步，腿要左右交替。
+      // 旧版只在「刚进入攻击」那一帧锁相位、连段沿用同一基准，于是每段都从同一姿态
+      // 摆出去再摆回来 —— 连段时第二刀与第一刀的腿完全重合（「没有换腿跨步」）。
+      // 现在：
+      //   · 每识别到一个新段（Core attackId 变了）就把步序 +1（决定哪条腿领先）；
+      //   · 起点相位接「上一帧实际输出的相位」→ 段间零跳变（哪怕在 recovery 中途取消）；
+      //   · 只有全新一次攻击、且玩家在移动时，才对真实 gaitPhase —— 否则接着上一刀的
+      //     收尾相位走，站着连点也能交替（站着不动时 Core 的 gaitPhase 是冻住的，
+      //     用它当基准等于永远同一条腿）。
+      if (attacking && combat.attackId !== lastAttackId) {
+        const freshAttack = !wasAttacking;
+        lastAttackId = combat.attackId;
+        attackStepIndex += 1;
+        // 走动中起手 / 第一次起手 → 对齐真实步态相位；站着连点 → 接上一刀的收尾相位
+        const alignReal = freshAttack && (!attackPhaseSeen || realDrive.speed > 0.05);
+        attackPhaseBase = alignReal ? realDrive.phase : attackPhasePrev;
+        attackPhaseSeen = true;
+      }
       wasAttacking = attacking;
       // v9p：淡出期（attacking=false 但 attackBlend>0）也继续走等效驱动，让相位 /
       // 摆幅按 blend 平滑回落到真实步态；旧版在收势那一帧直接切回 realDrive
       // （speed=0 → idle），步幅放大后这个单帧弹回会非常明显。
       const drive = attackBlend > 0
         ? attackGaitDrive(
-          realDrive, combat.attackProgress, combat.comboIndex, attackBlend,
+          realDrive, combat.attackProgress, attackStepIndex, attackBlend,
           animCfg.stride, attackPhaseBase,
         )
         : realDrive;
       lastDrive = drive;
+      // 只在攻击进行中记录「本段实际相位」，淡出期不记（那时 drive.phase 正在往
+      // real.phase 上靠，记进去会把下一段的起点拽回去）。
+      if (attacking) attackPhasePrev = drive.phase;
+
+      // ---- v9s.43 · 换向融合 ----
+      // 用**最终 drive**（含攻击等效驱动）的符号推进：`solveGait` 的前后摆幅 = dirF × wF ×
+      // 步幅/4，dirF 硬翻会让整条腿在一帧里镜像过去。这里让符号在 dirFlipSec 内走过 0，
+      // 摆幅随之收放（等价于两个方向的姿态交叉淡入），换向时腿先并一下再迈出去。
+      const flipSec = Math.max(0, gaitCfg.dirFlipSec ?? 0);
+      if (flipSec > 0) {
+        dirDriveF = slewDirSign(dirDriveF, drive.localForward >= 0 ? 1 : -1, dt, flipSec);
+        dirDriveR = slewDirSign(dirDriveR, drive.localRight >= 0 ? 1 : -1, dt, flipSec);
+      } else {
+        dirDriveF = drive.localForward >= 0 ? 1 : -1;
+        dirDriveR = drive.localRight >= 0 ? 1 : -1;
+      }
 
       // ---- v9n 停步收相 ----
       // Core 的 gaitPhase 只在有位移时推进；松手后位移趋零 → 相位冻结，而 solveGait
@@ -2121,6 +2251,9 @@ export function createVoxelRig(
         moveSpeed,
         localForward: stopFwd,
         localRight: stopRight,
+        // v9s.43：收相是「停步那一刻方向的快照」，驱动符与冻住的 stopFwd 同向
+        dirF: dirDriveF,
+        dirR: dirDriveR,
         legLength: v.legLength,
         stride: stopStride0,
         grounded: true,
@@ -2130,6 +2263,8 @@ export function createVoxelRig(
         moveSpeed,
         localForward: drive.localForward,
         localRight: drive.localRight,
+        dirF: dirDriveF,
+        dirR: dirDriveR,
         legLength: v.legLength,
         // v9p：攻击时喂「放大的等效步幅」（strideScale），走物理步幅路径让跨步更大；
         // 拉 0 时 drive.stride=0，精确回到 v8d 的「摆幅随速度」回退路径。
@@ -2174,6 +2309,9 @@ export function createVoxelRig(
           moveSpeed,
           localForward: realDrive.localForward,
           localRight: realDrive.localRight,
+          // v9s.43：与主步态共用同一组驱动符，接管混合时不会因符号不同而互相对冲
+          dirF: dirDriveF,
+          dirR: dirDriveR,
           legLength: v.legLength,
           stride: realDrive.stride ?? 0,
           grounded: c.grounded,
@@ -2431,7 +2569,7 @@ export function createVoxelRig(
       //  由 attackProgress 派生、连击左右脚交替领先，两端自动归零不残留；
       //  只写腿与骨盆（下盘），上半身跨步仍由 applyStep 负责，避免重心重复下沉。
       if (attackLegWeight > 0 && c.grounded) {
-        const stride = attackStridePose(combat.attackProgress, combat.comboIndex, animCfg.stride);
+        const stride = attackStridePose(combat.attackProgress, attackStepIndex, animCfg.stride);
         const s = attackLegWeight;
         legL.root.rotation.x += stride.legL.pitchX * s;
         legR.root.rotation.x += stride.legR.pitchX * s;
@@ -2651,12 +2789,16 @@ export function createVoxelRig(
     },
     attackWeights(): {
       gaitScale: number; attackLegWeight: number; driveSpeed: number; stridePhase: number;
+      /** v9s.41：本段跨步的起始相位 / 单调步序（验收「连段换腿」用） */
+      strideBase: number; stepIndex: number;
     } {
       return {
         gaitScale: lastGaitScale,
         attackLegWeight,
         driveSpeed: lastDrive.speed,
         stridePhase: lastDrive.phase,
+        strideBase: attackPhaseBase,
+        stepIndex: attackStepIndex,
       };
     },
     hipYaw(): number {
@@ -2697,6 +2839,9 @@ export function createVoxelRig(
         legTakeover: legTakeoverSm,
         legLPitch: lastLegs.lp, legLRoll: lastLegs.lr,
         legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,
+        phase: lastDrive.phase,
+        dirF: dirDriveF, dirR: dirDriveR,
+        hipYawTarget: lastHipYawTarget, spin: spinBlend,
       };
     },
     gaitYaw(): number {

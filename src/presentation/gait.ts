@@ -43,6 +43,11 @@ export type GaitInput = {
    * 传 0 表示拿不到物理步幅（如攻击等效驱动），退回按速度估算摆幅的旧路径。
    */
   stride: number;
+  /** v9s.43：前向驱动符号 −1..1（由 `slewDirSign` 逐帧推进），省略 = 按 localForward 的正负取 ±1。
+   *  见 `dirDrive`：|dirF| < 1 表示「正在换向」，前后摆幅按该值淡出，腿不会一帧镜像过去。 */
+  dirF?: number;
+  /** v9s.43：右向驱动符号 −1..1，同上（侧摆 / 交叉步 / 侧倾共用） */
+  dirR?: number;
   grounded: boolean;
 };
 
@@ -146,6 +151,158 @@ export function backStrafeKeep(
   return 1 - t * t * (3 - 2 * t);
 }
 
+/* -------------------------------------------------------------------------- *
+ * v9s.43 · 换向融合：前后摆的「符号」不能一帧翻过去
+ * -------------------------------------------------------------------------- *
+ * 现象：前进时把摇杆一拉到后，腿会抽一下（线上 ~0.65s 内转 180°，实测单帧腿角跳
+ * 1.20 rad ≈ 69°，而正常跨步单帧只有 0.5 rad）。
+ *
+ * 根因：前后轴摆幅 = `dirF × wF × stride/4 × off(p)`，其中 dirF 是**硬符号**
+ * `localForward >= 0 ? +1 : -1`。速度穿过 0 时 dirF 瞬间取反，等于把整条腿位
+ * 镜像过去 —— 而这一帧 `wF` 并不小（纯前后移动时 wF ≈ 1），摆幅又是按**步幅**
+ * 而不是按速度定的（stride/4 恒为 0.25m），所以换向那一帧脚直接瞬移 ~0.5m 的
+ * 等效摆角。侧轴（dirR）同理：左右一换，侧摆 / 交叉步 / 侧倾整套镜像。
+ *
+ * 修法不是改摆幅曲线（solveGait 本来 C¹），而是让**符号本身连续**：
+ * 每个方向各存一个 −1..1 的驱动量，按 `dirFlipSec` 的速率线性推进到目标符号，
+ * 再用 smoothstep 形状（两端速度为 0）映射成系数乘上去。换向时分帧经过 0，
+ * 摆幅跟着收成 0 再长回来 —— 等价于「两个方向的姿态交叉淡入」，观感是转身时
+ * 腿先并一下再迈出去，而不是瞬移。
+ *
+ * 为什么不按速度淡出：摆幅按步幅定，与速度无关，换向时速度可能只有 0.4 m/s
+ * 却仍是满摆幅；按速度淡出会把「慢走」也削成碎步。只有「符号确实翻了」时才需要淡。
+ */
+
+/** 每帧朝目标符号（±1）推进 step，返回 −1..1 的**线性**值。state 存这个原始值。 */
+export function slewDirSign(
+  current: number,
+  target: number,
+  dt: number,
+  sec: number,
+): number {
+  const t = target >= 0 ? 1 : -1;
+  const s = Math.max(EPS, sec);
+  const step = (2 / s) * Math.max(0, dt);   // −1 → +1 恰好花 sec 秒
+  const cur = clamp(current, -1, 1);
+  const d = t - cur;
+  if (Math.abs(d) <= step) return t;
+  return cur + Math.sign(d) * step;
+}
+
+/** 线性 −1..1 → 两端速度为 0 的驱动系数（0 → 0，±1 → ±1）。 */
+export function dirDrive(x: number): number {
+  const v = clamp(Number.isFinite(x) ? x : 1, -1, 1);
+  const a = Math.abs(v);
+  return Math.sign(v) * a * a * (3 - 2 * a);
+}
+
+/* -------------------------------------------------------------------------- *
+ * v9s.44 · 下盘偏转目标限速：「朝向切换」时下盘不能整体甩一下
+ * -------------------------------------------------------------------------- *
+ * 现象：一边跑一边让身体转向（锁定目标 / 拖拽瞄准 / 攻击锁朝向）时，下盘会整体
+ * 晃一下 —— 腿先朝一侧拧过去，再拧回来。
+ *
+ * 根因不是角度不连续，而是**目标在几十毫秒里扫过一大段**：下盘偏转目标
+ * `backHipYawTarget` 有两个「族」——
+ *   · 侧移族：`strafeHipYaw` 让下盘朝移动方向带转（纯侧移 θ=90° 时 +50°）；
+ *   · 后退族：θ 落进 100°..180° 时改用 `θ − 180°`（θ=132° → −48°），让下盘前后轴
+ *     精确对准移动轴（v9s.14 的踩地前提）。
+ * 身体转动时 θ 会连续扫过 90° → 132°，两个族在同一 θ 上相差 ~100°，目标只能
+ * 「跳族」：实测 θ=99° 目标 +49°，θ=112° 已经 −24°，θ=133° −47°，再回到 0。
+ * 于是整条目标曲线是一个 **+50 → −48 → 0** 的大 S，hipYaw 平滑跟不上 → 单帧
+ * 12.9°（775°/s），整体摆幅 54°~75°。
+ *
+ * 修法：给**目标**加最大转速（不是给输出加，输出那层指数平滑是手感的「缓起」）。
+ * 目标被限速后，短促的扫掠（身体转身 0.3~0.5s）来不及爬到峰值就被拉回 0 →
+ * 负向那一段根本不出现；而真正持续的方向改变（横移换向、长期倒退走）只是慢一点
+ * 到位，稳态完全一致。物理上也说得通：胯是被上身带过去的，不可能比身体转得还快。
+ *
+ * 与 `slewDirSign` 的区别：那个是「符号」在固定时长内匀速走完（±1），这个是任意
+ * 角度按固定**角速度**推进。rate<=0 时不限速，精确回到旧行为（A/B 用）。
+ */
+export function slewAngle(
+  current: number,
+  target: number,
+  maxRate: number,
+  dt: number,
+): number {
+  if (!(maxRate > 0)) return target;
+  const step = maxRate * Math.max(0, dt);
+  const d = target - current;
+  if (Math.abs(d) <= step) return target;
+  return current + Math.sign(d) * step;
+}
+
+/** 身体角速度低于此值视为「没在转身」（rad/s，≈30°/s） */
+export const SPIN_RATE_START = (30 * Math.PI) / 180;
+/** 超过此值视为「纯转身」（rad/s，≈100°/s） */
+export const SPIN_RATE_FULL = (100 * Math.PI) / 180;
+/** v9s.45：闸门上升 / 下降时间（秒）。上升快（转身一起来就接管），
+ *  下降慢（转身结束后下盘逐步交还控制权，不会一帧放开）。 */
+export const SPIN_RISE_SEC = 0.06;
+export const SPIN_FALL_SEC = 0.22;
+
+/**
+ * v9s.44 · 「身体自己在转」的程度：0 = 没转（速度换向），1 = 纯转身（rad/s 进，0..1 出）。
+ *
+ * 为什么需要这个闸门（而不是一刀切限速）：速度方向本身反转时（摇杆前推 → 后拉、
+ * 身体朝敌人不动），θ 会在一瞬间翻 180°，此时下盘必须跟着全速拧过去，否则腿的
+ * 摆动轴与世界速度方向错开 = 踩不住地（v9s.43 用例实测腿角跳 0.55 → 0.63 rad）。
+ * 而「朝向切换」（锁定目标变了 / 攻击锁朝向 / 拖拽瞄准）时是**身体在转**、世界速度
+ * 方向没变，胯是被上身带过去的，不该比身体本身转得还快 —— 这一种才该锁住。
+ *
+ * ⚠️ v9s.45：`turnRate` 必须是**游戏时间**里的角速度（ΔbodyYaw / Δworld.time）。
+ * 用渲染帧 dt 算的话，慢放 0.25× 时身体转过同样角度要多花 4 倍真实时间，
+ * 角速度只有常速的 1/4 —— 闸门从「全关」变成「半开」，下盘在转身中途被放行，
+ * 单帧能蹿 18~24°，肉眼就是「慢放还是会抖一下」。
+ */
+export function turnSpinGate(turnRate: number): number {
+  return clamp(
+    (Math.abs(turnRate) - SPIN_RATE_START) / (SPIN_RATE_FULL - SPIN_RATE_START),
+    0, 1,
+  );
+}
+
+/**
+ * v9s.45 · 闸门的「状态化」：目标值不变时，spin 也只能按固定斜率爬升 / 回落。
+ *
+ * 为什么不能直接拿瞬时角速度当权重：`turnSpinGate` 是连续的，但它的**输入**在
+ * 转身末尾衰减得很快（指数趋近），闸门会在几帧里从 1 滑到 0；而限速率又和 spin
+ * 强相关（见 `slewHipTarget`），于是「半开」的那几帧足以让目标蹿出去十几度。
+ * 这里把 spin 变成一阶状态：上升 0.06s、下降 0.22s，两端都不可能出现一帧巨变。
+ */
+export function slewGate(
+  current: number,
+  target: number,
+  dt: number,
+  riseSec = SPIN_RISE_SEC,
+  fallSec = SPIN_FALL_SEC,
+): number {
+  const cur = clamp(current, 0, 1);
+  const t = clamp(target, 0, 1);
+  const sec = t > cur ? Math.max(EPS, riseSec) : Math.max(EPS, fallSec);
+  const step = (dt / sec) * 1;
+  const d = t - cur;
+  if (Math.abs(d) <= step) return t;
+  return cur + Math.sign(d) * step;
+}
+
+export function slewHipTarget(
+  current: number,
+  target: number,
+  maxRate: number,
+  dt: number,
+  spin: number,
+): number {
+  if (!(maxRate > 0)) return target;
+  const free = 1 - clamp(spin, 0, 1);
+  // v9s.45：rate 与 free **线性**挂钩（旧版 free·(maxRate + free·3400°/s) 在 free=0.5
+  // 时还有 ~950°/s，等于「半开 = 几乎不限速」，正是慢放下那一下抖的来源）。
+  // 现在 spin=1 精确冻结、spin=0 就是 maxRate 本身 —— 中间任何位置都不再有「放行」的捷径。
+  if (free <= 1e-9) return current;
+  return slewAngle(current, target, free * maxRate, dt);
+}
+
 export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
   if (!input.grounded || input.speed < EPS) return idle();
 
@@ -185,8 +342,10 @@ export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
   );
   const wS = (ar / sum) * backKeep;
   const wF = (af / sum) + (ar / sum) * (1 - backKeep);
-  const dirF = input.localForward >= 0 ? 1 : -1; // 前进 +1 / 后退 -1
-  const dirR = input.localRight >= 0 ? 1 : -1;   // 右移 +1 / 左移 -1
+  // v9s.43：符号用驱动量（可由骨架层按 slewDirSign 平滑），省略时退回硬符号。
+  // `dirDrive` 只是形状映射：|x|=1 时与旧的 ±1 逐位相同，只有换向途中才衰减摆幅。
+  const dirF = dirDrive(input.dirF ?? (input.localForward >= 0 ? 1 : -1)); // 前进 +1 / 后退 -1
+  const dirR = dirDrive(input.dirR ?? (input.localRight >= 0 ? 1 : -1));   // 右移 +1 / 左移 -1
 
   const halfStride = reach;
 
@@ -211,7 +370,9 @@ export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
     const rollZ = legAngle(footX);
 
     // 膝：摆动相抬起；侧移的领先腿多弯一点（跨步更明显）
-    const kneeX = cfg.kneeLift * lift * amp * (0.55 + 0.25 * wF + (lead > 0 ? 0.2 * wS : 0));
+    // v9s.43：领先量改成 `0.1 × (1 + side·dirR)` —— |dirR|=1 时与旧写法（领先 0.2/跟随 0）
+    // 逐位相同，但换向途中连续穿过 0.1，抬膝不会随 lead 的符号在一帧里跳一格。
+    const kneeX = cfg.kneeLift * lift * amp * (0.55 + 0.25 * wF + 0.1 * wS * (1 + side * dirR));
     return { pitchX, rollZ, kneeX };
   }
 
@@ -309,6 +470,37 @@ export function strafeHipYaw(latRatio: number, baseScale: number, maxDeg: number
 }
 
 /**
+ * v9s.45 · 下盘偏转的「相位权重」：1 = 侧移 / 前进族，0 = 后退族。
+ *
+ * 旧版把 `k²` 和 `spinGate` 直接写在 `backHipYawTarget` 里；现在抽出来，是因为它
+ * 还要单独喂给**限速率**（前 / 后相位各一套上限，见 `hipTrackRate`）——
+ * 目标与限速必须用同一个权重，否则两者会互相打架。
+ *
+ * 用平方让翻转快于侧摆收缩：`backStrafeKeep` 是 smoothstep，中段（110° 附近）
+ * 侧摆已经退了一半、下盘却只转了一小部分 —— 那是最难看的「半翻」状态。
+ */
+export function hipFlipWeight(backKeep: number, spinGate = 0): number {
+  const k = clamp(backKeep, 0, 1);
+  return k * k + (1 - k * k) * clamp(spinGate, 0, 1);
+}
+
+/**
+ * v9s.45 · 前 / 后相位各自的下盘目标转速上限（rad/s）。
+ *
+ * 侧移族要跟得上（横移一推，胯就得跟着带转），保留较高的上限；
+ * 后退族的 −48° 是「把摆动轴对齐到行走轴」的**稳态**解，只有真的在倒退走时才该
+ * 长出来 —— 上限压低，快速扫过 θ∈100°..132° 时就来不及把胯拖出去再拖回来。
+ *
+ * 任一侧 <= 0 视为「关掉限速」（`hipYawTrackRateDeg = 0` 的 A/B 开关），
+ * 返回 0 让 `slewAngle` 走透传。
+ */
+export function hipTrackRate(forwardRate: number, backRate: number, flip: number): number {
+  if (!(forwardRate > 0) || !(backRate > 0)) return 0;
+  const f = clamp(flip, 0, 1);
+  return backRate + (forwardRate - backRate) * f;
+}
+
+/**
  * v9s.14 · 侧后方下盘该朝哪边转（修正方向翻转）。
  *
  * 支撑相要「脚掌钉地」，要求脚相对身体的位移速度正好抵消身体速度。腿只能绕 X
@@ -325,12 +517,15 @@ export function strafeHipYaw(latRatio: number, baseScale: number, maxDeg: number
  * 这一点是「翻过来」的本质：腿在后退摆，脚往 θ 方向蹬出去，膝盖却朝 θ+180°，
  * 所以下盘角度的符号与侧移偏转相反。v9s.13 把偏转直接归零，轴就停在身体正前方，
  * 与斜向移动差 45° —— 那 45° 的横向分量没有脚补偿，正是滑步。
+ *
+ * 两族怎么混合交给 `flip`（见 `hipFlipWeight`）：1 = 侧移族，0 = 后退族。
  */
 export function backHipYawTarget(
   localForward: number,
   localRight: number,
   strafeYaw: number,
-  backKeep: number,
+  /** 相位权重，见 `hipFlipWeight`：1 = 停在侧移族（含「正在转身」），0 = 完全翻到后退族 */
+  flip: number,
 ): number {
   const speed = Math.hypot(localForward, localRight);
   if (!(speed > 1e-6)) return strafeYaw;
@@ -339,13 +534,8 @@ export function backHipYawTarget(
   // 侧移 / 前进段：完全交给既有的 strafeHipYaw（0.35 限幅 + 侧摆补偿）
   if (abs <= 90) return strafeYaw;
   const backYaw = ((deg - Math.sign(deg) * 180) * Math.PI) / 180;
-  // k=1 仍是侧移偏转，k=0 完全翻到「移动方向 − 180°」。
-  // 用平方让翻转快于侧摆收缩：`backStrafeKeep` 是 smoothstep，中段（110° 附近）
-  // 侧摆已经退了一半、下盘却只转了一小部分 —— 那是最难看的「半翻」状态：
-  // 既没有侧摆补偿，轴也没对上。平方后这段时间直接跃到下盘朝反侧。
-  const k = clamp(backKeep, 0, 1);
-  const flip = k * k;
-  return strafeYaw * flip + backYaw * (1 - flip);
+  const f = clamp(flip, 0, 1);
+  return strafeYaw * f + backYaw * (1 - f);
 }
 
 /* -------------------------------------------------------------------------- *
