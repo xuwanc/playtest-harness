@@ -379,13 +379,18 @@ export type BreakHit = {
 /** 地块文件里的物件声明：位置是相对地块中心的偏移，绝对坐标由拼合器解算。 */
 export type PlotDestructibleDef = {
   id: string;
-  /** 'pole' = 旗杆（任意高度可断）；'jar' = 瓶罐（吸附预设断裂带） */
-  kind: 'pole' | 'jar';
+  /**
+   * 'pole' = 旗杆（任意高度可多次砍断）；'jar' = 瓶罐（命中即碎裂成多块）；
+   * 'cactus' = 萨瓜罗式仙人掌（程序化生成侧臂，复用旗杆多段砍物理，断块带侧臂飞出）；
+   * 'button' = 触发开关（自身不被破坏，被刀砍中后触发 targetId 指向的物件：未断→整体砍断掉落，已断→复位）。
+   */
+  kind: 'pole' | 'jar' | 'cactus' | 'button';
   /** 相对地块中心的水平偏移（米） */
   dx: number; dz: number;
   /** 底面离地高度（米），一般 0 */
   y?: number;
   height: number;
+  /** 方盒横截面半边长（米）；pole/jar/cactus 都按方盒渲染；button 用较小值做立柱半径 */
   radius: number;
   /** 基础切面倾角（度），缺省 18 */
   tiltDeg?: number;
@@ -397,6 +402,12 @@ export type PlotDestructibleDef = {
   fallSec?: number;
   /** 预设断裂带（相对高度 0..1），瓶罐用；空 = 任意高度可断 */
   bands?: number[];
+  /** 罐子碎裂时的碎块数量（默认 8；用确定性随机铺放，不用 Math.random） */
+  shards?: number;
+  /** cactus 专用：程序化生成侧臂的随机种子（确定性）；省略则由 id 派生 */
+  seed?: number;
+  /** button 专用：被砍中后触发的目标物件 id（仙人掌 / 旗杆均可） */
+  targetId?: string;
   /** 本体 / 切口颜色（十六进制） */
   color?: string;
   cutColor?: string;
@@ -405,7 +416,7 @@ export type PlotDestructibleDef = {
 /** 拼合后的绝对坐标物件定义（Core 状态由它生成）。 */
 export type DestructibleSpec = {
   id: string;
-  kind: 'pole' | 'jar';
+  kind: 'pole' | 'jar' | 'cactus' | 'button';
   x: number; y: number; z: number;
   height: number;
   radius: number;
@@ -414,16 +425,74 @@ export type DestructibleSpec = {
   maxTiltDeg?: number;
   fallSec?: number;
   bands?: number[];
+  /** cactus 专用：程序化侧臂种子 */
+  seed?: number;
+  /** button 专用：触发目标 id */
+  targetId?: string;
   color?: string;
   cutColor?: string;
+};
+
+/**
+ * 掉落刚体片段（pole 被砍下的段 / jar 碎裂的碎块）。
+ *
+ * 字段刻意与 `fragments.ts` 的 `RigidBody` 完全一致：Core 每帧把每个片段当成一个
+ * 确定式刚体（重力 + 地面 / 刚体间碰撞）推进，表现层只读它的世界中心 (x,y,z) 与
+ * 朝向四元数 (qw,qx,qy,qz) 来摆 mesh。全部 plain number，随 World 一起 JSON 序列化、
+ * 快照、回放 —— 因此「暂停 / 慢放 / 倒带」对掉落碎块天然成立。
+ *
+ * `invMass = 0` 表示静止碰撞体（不参与积分），这里片段都是动态的（invMass > 0）。
+ */
+export type Fragment = {
+  /** 片段世界中心 */
+  x: number; y: number; z: number;
+  /** 半长（box 半边长，米） */
+  hx: number; hy: number; hz: number;
+  /** 朝向四元数（单位四元数） */
+  qw: number; qx: number; qy: number; qz: number;
+  /** 线速度（米/秒） */
+  vx: number; vy: number; vz: number;
+  /** 角速度（世界轴 × 速率，弧度/秒） */
+  wx: number; wy: number; wz: number;
+  /** 逆质量（0 = 静止，片段恒 > 0）；逆转动惯量（标量近似） */
+  invMass: number; invInertia: number;
+  /** 恢复系数 / 摩擦系数（碰撞用） */
+  restitution: number; friction: number;
+  /** 1 = 已休眠（速度归零、只当碰撞体）；0 = 动态 */
+  rest: number;
+  /**
+   * 连续低速时长（秒），超过阈值才休眠，避免抖动误休眠
+   */
+  restT: number;
+  /**
+   * 视觉子盒（仅表现层使用，物理不参与）：仙人掌断块中随断口一起飞出的侧臂。
+   * 坐标为相对碎片中心（碎片未旋转盒系）的局部偏移，随碎片四元数一起旋转。
+   * 物理刚体仍是主盒，侧臂只是挂在上面的视觉盒，保证「断块带侧臂飞出」且不破坏可序列化 / 确定性。
+   */
+  parts?: Array<{ x: number; y: number; z: number; hx: number; hy: number; hz: number }>;
+};
+
+/** 仙人掌侧臂（程序化生成，确定性）。全部 plain number，随 World 序列化。 */
+export type CactusArm = {
+  /** 起始相对高度（0..1，沿主干） */
+  atU: number;
+  /** 伸出方向（世界 XZ 单位向量，取 ±x / ±z 之一） */
+  dx: number; dz: number;
+  /** 水平伸出长度（米） */
+  outLen: number;
+  /** 向上长度（米） */
+  upLen: number;
+  /** 臂半径（米） */
+  rad: number;
 };
 
 /** 运行时状态：全部 plain number / 数组，随 World 一起 JSON 快照回放。 */
 export type DestructibleState = {
   id: string;
-  kind: 'pole' | 'jar';
+  kind: 'pole' | 'jar' | 'cactus' | 'button';
   x: number; y: number; z: number;
   height: number;
+  /** 方盒横截面半边长（米）：pole/jar/cactus 都按方盒渲染，radius = 半宽；button 用做立柱半径 */
   radius: number;
   tiltDeg: number;
   pitchGain: number;
@@ -432,20 +501,33 @@ export type DestructibleState = {
   bands: number[];
   color: string;
   cutColor: string;
-  /** 0 = 完好；1 = 已断 */
+  /** 0 = 完好；pole/cactus 为已砍断次数（可多次）；jar 为 1 = 已碎裂；button 恒 0（自身不被破坏） */
   broken: number;
-  /** 断面相对高度 0..1；完好时 = 1（下半截即完整柱体） */
+  /** 站立段当前顶端相对高度 0..1（多段砍断后递减；罐子碎裂后 = 0） */
+  standU: number;
+  /** 站立段顶端斜切面法线（世界单位向量，ny 恒 > 0），完好时 = (0,1,0) */
+  snx: number; sny: number; snz: number;
+  /** 最近一次断口的相对高度 / 倾角 / 法线 / 翻倒轴（调试与表现只读） */
   cutU: number;
-  /** 切面倾角（弧度） */
   theta: number;
-  /** 切面法线（世界单位向量，ny 恒 > 0） */
   nx: number; ny: number; nz: number;
-  /** 上半截翻倒轴（世界单位向量 = cross(up, dH)） */
   ax: number; ay: number; az: number;
-  /** 当前翻倒角（弧度） */
-  fall: number;
   /** 断裂时刻 world.time */
   brokenAt: number;
+  /** 掉落刚体片段（pole/cactus 砍下段 / jar 碎块）；确定性步进，随 World 序列化 */
+  fragments: Fragment[];
+  /** cactus 专用：程序化侧臂（确定性生成一次，之后只读） */
+  seed: number;
+  arms: CactusArm[];
+  /** button 专用：被砍中后触发的目标物件 id */
+  targetId?: string;
+  /**
+   * 命中闸门（表现层 → Core 的挥砍节流）：一次连续挥砍（刀刃持续接触同一物件）只触发一次
+   * 破坏，避免「一刀扫下=把物件切成十几片薄块」——那些薄片互相重叠、初始零速，看上去就是
+   * 「断枝浮空立起来 / 越砍越多 / 互相穿透」。刀刃离开物件后再接触才会重新武装。
+   * 注意：forceBreak（控制台 / 测试）不走此闸门，可一次一刀精确控制。
+   */
+  hitArmed?: boolean;
 };
 
 /* ---------------- v9s.39 · 体素草块契约 ----------------

@@ -338,7 +338,8 @@ export function startApp(): void {
       broken: world.destructibles.filter((s) => s.broken !== 0).length,
       cuts: world.destructibles.map((s) => ({
         id: s.id, kind: s.kind, broken: s.broken, cutU: s.cutU, theta: s.theta,
-        nx: s.nx, ny: s.ny, nz: s.nz, fall: s.fall, height: s.height,
+        nx: s.nx, ny: s.ny, nz: s.nz, standU: s.standU,
+        fragments: s.fragments.length, height: s.height,
       })),
       rendered: view.destructibleDebug(),
     }),

@@ -263,6 +263,23 @@ export function createSceneView(
   renderer.setSize(w0, h0, false);
   container.appendChild(renderer.domElement);
 
+  // v9s.x：微信（X5 内核）/ iOS WKWebView 等移动 webview 会**周期性丢失 WebGL 上下文**。
+  // 若不处理，渲染循环会持续向已死的上下文发指令，表现为「阶段性卡几秒」甚至白屏。
+  // 处理：丢失时 preventDefault()（让浏览器触发 restore），并跳过渲染；恢复后由 Three 自动
+  // 重建 GPU 资源（几何 / 纹理懒重传），这里只清状态、刷新尺寸与阴影。
+  let contextLost = false;
+  const glCanvas = renderer.domElement;
+  glCanvas.addEventListener('webglcontextlost', (e: Event) => {
+    e.preventDefault(); // 必须 preventDefault，否则浏览器不会派发 restored
+    contextLost = true;
+  }, false);
+  glCanvas.addEventListener('webglcontextrestored', () => {
+    contextLost = false;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(container.clientWidth || w0, container.clientHeight || h0, false);
+    renderer.shadowMap.needsUpdate = true;
+  }, false);
+
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#12161d');
 
@@ -1049,6 +1066,8 @@ export function createSceneView(
       return hero.gripDebug?.() ?? { active: false, dist: 0, gy: 0, pitch: 0, joint: 0, grip: 0 };
     },
     render(w, frameDt): void {
+      // WebGL 上下文丢失期间跳过渲染：避免向已死的上下文发指令导致 webview 假死。
+      if (contextLost) return;
       // v9s.43：测试按钮会动态增减 world.dummies，先对齐渲染对象容量再画。
       syncDummyCapacity(w);
       const c = w.character;
