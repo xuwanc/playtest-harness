@@ -2117,9 +2117,21 @@ export type BodyTypeConfig = {
   name: string;
   /** 总身高（米）= legLength + bodyHeight + headSize */
   height: number;
+  /**
+   * v9s.50：骨架种类。缺省 `human`（三头身体素人）。
+   * `spider` 走 8 腿解析步态骨架 —— 腿数、关节链、步态全不同，
+   * 因此是**另一套骨架**而不是同一套的缩放（见 ADR-010）。
+   */
+  rig?: 'human' | 'spider';
+  /**
+   * v9s.50：该体型的移动速度覆盖（m/s），缺省沿用 `core.moveSpeed`。
+   * 体高差一倍的两套骨架不该共用同一个线速度：4.2 m/s 对 0.5m 高的蜘蛛是
+   * 8.4 身高/秒（人形只有 3.5），腿无论如何都摆不过来。
+   */
+  moveSpeed?: number;
   /** 碰撞半径（米），缺省沿用 core.characterRadius */
   radius?: number;
-  /** 骨架尺寸；缺省沿用 view.voxel */
+  /** 骨架尺寸；缺省沿用 view.voxel。`rig: 'spider'` 时被忽略（体型写在骨架里）。 */
   voxel?: VoxelConfig;
   /** 配色覆盖（缺省沿用 view.colors），用来一眼区分体型 */
   colors?: Partial<ColorConfig>;

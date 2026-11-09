@@ -34,6 +34,8 @@ import {
 import { dummyThreatLevel, groundHeightAt, isHostileDummy } from '../core';
 import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
 import { createVoxelRig } from './voxel-rig';
+import type { VoxelRig } from './voxel-rig';
+import { createSpiderRig } from './spider-rig';
 import { createYawSmoother } from './yaw-smooth';
 import { createWeaponTrail } from './weapon-trail';
 import { createGrassLayer } from './grass-layer';
@@ -42,6 +44,20 @@ import { createDestructibleLayer } from './destructible-layer';
 import type { BladePair, DestructibleDebug } from './destructible-layer';
 import { FX_ORDER, setFxOrder } from './fx-layer';
 import type { HurtPose } from './hurt-pose';
+import { emptyHurtPose } from './hurt-pose';
+
+/**
+ * 玩家骨架的公共面：渲染必需的三个成员必选，其余（武器 / 双足步态 / 受击分层读数）
+ * 一律可选 —— 蜘蛛没有手、没有刀、没有两腿步态，**没有读数才是事实**，
+ * 不该为了满足类型写一堆返回 0 的假实现。调用方按「有则读、无则显示 -」处理。
+ *
+ * 位置 / 朝向由外层 `playerRoot` 承担，两套骨架的 `update` 签名一致，
+ * 因此主渲染路径（`hero.update(...)`）不需要为骨架类型分叉。
+ */
+type PlayerRig = Pick<VoxelRig, 'group' | 'update' | 'dispose'>
+  & Partial<Omit<VoxelRig, 'group' | 'update' | 'dispose'>>
+  /** 多足骨架专有：8 条腿的最大伸展比 / 被夹住的腿数 / 当前步相。 */
+  & { debug?: () => { maxReach: number; clamped: number; phase: number } };
 
 export type SceneView = {
   render(world: World, frameDt: number): void;
@@ -109,6 +125,11 @@ export type SceneView = {
     /** v9s.43 / v9s.44 / v9s.45：换向驱动符号、下盘偏转目标、转身闸门状态 */
     dirF: number; dirR: number; hipYawTarget: number; spin: number;
   };
+  /**
+   * v9s.50：多足骨架专有读数（8 条腿的伸展比 / 夹取数 / 步相）。
+   * 人形骨架返回 null —— 这套骨架没有「哪条腿够不到」这个概念。
+   */
+  spiderDebug(): { maxReach: number; clamped: number; phase: number } | null;
   /** 表现层诊断读数：惯性倾斜、斩击弧世界法线、弓/箭世界前向、冲刺视觉、下盘偏航、智能相机，纯观测用。 */
   diagnostics(): {
     lean: { forward: number; side: number };
@@ -344,15 +365,49 @@ export function createSceneView(
   // v9s.30：体型可切换 —— 只换骨架尺寸，动画数据与逻辑完全不变。
   // rig 是纯表现层对象（自带 geometry / material），重建时先 dispose 再挂新的，
   // 不会有泄漏；Core 状态、拖尾、假人都不受影响。
-  const buildRig = (bt?: BodyTypeConfig) => createVoxelRig(
-    bt?.voxel ?? view.voxel,
-    bt?.colors ? { ...view.colors, ...bt.colors } : view.colors,
-    world.config.moveSpeed, view.orientation, view.gait,
-    view.weaponMount, view.lean, view.hurt, view.animation, view.ik, view.links,
-    view.weaponWrist, view.balance,
-  );
-  let bodyTypeId = 'standard';
-  let voxel = buildRig(view.bodyTypes?.[bodyTypeId]);
+  // v9s.50：体型预设可以换「骨架种类」而不只是换尺寸。
+  // `rig: 'spider'` 走 8 腿解析步态骨架（`spider-rig`），缺省仍是人形 `voxel-rig`。
+  // 两者共用同一个 `PlayerRig` 接口，位置 / 朝向仍由外层 playerRoot 承担，
+  // Core 的移动 / 碰撞 / 战斗一行不改 —— 换的是「腿怎么摆」，不是「角色是什么」。
+  const buildRig = (bt?: BodyTypeConfig): PlayerRig => {
+    if (bt?.rig === 'spider') {
+      bodyZoom = 0.24;                     // 17m → 4.1m
+      view.camera.pitchDeg = 32;
+      // 1.3× 视觉缩放：主角比杂兵有存在感，同时让 8 条腿在 4.8m 外仍然数得清。
+      // 世界体高 = 0.35 × 1.3 ≈ 0.46，跨距 ≈ 1.25m。
+      return createSpiderRig(view.colors, { height: 0.35, scale: 1.3 });
+    }
+    bodyZoom = 1;
+    view.camera.pitchDeg = basePitchDeg;
+    return createVoxelRig(
+      bt?.voxel ?? view.voxel,
+      bt?.colors ? { ...view.colors, ...bt.colors } : view.colors,
+      world.config.moveSpeed, view.orientation, view.gait,
+      view.weaponMount, view.lean, view.hurt, view.animation, view.ik, view.links,
+      view.weaponWrist, view.balance,
+    );
+  };
+  // v9s.50：`?hero=spider` 直接以蜘蛛开局（便于验收 / 分享链接），缺省仍是 standard。
+  // 运行时用 B 键或顶部体型胶囊循环切换，两条路径走同一个 setBodyType。
+  /**
+   * v9s.50：蜘蛛的相机俯角。
+   * `view.camera.pitchDeg` 是 50°（人形 1.2m 高，俯视刚好看到全身）；蜘蛛只有 0.35m 高，
+   * 同样角度几乎是顶视 —— 只能看到背甲，8 条腿全被身体挡住。降到 34° 才能读出腿的折线。
+   * 只改这一份配置对象，切回人形时恢复原值。
+   */
+  const basePitchDeg = view.camera.pitchDeg;
+  const heroParam = typeof location !== 'undefined'
+    ? new URLSearchParams(location.search).get('hero')
+    : null;
+  let bodyTypeId = heroParam && view.bodyTypes?.[heroParam] ? heroParam : 'standard';
+  /**
+   * v9s.50：相机基础距离按骨架身高缩放。
+   * `view.camera.distance` 是给 1.2m 人形调的（17m）；蜘蛛只有 0.32m 高，
+   * 同样距离下在画面里不到 10 个像素，8 条腿完全读不出来。
+   * 这里只改「基础倍数」，用户自己的滚轮 / 双指缩放仍然照常乘在上面。
+   */
+  let bodyZoom = 1;
+  let hero: PlayerRig = buildRig(view.bodyTypes?.[bodyTypeId]);
   // v9s.22：挥击拖尾挂在场景根节点（世界坐标采样，不随角色层级变换）
   const playerTrail = createWeaponTrail(view.weaponTrail);
   // v9s.38：刀光归到统一层级（weapon-trail 组件内部的默认值不再参与排序判断）
@@ -360,15 +415,41 @@ export function createSceneView(
   scene.add(playerTrail.object);
   const playerRoot = new THREE.Group();
   // 翻滚枢轴放在身体中心高度：若直接绕脚底原点旋转，前滚到 90° 以后头部会插进地面。
-  // rollPivot 上抬 ROLL_PIVOT_Y，rig 内部反向偏移同样高度，净位置不变，
+  // rollPivot 上抬一个枢轴高，rig 内部反向偏移同样高度，净位置不变，
   // 旋转中心则落在躯干中部，翻滚全程身体都留在地面之上。
-  const ROLL_PIVOT_Y = 0.9;
   const rollPivot = new THREE.Group();
-  rollPivot.position.y = ROLL_PIVOT_Y;
-  voxel.group.position.y = -ROLL_PIVOT_Y;
-  rollPivot.add(voxel.group);
+  /**
+   * v9s.50：翻滚枢轴高度**随骨架身高**走。
+   * 人形取躯干中部 0.9m；蜘蛛只有 0.32m 高，绕 0.9m 转会把整只蜘蛛甩成一个半径 0.9 的大圈
+   * （看起来像被拎起来抡），所以按体高收到 0.26m —— 滚动仍然成立，但轴心在身体里。
+   */
+  let rollPivotY = 0.9;
+  const pivotYFor = (rig: BodyTypeConfig | undefined): number => (rig?.rig === 'spider' ? 0.26 : 0.9);
+  /** 把 rig 挂到翻滚枢轴下：枢轴抬 p，rig 自身反向降 p，净位置不变。 */
+  const mountHero = (rig: PlayerRig, p: number): void => {
+    rollPivotY = p;
+    rollPivot.position.y = p;
+    rig.group.position.y = -p;
+    rollPivot.add(rig.group);
+  };
+  mountHero(hero, pivotYFor(view.bodyTypes?.[bodyTypeId]));
   playerRoot.add(rollPivot);
   scene.add(playerRoot);
+
+  /**
+   * 初始体型也要同步进 Core。
+   * `setBodyType` 里会写，但「开局就是蜘蛛」（`?hero=spider`）不走那条路径 ——
+   * 漏了这一步，碰撞胶囊和眼睛高度还是 1.2m 人形的值，蜘蛛会顶到看不见的天花板。
+   */
+  const baseMoveSpeed = world.config.moveSpeed;
+  const syncBodyToCore = (bt: BodyTypeConfig | undefined): void => {
+    if (!bt) return;
+    world.config.characterHeight = bt.height;
+    if (bt.radius !== undefined) world.config.characterRadius = bt.radius;
+    // 移速按体型覆盖：蜘蛛腿短，同一线速度下步频会高到摆不过来
+    world.config.moveSpeed = bt.moveSpeed ?? baseMoveSpeed;
+  };
+  syncBodyToCore(view.bodyTypes?.[bodyTypeId]);
 
   // v9s.35：渲染侧朝向低通。插值只让位置一阶连续，朝向的**角速度**仍是阶梯；
   // 手 / 肩 / 武器挂在 0.4~0.8m 半径上，速度突跳被放大成「一顿一顿」。
@@ -864,32 +945,55 @@ export function createSceneView(
 
   return {
     balanceDebug() {
-      return voxel.balanceDebug();
+      return hero.balanceDebug?.() ?? null;
     },
     spineDebug() {
-      return voxel.spineDebug();
+      return hero.spineDebug?.() ?? null;
+    },
+    spiderDebug() {
+      return hero.debug?.() ?? null;
     },
     gaitDebug() {
-      return voxel.gaitDebug();
+      // 蜘蛛没有双足步态链：读数全 0（`phase` 也归 0 —— 手感面板要画曲线时自行判断骨架种类）
+      return hero.gaitDebug?.() ?? {
+        stopT: 0, hipYaw: 0, chestYaw: 0, speed: 0, gaitSpeed: 0,
+        stopStep: 0, stopShift: 0, stopDip: 0, stopYawFade: 0, turnStep: 0,
+        legLPitch: 0, legLRoll: 0, legRPitch: 0, legRRoll: 0,
+        legTakeover: 0, phase: 0, dirF: 0, dirR: 0, hipYawTarget: 0, spin: 0,
+      };
     },
     trailDebug() {
       return playerTrail.debug();
     },
     stretchDebug() {
-      const s = voxel.stretch();
+      // 蜘蛛没有 squash & stretch 层：返回中性长度（1 = 原长）比编造读数诚实
+      const s = hero.stretch?.() ?? { arm: 1, leg: 1, torso: 1, impact: 0 };
       return { arm: s.arm, leg: s.leg, torso: s.torso, impact: s.impact };
     },
     swingDebug() {
-      return voxel.swingDebug();
+      // 蜘蛛无持械挥击：不存在段号 / 肩位移，返回中性值而不是 null（保持 SceneView 类型不裂）
+      return hero.swingDebug?.() ?? {
+        seg: 0, kind: 'none', lead: 'R', yaw: 0, pitch: 0, roll: 0, strike: 0,
+        rootYaw: 0, spinYaw: 0, rootTurn: 0,
+        bladeTwist: 0, bladeTwistOff: 0, bladeYaw: 0, bladeYawOff: 0,
+        shoulderL: { x: 0, y: 0, z: 0 }, shoulderR: { x: 0, y: 0, z: 0 },
+      };
     },
     stanceDebug() {
-      return voxel.stanceDebug();
+      // 同上：持械待机姿态对蜘蛛不存在，权重 0 表示「没有生效」
+      return hero.stanceDebug?.() ?? {
+        weapon: world.combat.weapon, weight: 0,
+        armL: { pitch: 0, yaw: 0, roll: 0, elbow: 0 },
+        armR: { pitch: 0, yaw: 0, roll: 0, elbow: 0 },
+        torsoYaw: 0, torsoPitch: 0, bladePitchDeg: 0, bladePitchOffDeg: 0, armSwing: 0,
+      };
     },
     bladeWorld() {
-      return voxel.weaponBlade();
+      return hero.weaponBlade?.() ?? null;
     },
     bladesWorld() {
-      return voxel.bladesWorld();
+      // 蜘蛛无刃：两侧都为 null，命中判定自然落空（不会误伤可破坏物）
+      return hero.bladesWorld?.() ?? { right: null, left: null };
     },
     slamDebug() {
       return burstFx.slamDebug();
@@ -932,13 +1036,13 @@ export function createSceneView(
       return projectToScreen(x, y, z);
     },
     setClipT(t) {
-      voxel.setClipT(t);
+      hero.setClipT?.(t);
     },
     weaponDebug() {
-      return voxel.weaponDebug();
+      return hero.weaponDebug?.() ?? { wristPitch: 0, wristTwist: 0 };
     },
     gripDebug() {
-      return voxel.gripDebug();
+      return hero.gripDebug?.() ?? { active: false, dist: 0, gy: 0, pitch: 0, joint: 0, grip: 0 };
     },
     render(w, frameDt): void {
       // v9s.43：测试按钮会动态增减 world.dummies，先对齐渲染对象容量再画。
@@ -1000,17 +1104,17 @@ export function createSceneView(
         ? Math.min(1, 1 - w.dash.timer / w.dash.duration)
         : 0;
       rollPivot.rotation.x = rolling ? rollT * Math.PI * 2 : 0;
-      rollPivot.position.y = ROLL_PIVOT_Y - (rolling ? 0.2 * Math.sin(Math.PI * rollT) : 0);
+      rollPivot.position.y = rollPivotY - (rolling ? 0.2 * Math.sin(Math.PI * rollT) : 0);
       // coreTime 传 Core 的 world.time：落地缓冲脉冲因此与暂停 / 时间缩放 / 单步同步
       if (animDt > 0) {
-        voxel.update(c, cb, w.playerHurt, animDt, w.abilities.channeling, w.time, w.playerLink, w.turnInPlace);
+        hero.update(c, cb, w.playerHurt, animDt, w.abilities.channeling, w.time, w.playerLink, w.turnInPlace);
       }
 
       // v9s.22：挥击拖尾 —— 取本帧武器的刃根/刃尖世界坐标，只在攻击/冲刺期间记录。
       // 拖尾是「轨迹」而不是「姿势」，是打击感最直接的来源（对应 2D 的 smear frame）。
       playerTrail.update(
         animDt,
-        animDt > 0 ? voxel.weaponBlade() : null,
+        animDt > 0 ? hero.weaponBlade?.() ?? null : null,
         animDt > 0 && (
           // v9s.23：只在实际挥出的 active 段采样。旧版把 windup 也算进来，
           // 举剑起手那 0.2s 的慢速位移会先拉出一条长带，接上 active 的横扫后
@@ -1270,7 +1374,7 @@ export function createSceneView(
       // 已断目标由 Core 的 broken 标记去重，累积不会造成重复破坏。
       if (cb.phase === 'active' || w.playerLink.phase === 'active') {
         const found = destructibleLayer.computeHits(
-          w.destructibles, voxel.bladesWorld() as BladePair,
+          w.destructibles, (hero.bladesWorld?.() ?? { right: null, left: null }) as BladePair,
         );
         for (let i = 0; i < found.length; i++) {
           let seen = false;
@@ -1319,24 +1423,23 @@ export function createSceneView(
       cam.snap(x, y, z);
     },
     setZoom(next): void {
-      cam.setZoom(next);
+      // 基础距离随骨架身高走，用户缩放叠在上面（蜘蛛切回人形后自动复原）
+      cam.setZoom(next * bodyZoom);
     },
     setBodyType(id: string): string {
       const bt = view.bodyTypes?.[id];
       if (!bt || id === bodyTypeId) return bodyTypeId;
       // 先摘再销毁：销毁会 dispose 几何体，若还在场景图里，当帧渲染会拿到空几何。
-      rollPivot.remove(voxel.group);
-      voxel.dispose();
-      voxel = buildRig(bt);
-      voxel.group.position.y = -ROLL_PIVOT_Y;
-      rollPivot.add(voxel.group);
+      rollPivot.remove(hero.group);
+      hero.dispose();
+      hero = buildRig(bt);
+      mountHero(hero, pivotYFor(bt));
       // 旧骨架的刀光采样还挂在上一副身体的刃尖坐标上：不清理会残留最多 life(0.11s)
       // 一条「悬空划痕」，且新骨架第一帧的刃身位置差得很远，连起来像瞬移。
       playerTrail.reset();
       bodyTypeId = id;
       // 身高 / 半径同步进 Core 配置：否则碰撞、眼睛高度、相机注视点还是旧体型的值。
-      world.config.characterHeight = bt.height;
-      if (bt.radius !== undefined) world.config.characterRadius = bt.radius;
+      syncBodyToCore(bt);
       return bodyTypeId;
     },
     bodyTypes() {
@@ -1396,15 +1499,18 @@ export function createSceneView(
       const axisLocal = slashAxisLocal(view.camera.pitchDeg);
       const axisWorld = rotateAxisY(axisLocal, fxAnchor.rotation.y);
       return {
-        lean: voxel.lean(),
+        lean: hero.lean?.() ?? { forward: 0, side: 0 },
         slashNormal: axisWorld,
-        arrowForward: voxel.arrowDirection(),
-        gait: { hipYaw: voxel.hipYaw(), gaitYaw: voxel.gaitYaw() },
-        attackBlend: voxel.attackBlend(),
-        attackWeights: voxel.attackWeights(),
-        landing: voxel.landing(),
-        hurt: voxel.hurt(),
-        ik: voxel.ik(),
+        arrowForward: hero.arrowDirection?.() ?? { x: 0, y: 0, z: 1 },
+        gait: { hipYaw: hero.hipYaw?.() ?? 0, gaitYaw: hero.gaitYaw?.() ?? 0 },
+        attackBlend: hero.attackBlend?.() ?? 0,
+        attackWeights: hero.attackWeights?.() ?? {
+          gaitScale: 1, attackLegWeight: 0, driveSpeed: 0,
+          stridePhase: 0, strideBase: 0, stepIndex: 0,
+        },
+        landing: hero.landing?.() ?? { pulse: 0, remaining: 0, kind: 'none', impactVy: 0 },
+        hurt: hero.hurt?.() ?? emptyHurtPose(),
+        ik: hero.ik?.() ?? { active: false, weight: 0, clamped: 0, maxError: 0 },
         link: {
           phase: world.playerLink.phase,
           kind: world.playerLink.kind,
@@ -1430,7 +1536,7 @@ export function createSceneView(
       };
     },
     dispose(): void {
-      voxel.dispose();
+      hero.dispose();
       lab.dispose();
       grassLayer.dispose();
       destructibleLayer.dispose();

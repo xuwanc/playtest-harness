@@ -961,6 +961,13 @@
           "limb": "#3f8f7c",
           "shoe": "#24443c"
         }
+      },
+      "spider": {
+        "name": "蜘蛛",
+        "rig": "spider",
+        "height": 0.7,
+        "radius": 0.42,
+        "moveSpeed": 2.6
       }
     },
     "orientation": {

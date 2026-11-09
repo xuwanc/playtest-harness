@@ -20,14 +20,33 @@ const mk = (voxel: AppConfig['view']['voxel'], colors = raw.view.colors) => crea
 );
 
 describe('v9s.30 体型预设', () => {
-  it('每个预设的总高 = 腿 + 躯干 + 头（与 Core 的 characterHeight 对齐）', () => {
+  it('每个人形预设的总高 = 腿 + 躯干 + 头（与 Core 的 characterHeight 对齐）', () => {
     const types = raw.view.bodyTypes ?? {};
     expect(Object.keys(types).length).toBeGreaterThan(1);
+    let human = 0;
     for (const [id, bt] of Object.entries(types)) {
+      // v9s.50：`rig: 'spider'` 是另一套骨架（8 腿 + 两节身体），不存在「三头身」关系，
+      // 身高单独断言，见下一条用例。
+      if (bt.rig === 'spider') continue;
+      human++;
       const v = bt.voxel ?? raw.view.voxel;
       const sum = v.legLength + v.bodyHeight + v.headSize;
       expect(sum, `${id} 总高`).toBeCloseTo(bt.height, 4);
     }
+    expect(human, '至少要有一个人形预设').toBeGreaterThan(1);
+  });
+
+  it('蜘蛛预设：声明自己的骨架种类，且身高落在「爬行体」量级', () => {
+    const spider = raw.view.bodyTypes?.spider;
+    expect(spider, '缺少 spider 预设').toBeTruthy();
+    expect(spider!.rig).toBe('spider');
+    // 不覆盖 voxel：体型写在 spider-rig 里（腿长 / 髋点 / 腹部层数是一个整体）
+    expect(spider!.voxel).toBeUndefined();
+    // 视觉总高 ≈ 体高 0.32 + 背甲 ~0.19；characterHeight 取 0.5 用于碰撞与眼睛高度
+    expect(spider!.height).toBeGreaterThan(0.3);
+    expect(spider!.height).toBeLessThan(0.75);
+    // 跨距 0.96m → 半径不该比人形更胖
+    expect(spider!.radius ?? raw.core.characterRadius).toBeLessThanOrEqual(0.45);
   });
 
   it('瘦高体型：骨架真的变高变瘦，且脚底仍在地面、头接在躯干上', () => {

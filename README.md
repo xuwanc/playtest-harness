@@ -34,6 +34,7 @@ npm run publish:preview  # 每次任务完成必跑：发布 dist + 打印唯一
 | `1`–`5` / 顶部武器条 | 剑盾 / 双剑 / 大剑 / 法杖 / 弓 |
 | 攻击 / 技2 / 冲 / 跳 | 右下按钮簇；桌面 `J` / `K` / `Shift` / `Space` |
 | `[` / `]` / `\` | 上一个 / 下一个测试工位 / 召回全部假人 |
+| 顶部「体型 …」/ `B` | 循环体型：标准 → 瘦高 → **蜘蛛**（`?hero=spider` 直接以蜘蛛开局） |
 | 顶部「风：开」/ `G` | 切换风吹麦浪（A/B 对照，默认开） |
 | `R` | 复位（玩家、战斗、朝向、目标、受击、全部 9 个单位） |
 
@@ -47,6 +48,7 @@ npm run publish:preview  # 每次任务完成必跑：发布 dist + 打印唯一
 |---|---|
 | **新加入的 agent / 拉下 git 后第一步** | [`AGENTS.md`](AGENTS.md)（3 分钟：三条铁律 + 流程） |
 | **测试场景规则 / 怎么加地块与工位** | [`docs/systems/plot-assembly.md`](docs/systems/plot-assembly.md)（动态拼合正本）· [`docs/systems/test-scene-policy.md`](docs/systems/test-scene-policy.md) |
+| **蜘蛛主角 / 加另一副骨架** | [`docs/systems/spider-locomotion.md`](docs/systems/spider-locomotion.md) · [`docs/decisions/ADR-010`](docs/decisions/ADR-010-spider-locomotion.md) |
 | 有个现象要查（看不见 / 抖 / 卡 / 滑） | [`docs/INDEX.md` §2](docs/INDEX.md) |
 | 某系统现在怎么工作 | [`docs/systems/`](docs/systems/overview.md) |
 | 现在做到哪、下一步 | [`docs/state/CURRENT.md`](docs/state/CURRENT.md) |

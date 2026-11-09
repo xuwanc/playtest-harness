@@ -57,6 +57,8 @@
 | 工位传送没跟着地块走 / 拼合后坐标不对 | `lab-panel.ts` 的 `goto()` | `StationSpec.spawnX/spawnZ` | 同上 §4 | `__harness.lab.goto(id)` + `plotDebug()` |
 | 地块测试按钮生成 / 清除假人陪练 | `core/plot-spawn.ts`、`presentation/three-scene.ts` | `spawnPlotTestUnits`、`syncDummyCapacity`、`dummyRenderCount` | 同上 §5 | `tests/plot-spawn.test.ts`、`__harness.spawnAt()` |
 | 每次任务完成怎么更新线上 / 贴链接 | `tools/publish-preview.mjs` | `publish:preview` | 同上 §6 | `npm run publish:preview` 打印唯一公网链接 |
+| 想给主角换一副骨架 / 加多足角色 / 蜘蛛腿够不到 | `presentation/spider-rig.ts`、`view.bodyTypes[*].rig` | `createSpiderRig`、`solveLeg`、`CAP_HZ`、`strideUsed` | [systems/spider-locomotion.md](systems/spider-locomotion.md) §4 | `tests/v9s50-spider-rig.test.ts`、`__harness.spiderDebug()` |
+| 蜘蛛走起来抽腿 / 冲刺时腿被拉直 / 原地转身腿拧成麻花 | `presentation/spider-rig.ts` | 步频封顶 + `slideStep`、`spinSpeed`、前伸量 `stride × duty` | 同上 §4.1~§4.3 | `__harness.spiderDebug().maxReach / clamped` |
 
 ## 3. 按模块查
 
@@ -86,7 +88,8 @@
 | `three-scene.ts` | **唯一场景组装点**：装配 + 每帧渲染（白盒 / 角色 / 环 / 刀光 / 箭），不含特效生命周期 | `createSceneView`、`groundFxY`、`fxDebug` |
 | `scene-burst-fx.ts` | 一次性贴地光环：冲刺尘环 / 派生招 / 击地冲击的池化与触发 | `createBurstFx`、`slamDebug` |
 | `fx-layer.ts` | **特效层级唯一来源** | `FX_ORDER`、`setFxOrder` |
-| `voxel-rig.ts` | 主角骨架装配 + 逐帧姿态解算 | `createVoxelRig`、`rig.update`、`bladeWorld` |
+| `voxel-rig.ts` | 人形主角骨架装配 + 逐帧姿态解算 | `createVoxelRig`、`rig.update`、`bladeWorld` |
+| `spider-rig.ts` | **8 腿主角骨架**：两节身体 + 三角步态 + 每腿两骨闭式解（按 `bodyTypes.rig` 切换） | `createSpiderRig`、`solveLeg`、`debug()`、`legs()` |
 | `rig-parts.ts` | 体素零件几何（剑 / 大剑 / 盾 / 杖 / 弓 / 箭），无状态 | `makeSword`、`makeBow`、`makeArrow` |
 | `fighter-rig.ts` / `dummy-rig.ts` | 陪练适配（复用 `voxel-rig`）/ 普通假人轻量骨架 | `createFighterRig`、`createDummyRig` |
 | `debug-panel.ts` | lil-gui 调试面板（7 个一级分类） | `createDebugPanel`、`DebugActions` |
@@ -201,5 +204,5 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`decisions/ADR-007`](decisions/ADR-007-knockback-default.md) | 默认配置反映真实手感 |
 | [`decisions/ADR-008`](decisions/ADR-008-grass.md) | 草块状态在 Core、几何在表现层、判定复用 hits |
 | [`decisions/ADR-009`](decisions/ADR-009-plot-slabs.md) | 测试场地块化：模数 5m + 整数跨格拼底板（已实现，v9s.49） |
-| [`decisions/ADR-010`](decisions/ADR-010-spider-locomotion.md) | 蜘蛛：复用的是解算器不是动画，不引入 FullBodyIK（**待批准**，原型 `prototype/spider/`） |
+| [`decisions/ADR-010`](decisions/ADR-010-spider-locomotion.md) | 蜘蛛：复用的是解算器不是动画，不引入 FullBodyIK（已实施，v9s.50 主角可切换） |
 | [`journal/`](journal/) | 按日期的迭代记录（36 份，2026-11-05 起；`-00` 是功能总表，`-02` 是 v9s.41 换腿、`-06` 是 v9s.45 慢放、`-08-plot-slabs` 是 v9s.49 底板；带 `<主题>` 后缀的按内容命名） |
