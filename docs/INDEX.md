@@ -31,8 +31,9 @@
 | 手感面板相位是一条平线 | `voxel-rig.gaitDebug().phase` | 别读 Core `gaitPhase`（攻击时冻住） | 同上 §17 坑 1 | `__harness.gaitDebug().phase` vs `world.character.gaitPhase` |
 | 连击每一刀都迈同一条腿 / 换段时脚被拽回去 | `presentation/program-anim.ts`、`voxel-rig.ts` | `attackGaitDrive`、`attackPhaseBase`、`attackStepIndex` | [systems/animation.md](systems/animation.md) §1.4 | `tests/v9s41-attack-step-legs.test.ts`、`npm run smoke`「连击跨步左右换腿」 |
 | 连击换段时身体往回弹一下 | `voxel-rig.ts` | `applyStep`、`stepZ/stepX/stepDip` | 同上 §1.4 末段 | `tests/v9s41-attack-step-legs.test.ts`「换段不推人」 |
-| 朝向切换（锁定 / 拖拽 / 攻击锁朝向）时下盘晃一下 | `presentation/gait.ts` | `turnSpinGate`、`slewHipTarget`、`backHipYawTarget(..., spinGate)` | [systems/animation-notes-3.md](systems/animation-notes-3.md) §19 | `tests/v9s44-hip-yaw-track.test.ts` |
-| 前进切后退（或左右换向）时腿抽一下 | `presentation/gait.ts` | `slewDirSign`、`dirDrive`、`GaitInput.dirF` | [systems/animation-notes-3.md](systems/animation-notes-3.md) §18 | `tests/v9s43-reverse-blend.test.ts`、`npm run smoke`「换向不抽腿」 |
+| 朝向切换（锁定 / 拖拽 / 攻击锁朝向）时下盘晃一下 | `presentation/gait.ts` | `turnSpinGate`、`slewGate`、`slewHipTarget`、`hipFlipWeight` | [systems/animation-notes-4.md](systems/animation-notes-4.md) §19 | `tests/v9s44-hip-yaw-track.test.ts` |
+| **慢放**回看时下盘还抖一下 / 贴着墙时下盘乱拧 | `presentation/gait.ts`、`voxel-rig.ts` | `slewGate`、`hipTrackRate`、`gameDt`、`hipSpeedFade` | [systems/animation-notes-4.md](systems/animation-notes-4.md) §20 | `tests/v9s45-slowmo-hip.test.ts`、`npm run smoke`「慢放转身下盘不抖」 |
+| 前进切后退（或左右换向）时腿抽一下 | `presentation/gait.ts` | `slewDirSign`、`dirDrive`、`GaitInput.dirF` | [systems/animation-notes-4.md](systems/animation-notes-4.md) §18 | `tests/v9s43-reverse-blend.test.ts`、`npm run smoke`「换向不抽腿」 |
 | 截图放哪 / 能不能入库 | `shots/`（`.gitignore` 已挡） | — | [assets/conventions.md](assets/conventions.md) | `git status` 里不该出现 png |
 | 刀光 / 斩击弧不出现 | `presentation/three-scene.ts` | `weapon-trail.ts`、`FX_ORDER.trail / slash` | [systems/presentation-fx.md](systems/presentation-fx.md) | `__harness.fxDebug()` |
 | 调试面板某项不知道去哪了 | `presentation/debug-panel.ts` | 7 个 `top()` 一级分类 | 本页 §3.4 | 截图 `shots/v9s38/07,08` |
@@ -82,7 +83,7 @@
 | `config/game.json` | 所有可调数值（`core.*` 逻辑 / `view.*` 表现 / `scene.*` 关卡） |
 | `src/app.ts` | 组装层 + `window.__harness`（所有 `*Debug()` 验收接口在这里暴露） |
 | `tests/` | vitest；`tests/helpers.ts` 的 `FIXTURE_CORE_PATCH` 是**冻结夹具** |
-| `tools/smoke.py` | 线上自检（23 项）；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样 |
+| `tools/smoke.py` | 线上自检（27 项）；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样 |
 
 ### 3.4 调试面板分组
 
@@ -103,10 +104,10 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（88 文件 / 876 例） | 提交前 |
+| `npm test` | vitest 全量（95 文件 / 922 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
-| `npm run smoke` | 起 `dist/`，跑 16 项画面层 + 契约自检 | 发布前 |
+| `npm run smoke` | 起 `dist/`，跑 27 项画面层 + 契约自检 | 发布前 |
 | `npm run verify` | build → test → portable → smoke 全链 | **发布前必跑** |
 | `npm run docs:check` | README 行数 / INDEX 链接 / 单文件 300 行 | 改文档后 |
 | `npm run clip:lab:check` | 九段挥击剪辑回归 | 动动画数据后 |
@@ -141,7 +142,7 @@ telemetry()   最近 20 秒输入 / 位移 / 事件诊断
 | [`systems/core-contract.md`](systems/core-contract.md) | 跨语言重写的逐项对照表 |
 | [`systems/combat.md`](systems/combat.md) | 武器、连击、命中、受击、击退 |
 | [`systems/animation.md`](systems/animation.md) | 连击骨架锚点 / 平衡 / 节奏 / 加动作清单（规范） |
-| [`systems/animation-notes-1/2/3.md`](systems/animation-notes-1.md) | 按版本追加的动画落地细节（补充，非规范） |
+| [`systems/animation-notes-1/2/3/4.md`](systems/animation-notes-1.md) | 按版本追加的动画落地细节（补充，非规范） |
 | [`systems/movement-facing.md`](systems/movement-facing.md) | 移动 / 朝向四角 / 分离 / 边界 |
 | [`systems/camera-targeting.md`](systems/camera-targeting.md) | 智能相机、软锁定、两级注视 |
 | [`systems/presentation-fx.md`](systems/presentation-fx.md) | 特效层级与贴地高度 |
@@ -149,7 +150,7 @@ telemetry()   最近 20 秒输入 / 位移 / 事件诊断
 | [`systems/input-controls.md`](systems/input-controls.md) | 摇杆、按钮、手势、按键表 |
 | [`systems/verification.md`](systems/verification.md) | 自动 / 量化 / 移植验收 |
 | [`systems/known-limits.md`](systems/known-limits.md) | 已知限制（现状，不是待办） |
-| [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 105 步手动验收 |
+| [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 108 步手动验收 |
 | [`state/CURRENT.md`](state/CURRENT.md) | 当前状态 + 下一步（覆盖写） |
 | [`risk-review.md`](risk-review.md) | **当前**活跃风险 + 处置优先级 |
 | [`risk-history.md`](risk-history.md) | 已关闭风险的归档（按版本） |
@@ -161,4 +162,4 @@ telemetry()   最近 20 秒输入 / 位移 / 事件诊断
 | [`decisions/ADR-005`](decisions/ADR-005-ground-height.md) | 贴地高度查询放 Core |
 | [`decisions/ADR-006`](decisions/ADR-006-fixed-step-events.md) | 固定步长 + 显式事件队列 |
 | [`decisions/ADR-007`](decisions/ADR-007-knockback-default.md) | 默认配置反映真实手感 |
-| [`journal/`](journal/) | 按日期的迭代记录（26 份，2026-11-05 起；`-00` 是功能总表，`-06` 是 v9s.38，`-07` 是文档重构，`-08` 是大文件职责梳理，`-09` 是陪练连击，`-10` 是连击换腿，`-11` 是相位可视化，`-12` 是换向融合，`-13` 是下盘转向对策） |
+| [`journal/`](journal/) | 按日期的迭代记录（27 份，2026-11-05 起；`-00` 是功能总表，`-06` 是 v9s.38，`-07` 是文档重构，`-08` 是大文件职责梳理，`-09` 是陪练连击，`-10` 是连击换腿，`-11` 是相位可视化，`-12` 是换向融合，`-13` 是下盘转向对策，`-14` 是慢放的「时间基准」） |

@@ -162,6 +162,8 @@ export function createDebugPanel(
   // 0 = 旧行为（换向那一帧整条腿镜像，会「抽一下」）；0.16 ≈ 换向时腿先并一下再迈出
   gaitF.add(view.gait, 'dirFlipSec', 0, 0.4, 0.01).name('换向融合时长 (s)');
   gaitF.add(view.gait, 'hipYawTrackRateDeg', 0, 600, 10).name('下盘目标转速上限 (°/s)');
+  // v9s.45：后退相位单独一档 —— 那个 −48° 只在「真的在倒退走」时才该长出来
+  gaitF.add(view.gait, 'hipYawBackRateDeg', 0, 600, 10).name('└ 后退相位上限 (°/s)');
 
   // 停步收相 + 停步惯性放在同一组：调「停下来那一下」时两块要一起看
   const stopF = sub(gaitRoot, '停步 / 收相 / 惯性');

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { backHipYawTarget, backStrafeKeep } from '../src/presentation/gait';
+import { backHipYawTarget, backStrafeKeep, hipFlipWeight } from '../src/presentation/gait';
 import { createVoxelRig } from '../src/presentation/voxel-rig';
 import { makeQuietWorld, intent, run } from './helpers';
 import { rigNodes } from './rig-nodes';
@@ -42,7 +42,7 @@ describe('v9s.14 · 侧后方下盘修正方向翻转', () => {
     expect(backHipYawTarget(0, 1, strafe, 0)).toBeCloseTo(strafe, 9);
   });
 
-  it('backKeep=1 时精确等于侧移偏转（v9s.13 之前的观感逐帧不变）', () => {
+  it('相位权重 = 1（纯侧移族）时精确等于侧移偏转（v9s.13 的观感逐帧不变）', () => {
     const strafe = -0.33;
     expect(backHipYawTarget(Math.cos(135 * DEG), Math.sin(135 * DEG), strafe, 1))
       .toBeCloseTo(strafe, 9);
@@ -56,7 +56,7 @@ describe('v9s.14 · 侧后方下盘修正方向翻转', () => {
       const r = Math.sin(th);
       const keep = backStrafeKeep(f, 100, 132);
       const strafe = 0.32 * Math.sign(r);      // 侧移偏转的同号近似
-      const h = backHipYawTarget(f, r, strafe, keep);
+      const h = backHipYawTarget(f, r, strafe, hipFlipWeight(keep));
       return Math.abs(foldAxis(deg - h * R2D));
     };
     // 已经翻完的后退段：轴与移动方向几乎平行（残差 ≤ 6°，纯 FK 的残余滑移）

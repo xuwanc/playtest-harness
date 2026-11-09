@@ -1210,7 +1210,8 @@
       "backStrafeStartDeg": 100,
       "backStrafeFullDeg": 132,
       "dirFlipSec": 0.16,
-      "hipYawTrackRateDeg": 200
+      "hipYawTrackRateDeg": 240,
+      "hipYawBackRateDeg": 150
     },
     "animation": {
       "attack": {

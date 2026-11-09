@@ -30,6 +30,7 @@ import {
   backHipYawTarget,
   stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir,
   stopYawFade, solveTurnStep, slewDirSign, slewHipTarget, turnSpinGate,
+  hipFlipWeight, hipTrackRate, slewGate,
 } from './gait';
 import type { GaitInput } from './gait';
 import {
@@ -187,6 +188,8 @@ export type VoxelRig = {
     dirF: number; dirR: number;
     /** v9s.44：本帧下盘偏转目标（rad，相对身体）。hipYaw 是它的指数平滑结果。 */
     hipYawTarget: number;
+    /** v9s.45：转身闸门状态 0..1（1 = 身体在转、下盘目标冻结）。验收「慢放不抖」读它。 */
+    spin: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
    *  供验收「腿摆动方向」：投影基准必须与腿所在坐标系一致，否则非正前方时方向被歪。 */
@@ -618,6 +621,12 @@ export function createVoxelRig(
   /** v9s.44：本帧下盘偏转的**目标值**（诊断用）。hipYaw 是它的指数平滑结果，
    *  目标本身若在几十毫秒内扫过上百毫秒，观感就是「下盘整体晃一下」。 */
   let lastHipYawTarget = 0;
+  /** v9s.45：转身闸门的一阶状态（0..1）。不再直接拿瞬时角速度当权重 ——
+   *  那个量在转身尾部掉得很快，「半开」的几帧足以让目标蹿出去十几度。 */
+  let spinBlend = 0;
+  /** v9s.45：上一帧的 Core 时间，用来把身体角速度换算到**游戏时间**。
+   *  慢放 0.25× 时用渲染帧 dt 算，角速度只有常速的 1/4，闸门会半开（抖动根因）。 */
+  let prevCoreTime = -1;
 
   // ---- v9n 停步收相状态（纯表现层，不进 Core / 快照）----
   /** <0 = 未接管；0..1 = 收相进度；=1 后保持输出待机，直到重新起跑 */
@@ -1880,6 +1889,14 @@ export function createVoxelRig(
       turn?: TurnInPlaceState,
     ): void {
       setWeapon(combat.weapon);
+      // v9s.45：**游戏时间**步长。慢放 / 暂停 / 单步都走 Core 的 world.time，
+      // 与 frameDt 的关系是 gameDt = frameDt × timeScale（常速下两者逐位相同）。
+      // 只有转身闸门需要它：判定「身体在不在自己转」必须与时间缩放无关，
+      // 否则 0.25× 慢放会把角速度除以 4，闸门半开 → 下盘在转身中途被放行。
+      const gameDt = coreTime === undefined || prevCoreTime < 0
+        ? frameDt
+        : clamp(coreTime - prevCoreTime, 0, 0.1);
+      if (coreTime !== undefined) prevCoreTime = coreTime;
       // v9s.26：整体转体每帧归零，只有 writeSwingPose 会写它。
       // 不能靠 idle 分支单独清 —— 换武器 / 受击 / 引导等早退分支都会跳过挥击层，
       // 残留的 root.rotation.y 会让角色「斜着站」。
@@ -1984,6 +2001,11 @@ export function createVoxelRig(
       const az = clamp(rawAz, -60, 60);
       const along = ax * fx + az * fz;
       const turnRate = wrapAngle(c.bodyYaw - prevBodyYaw) / dt;
+      /** v9s.45：同一段转角按**游戏时间**再算一次 —— 只给转身闸门用。
+       *  常速下 gameDt ≡ frameDt，两者逐位相同；慢放时闸门才不会半开。 */
+      const turnRateGame = gameDt > 1e-6
+        ? wrapAngle(c.bodyYaw - prevBodyYaw) / gameDt
+        : 0;
       const leanSpeed = Math.hypot(c.velocity.x, c.velocity.z);
       const maxF = (leanCfg.maxForwardDeg * Math.PI) / 180;
       const maxS = (leanCfg.maxSideDeg * Math.PI) / 180;
@@ -2073,18 +2095,35 @@ export function createVoxelRig(
       // ② 目标推进限速 —— 两者合起来，转身只是一个干净的单向带转，不再「拧出去再拧回来」。
       // 一个开关管住整套对策：拉到 0 = 精确回到旧行为（A/B 用）
       const hipRate = (gaitCfg.hipYawTrackRateDeg ?? 0) * Math.PI / 180;
-      const spinGate = hipRate > 0 ? turnSpinGate(turnRate) : 0;
+      const hipBackRate = (gaitCfg.hipYawBackRateDeg ?? 0) * Math.PI / 180;
+      // v9s.45：闸门改成**一阶状态**（上升 0.06s / 下降 0.22s），并用游戏时间角速度判定。
+      // 旧的瞬时值会在转身尾部几帧里从 1 掉到 0，「半开」时目标一帧能蹿 18~24°。
+      /** 表现层「游戏时间」步长：常速下等于 frameDt，慢放时按时间缩放缩短。
+       *  所有跟手感有关的积分（闸门、目标限速、下盘平滑）都用它 —— 慢放才是纯放大，
+       *  不会把时间常数摊薄成「跟不上」。 */
+      const dtw = gameDt > 1e-6 ? gameDt : frameDt;
+      spinBlend = hipRate > 0
+        ? slewGate(spinBlend, turnSpinGate(turnRateGame), dtw)
+        : 0;
+      // v9s.45：前 / 后相位共用一个权重（目标与限速必须一致，否则互相打架）
+      const flip = hipFlipWeight(backKeep, spinBlend);
+      // v9s.45：`latRatio` / `bodyFwdRatio` 都是**方向比值**，速度趋零时方向全是噪声
+      // （贴着墙被夹住时 v 只剩 1e-5，方向能一夜之间翻 90°）。按速度大小淡出偏转目标：
+      // 正常走起来（>0.5 m/s）逐位不变，停下 / 被挡住时下盘回到正中，不再被噪声带着拧。
+      const hipSpeedFade = clamp(speed / 0.5, 0, 1);
       const rawTargetHipYaw = backHipYawTarget(
-        bodyFwdRatio, latRatio, strafeYaw, backKeep, spinGate,
-      ) * yawFade;
-      // v9s.44：目标限速（度/秒 → rad/s）。短促的方向扫掠会被它削平：身体转身时
-      // 下盘不再「先朝一侧拧过去、再拧回来」。
+        bodyFwdRatio, latRatio, strafeYaw, flip,
+      ) * yawFade * hipSpeedFade;
+      // v9s.44/v9s.45：目标限速（度/秒 → rad/s）。短促的方向扫掠会被它削平：身体转身时
+      // 下盘不再「先朝一侧拧过去、再拧回来」；后退相位单独一档更慢的上限。
       const targetHipYaw = slewHipTarget(
         lastHipYawTarget, rawTargetHipYaw,
-        hipRate, dt, spinGate,
+        hipTrackRate(hipRate, hipBackRate, flip), dtw, spinBlend,
       );
       lastHipYawTarget = targetHipYaw;
-      hipYaw += (targetHipYaw - hipYaw) * (1 - Math.exp(-ori.hipYawSmoothing * dt));
+      // v9s.45：平滑也用游戏时间 —— 慢放时下盘的跟随速度与常速逐位一致，
+      // 否则 0.25× 会把 83ms 的时间常数摊成 330ms，看起来「跟不上、追得慢」。
+      hipYaw += (targetHipYaw - hipYaw) * (1 - Math.exp(-ori.hipYawSmoothing * dtw));
 
       // ---- 程序化步态（v8 / v8b）----
       // 关键：腿挂在 lower 下（lower.rotation.y = hipYaw），所以腿的局部坐标系朝向是
@@ -2802,7 +2841,7 @@ export function createVoxelRig(
         legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,
         phase: lastDrive.phase,
         dirF: dirDriveF, dirR: dirDriveR,
-        hipYawTarget: lastHipYawTarget,
+        hipYawTarget: lastHipYawTarget, spin: spinBlend,
       };
     },
     gaitYaw(): number {

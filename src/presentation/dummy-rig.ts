@@ -18,6 +18,7 @@ import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
   backHipYawTarget,
   stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir, stopYawFade, slewDirSign, slewHipTarget, turnSpinGate,
+  hipFlipWeight, hipTrackRate, slewGate,
 } from './gait';
 import type { GaitInput } from './gait';
 import { solveHurtPose } from './hurt-pose';
@@ -31,8 +32,10 @@ function clamp(v: number, lo: number, hi: number): number {
 
 export type DummyRig = {
   group: THREE.Group;
-  /** 姿态完全由 Core 状态驱动，无本地时间累积（flash 除外，纯视觉衰减）。 */
-  update(s: DummyState, frameDt: number): void;
+  /** 姿态完全由 Core 状态驱动，无本地时间累积（flash 除外，纯视觉衰减）。
+   *  v9s.45：`coreTime` 可选（Core 的 world.time）—— 转身闸门要用**游戏时间**角速度，
+   *  慢放时才能与常速一致；不传时退化为按 frameDt 计算（单测路径）。 */
+  update(s: DummyState, frameDt: number, coreTime?: number): void;
   /**
    * v9s.18 · 命中点落在哪一根肢体上。
    *
@@ -228,6 +231,9 @@ export function createDummyRig(
   let sideYawTarget = 0;
   /** v9s.44：上一帧 bodyYaw，用于算身体角速度（决定下盘目标要不要限速） */
   let prevHipBodyYaw = 0;
+  /** v9s.45：转身闸门的一阶状态 / 上一帧 Core 时间（游戏时间角速度，慢放不半开） */
+  let spinBlend = 0;
+  let prevHipCoreTime = -1;
   /** v9o：上一帧速度，用于区分「减速停步」与「KEEP DIST 低速横移」（后者不该收相） */
   let prevSpeed = 0;
   // ---- v9s：停步下盘偏差消化窗口（与主角同构，全部纯表现层状态）----
@@ -296,7 +302,11 @@ export function createDummyRig(
       }
       return best ? { node: best, point: closest.clone() } : null;
     },
-    update(s, frameDt): void {
+    update(s, frameDt, coreTime?): void {
+      const gameDt = coreTime === undefined || prevHipCoreTime < 0
+        ? frameDt
+        : clamp(coreTime - prevHipCoreTime, 0, 0.1);
+      if (coreTime !== undefined) prevHipCoreTime = coreTime;
       root.position.set(s.position.x, s.position.y, s.position.z);
       // 身体用平滑朝向（bodyYaw），头相对身体再补一个差值，实现头身分离（v7b#9）
       root.rotation.y = s.bodyYaw;
@@ -388,20 +398,28 @@ export function createDummyRig(
         latRatio, gaitCfg.strafeHipScale, gaitCfg.strafeHipMaxDeg, gaitCfg.strafeHipBoost,
       );
       // v9s.44：与主角同构 —— 身体自己在转时停用「后退族」翻转，并给目标限速
-      const bodyYawRate = wrapAngle(s.bodyYaw - prevHipBodyYaw) / Math.max(1e-6, frameDt);
+      const bodyYawRate = gameDt > 1e-6
+        ? wrapAngle(s.bodyYaw - prevHipBodyYaw) / gameDt
+        : 0;
       prevHipBodyYaw = s.bodyYaw;
       // 一个开关管住整套对策：拉到 0 = 精确回到旧行为（A/B 用）
       const hipRate = (gaitCfg.hipYawTrackRateDeg ?? 0) * Math.PI / 180;
-      const spinGate = hipRate > 0 ? turnSpinGate(bodyYawRate) : 0;
+      const hipBackRate = (gaitCfg.hipYawBackRateDeg ?? 0) * Math.PI / 180;
+      // v9s.45：与主角同构 —— 闸门用游戏时间 + 一阶状态，前 / 后相位各一档限速
+      const dtw = gameDt > 1e-6 ? gameDt : frameDt;
+      spinBlend = hipRate > 0 ? slewGate(spinBlend, turnSpinGate(bodyYawRate), dtw) : 0;
+      const flip = hipFlipWeight(backKeep, spinBlend);
+      // 与主角同构：方向比值在速度趋零时是噪声，按速度大小淡出偏转目标
+      const hipSpeedFade = clamp(speed / 0.5, 0, 1);
       const rawTargetSide = backHipYawTarget(
-        bodyFwdRatio, latRatio, strafeSide, backKeep, spinGate,
-      ) * yawFade;
+        bodyFwdRatio, latRatio, strafeSide, flip,
+      ) * yawFade * hipSpeedFade;
       const targetSide = slewHipTarget(
         sideYawTarget, rawTargetSide,
-        hipRate, frameDt, spinGate,
+        hipTrackRate(hipRate, hipBackRate, flip), dtw, spinBlend,
       );
       sideYawTarget = targetSide;
-      sideYaw += (targetSide - sideYaw) * (1 - Math.exp(-12 * Math.max(0, frameDt)));
+      sideYaw += (targetSide - sideYaw) * (1 - Math.exp(-12 * Math.max(0, dtw)));
       lower.rotation.y = sideYaw;
 
       const gaitYaw = s.bodyYaw + sideYaw;

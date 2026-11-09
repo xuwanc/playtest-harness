@@ -523,6 +523,76 @@ def main() -> int:
                 check("换向融合真的在跑（dirF 经过中间态，两端符号都出现过）",
                       flip["mid"] >= 2 and flip["hi"] >= 0.85 and flip["lo"] <= -0.15, str(flip))
 
+                # ---- v9s.45：慢放转身时下盘不许再抖一下 ----
+                # 0.25× 慢放下把摇杆从 W 切到 A（移动方向 90°，身体跟着转）：
+                # 旧版闸门用**渲染帧 dt** 算身体角速度，慢放时角速度只有常速的 1/4，
+                # 闸门半开 → 下盘目标在转身中途被放行 → 单帧 18~24°、整体 −20° 的「拧一下」。
+                # 现在闸门走游戏时间 + 一阶状态、限速率与放行程度线性挂钩，判据读 hipYaw 的
+                # 单步增量（除以固定步数，避免软件渲染帧率影响）。
+                page.evaluate(
+                    "() => {"
+                    "  const h = window.__harness, w = h.world, c = w.character;"
+                    "  for (const d of w.dummies) { d.mode = 'idle'; d.position.x = 60; d.position.z = 60; }"
+                    "  w.combat.phase = 'idle'; w.combat.phaseTimer = 0; w.combat.queued = false;"
+                    "  c.position.x = 0; c.position.z = 9; c.position.y = 0;"
+                    "  c.velocity.x = 0; c.velocity.z = 0;"
+                    "  c.bodyYaw = Math.PI; c.facing = Math.PI;"
+                    "  window.__hipProbe = { rows: [], t0: w.time };"
+                    "  const tick = () => {"
+                    "    const g = h.gaitDebug(), P = window.__hipProbe;"
+                    "    P.rows.push({ t: w.time, hip: g.hipYaw, tgt: g.hipYawTarget, spin: g.spin,"
+                    "      sp: Math.hypot(c.velocity.x, c.velocity.z) });"
+                    "    P.raf = requestAnimationFrame(tick);"
+                    "  };"
+                    "  tick();"
+                    "  const key = (type, k, code) => window.dispatchEvent("
+                    "    new KeyboardEvent(type, { key: k, code, bubbles: true }));"
+                    "  key('keydown', 'w', 'KeyW');"
+                    "  window.__hipPhase2 = () => {"
+                    "    key('keyup', 'w', 'KeyW'); key('keydown', 'a', 'KeyA');"
+                    "    window.__hipProbe.t1 = w.time;"
+                    "  };"
+                    "  window.__hipEnd = () => {"
+                    "    key('keyup', 'a', 'KeyA');"
+                    "    cancelAnimationFrame(window.__hipProbe.raf);"
+                    "  };"
+                    "}"
+                )
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__hipProbe.t0 + 0.7",
+                    timeout=90000,
+                )
+                page.evaluate("() => window.__hipPhase2()")
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__hipProbe.t1 + 0.9",
+                    timeout=90000,
+                )
+                hipd = page.evaluate(
+                    "() => {"
+                    "  window.__hipEnd();"
+                    "  const h = window.__harness, P = window.__hipProbe;"
+                    "  const dt = h.world.config.fixedDt;"
+                    "  let worst = 0, lo = 0, hi = 0, n = 0, spinMax = 0;"
+                    "  for (let i = 1; i < P.rows.length; i++) {"
+                    "    const a = P.rows[i - 1], b = P.rows[i];"
+                    "    const steps = Math.max(1, Math.round((b.t - a.t) / dt));"
+                    "    const d = Math.abs(b.hip - a.hip) / steps * 180 / Math.PI;"
+                    "    if (b.sp > 0.3 || a.sp > 0.3) { if (d > worst) worst = d; n += 1; }"
+                    "    lo = Math.min(lo, b.hip * 180 / Math.PI);"
+                    "    hi = Math.max(hi, b.hip * 180 / Math.PI);"
+                    "    spinMax = Math.max(spinMax, b.spin);"
+                    "  }"
+                    "  return { worst: +worst.toFixed(2), lo: +lo.toFixed(1), hi: +hi.toFixed(1),"
+                    "    spin: +spinMax.toFixed(2), n };"
+                    "}"
+                )
+                # 240°/s 上限在 1/60 步下也就是 4°/步；实测 ~0.2°/步（旧版 ~4°/步）。
+                check(f"慢放转身下盘不抖（单步 ≤ 1.5°，实测 {hipd['worst']:.2f}°）",
+                      hipd["worst"] <= 1.5, str(hipd))
+                # 转身途中不该再把胯拖到后退族的 −48° 再拖回来
+                check(f"慢放转身下盘不「拧出去再拧回来」（最低 {hipd['lo']:.1f}° > −6°）",
+                      hipd["lo"] > -6, str(hipd))
+
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
                       f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}",
                       " 命中 progress", f"{hit_prog:.3f}" if hit_prog is not None else "-")

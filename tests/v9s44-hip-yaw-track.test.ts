@@ -59,11 +59,15 @@ describe('v9s.44 · 朝向切换时下盘不整体晃一下', () => {
    * −48°），身体转动时 θ 连续扫过 90°→132°，目标只能跳族：实测单帧跳 52.7°、
    * 整体跨度 104°，hipYaw 平滑跟不上 → 单帧 13°（775°/s）、整体摆幅 54°~78°。
    */
-  it('限速门控：身体不转时一步到位，纯转身时按 maxRate 推进', () => {
+  it('限速门控：不转身按 maxRate 推进，纯转身冻结（v9s.45 起不再「不限速」）', () => {
     const maxRate = rad(200);
-    // 身体没转（world 速度换向）：与旧行为逐位一致
-    expect(slewHipTarget(0, 1, maxRate, DT, 0)).toBe(1);
-    expect(slewHipTarget(0, 1, maxRate, DT, turnSpinGate(rad(10)))).toBe(1);
+    // 没在转身：按 maxRate 推进（v9s.45 去掉了 free·3400°/s 的逃生口 ——
+    // 「半开」时几乎不限速，正是慢放抖一下的来源）
+    expect(slewHipTarget(0, 1, maxRate, DT, 0)).toBeCloseTo(maxRate * DT, 9);
+    expect(slewHipTarget(0, 1, maxRate, DT, turnSpinGate(rad(10))))
+      .toBeCloseTo(maxRate * DT, 9);
+    // 只有把限速关掉（maxRate = 0）才一步到位
+    expect(slewHipTarget(0, 1, 0, DT, 0)).toBe(1);
     // 纯转身：目标冻住（下盘随身体刚性转，一点都不自己拧）
     expect(slewHipTarget(0, 1, maxRate, DT, 1)).toBe(0);
     // 中间角速度：目标还能动，但明显慢于「不转身」
