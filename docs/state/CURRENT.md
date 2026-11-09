@@ -16,9 +16,9 @@ first-fit 拼成连续地面；台阶 / 门洞 / 障碍 / 初始假人 / 草块�
 |---|---|
 | `package.json` 版本 | `0.9.70`（内部代号 v9s.49） |
 | 线上徽标 | `v0.9.70`（构建时间随发布变化） |
-| 发布方式 | `npm run publish:pages`（唯一权威）；`publish:preview` 隧道默认关，仅 `WORKBUDDY_TUNNEL_FALLBACK=1` 临时开 |
-| 权威线上链接 | <https://xuwanc.github.io/playtest-harness/>（仓库需在 `Settings → Pages` 选 `preview` 分支 / `/(root)`） |
-| 旧隧道链接 | `aef42c26…` / `aac01946…` 均按沙盒派生、跨 agent 不统一，仅作历史兜底 |
+| 发布方式 | `npm run publish:pages`（目标唯一通道）；**Pages 尚未在仓库开启，暂用 `publish:preview` 隧道兜底** |
+| 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— **当前 404**，需在仓库 `Settings → Pages` → Build from a branch → 选 `preview` / `/(root)` 开启（PAT 无 `Pages: write`，脚本开不了） |
+| 当前可打开（隧道兜底） | <https://aef42c265bdddcf97.app.workbuddy.host/?sharecode=2FOZ6AI6QC> — 徽标 `v0.9.70` 已核验 |
 
 ## 验证基线（改完必须复跑）
 
