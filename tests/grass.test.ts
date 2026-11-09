@@ -65,7 +65,7 @@ describe('v9s.39 体素草块 · 生成契约', () => {
     const g = w.grass;
     const cell = g.cellSize;
     const foot = w.config.grass.footprintCells;
-    // v9s.47：主草场已改为地块自带（全局区域 min=max=0），格网奇偶不再有统一基准。
+    // v9s.49：主草场已改为地块自带（全局区域 min=max=0），格网奇偶不再有统一基准。
     // 改为校验「同一行内相邻 patch 间距 = footprint」，这才是 footprint 的真实语义。
     const byRow = new Map<number, number[]>();
     for (const p of g.patches) {

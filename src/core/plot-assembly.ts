@@ -5,14 +5,14 @@ import type {
 } from './types';
 
 /**
- * v9s.43 / v9s.47 · 确定性地块拼合器（Core 纯函数，无 IO / 无 DOM / 无随机）。
+ * v9s.43 / v9s.49 · 确定性地块拼合器（Core 纯函数，无 IO / 无 DOM / 无随机）。
  *
  * ## 为什么存在
  * 多个 agent 各自「加一块测试地」时，旧做法是一起往 `config/game.json` 的
  * `scene.stations[]` 里追加一条、并手写一组绝对坐标。两边同时改同一个数组 → git 冲突；
  * 两边都想放「出生点旁边」→ 两块地叠在一起。
  *
- * ## 解法（v9s.47 起：整数格）
+ * ## 解法（v9s.49 起：整数格）
  * 每个地块一个独立文件 `config/plots/<id>.json`，**文件里不写世界坐标**，只写
  * 相对布局意图（占几格、传送落点偏移、标牌偏移、自带的地形 / 道具 / 假人）。本函数：
  *   1. 按 `id` 字典序排序 —— 拼合结果与文件加载顺序、agent 提交先后完全无关；
@@ -285,7 +285,7 @@ export function assemblePlots(
       }
     }
 
-    // v9s.47：地块自带的地形 / 门洞 / 障碍 / 初始单位，全部按中心 + 相对偏移解算
+    // v9s.49：地块自带的地形 / 门洞 / 障碍 / 初始单位，全部按中心 + 相对偏移解算
     for (const s of def.steps ?? []) {
       steps.push({
         id: uniqObjId(id, s.id),
@@ -401,7 +401,7 @@ export function assemblePlots(
 }
 
 /**
- * v9s.47 · 把拼合结果灌进「配置对象」的唯一入口。
+ * v9s.49 · 把拼合结果灌进「配置对象」的唯一入口。
  *
  * 组装层（`src/config.ts`，走 Vite glob）与测试夹具（`tests/helpers.ts`，走 Node fs）
  * 必须走同一条注入路径，否则测试看到的地块坐标会和线上不一致 —— 所以这段逻辑只写一次。

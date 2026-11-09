@@ -5,7 +5,7 @@ import type { Box, SceneConfig } from './types';
  * 这是「场景生成」的唯一入口 —— 日后改为程序化生成时，只需替换本函数，
  * Core 与表现层都不用改（表现层只消费 World.boxes）。
  *
- * v9s.47：底板从「一块 32×32」改为「每个地块一块」。有 `scene.slabs` 就逐块生成，
+ * v9s.49：底板从「一块 32×32」改为「每个地块一块」。有 `scene.slabs` 就逐块生成，
  * 没有则回落老的 `ground.size` 单块（测试夹具 / 外部调用仍走这条）。
  */
 export function buildBoxes(scene: SceneConfig): Box[] {

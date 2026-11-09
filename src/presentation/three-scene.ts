@@ -242,7 +242,7 @@ export function createSceneView(
   scene.background = new THREE.Color('#12161d');
 
   scene.add(new THREE.HemisphereLight(0xa8c8ee, 0x2a2f38, 1.15));
-  // v9s.47：底板拼合后不再是 32×32，阴影相机跟着包围盒走 —— 否则地图远端没有影子。
+  // v9s.49：底板拼合后不再是 32×32，阴影相机跟着包围盒走 —— 否则地图远端没有影子。
   const mapCx = (world.gridMeta.minX + world.gridMeta.maxX) / 2;
   const mapCz = (world.gridMeta.minZ + world.gridMeta.maxZ) / 2;
   const mapHalf = Math.max(
@@ -290,7 +290,7 @@ export function createSceneView(
   scene.add(boxGroup);
 
   // ---- 地面网格 ----
-  // v9s.47：底板不再是 32×32 的正方形，`GridHelper` 只能画正方形，改用自建线段，
+  // v9s.49：底板不再是 32×32 的正方形，`GridHelper` 只能画正方形，改用自建线段，
   // 按地板的真实包围盒铺（30×40 这种长方形也能贴边），每 5m 一条亮线当尺子。
   const gb = world.gridMeta;
   const minorPts: number[] = [];

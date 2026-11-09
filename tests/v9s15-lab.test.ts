@@ -26,7 +26,7 @@ describe('v9s.15 · 测试场工位布局', () => {
   const stations = CONFIG.scene.stations ?? [];
 
   it('9 块地各占一格区、index 唯一；hub 钉在原点，新地块按 id 序顺延', () => {
-    // v9s.47：地块改为「5m 模数 + 整数格 first-fit」，坐标随布局走，不再逐字节冻结。
+    // v9s.49：地块改为「5m 模数 + 整数格 first-fit」，坐标随布局走，不再逐字节冻结。
     // 这里只锁契约：每块地有唯一 index、有独立地板、hub 在原点、history 7 块都在。
     expect(stations.length).toBeGreaterThanOrEqual(7);
     expect(new Set(stations.map((s) => s.index)).size).toBe(stations.length);
@@ -102,7 +102,7 @@ describe('v9s.15 · 测试场工位布局', () => {
   });
 
   it('宽门 2.4m 走得过去，窄门 0.5m 被挡住', () => {
-    // v9s.47：terrain 板中心移到 (10,20)，门在 z=23.1，台阶往南 −z 方向
+    // v9s.49：terrain 板中心移到 (10,20)，门在 z=23.1，台阶往南 −z 方向
     const wide = makeLabWorld();
     place(wide, 7.7, 24.8);
     run(wide, 80, intent({ moveZ: -1 }));
@@ -224,7 +224,7 @@ describe('v9s.15 · 工位查找（纯函数）', () => {
   it('stationAt 取最近且在半径内的工位；空处返回 null', () => {
     expect(stationAt(stations, 0, 0)?.id).toBe('hub');
     expect(stationAt(stations, 20, 2.6)?.id).toBe('gait');
-    // v9s.47：地块是连续的，空地只剩填充板 —— 取一块填充板中央应当没有工位。
+    // v9s.49：地块是连续的，空地只剩填充板 —— 取一块填充板中央应当没有工位。
     const fill = CONFIG.scene.slabs!.find((b) => b.plotId === '');
     expect(fill).toBeDefined();
     expect(stationAt(stations, (fill!.minX + fill!.maxX) / 2, (fill!.minZ + fill!.maxZ) / 2)).toBeNull();

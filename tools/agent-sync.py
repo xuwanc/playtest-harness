@@ -329,10 +329,25 @@ def cmd_finish(args):
     queue_clear(branch)
     save_state(last_merged_at=datetime.now().isoformat(timespec='seconds'))
 
-    # 唯一发布通道：发布的就是刚刚合并、刚刚 verify 过的那一份 dist
-    sh('npm', 'run', 'publish:preview')
+    # 唯一发布通道（合并闸门独享，feature agent 绝不发布）：
+    #   1) publish:pages —— 把 dist 推到仓库 preview 分支（GitHub Pages）。
+    #      链接完全由仓库身份决定（https://<user>.github.io/<repo>/），与任何沙盒无关，
+    #      所有 agent 写同一站点、同一链接，且沙盒休眠不影响。一经开启 Pages 即为权威链接。
+    #   2) publish:preview —— 站点 skill 的实时隧道，**默认关闭**。隧道链接按沙盒 runtimeId 派生、
+    #      跨沙盒不统一，多 agent 并发会冒出多条混淆链接（v9s.x 踩过的坑）。只有当 Pages 尚未开启、
+    #      且确实需要「马上看」时，才显式设 WORKBUDDY_TUNNEL_FALLBACK=1 临时开一下。
+    try:
+        sh('python3.11', str(TOOLS / 'publish-pages.py'), check=False)
+    except Exception as e:  # Pages 未开启 / 网络抖动都不阻断闭环
+        print(f'[agent-sync] publish:pages 未成功（{e}）；Pages 未开启时暂无线上链接')
+    if os.environ.get('WORKBUDDY_TUNNEL_FALLBACK') == '1':
+        sh('npm', 'run', 'publish:preview', check=False)
+        print('  （隧道兜底已开：上面的 shareLink 是临时按沙盒派生的链接，非权威）')
+    else:
+        print('  （未开隧道兜底：开启 GitHub Pages 后即可用下面的稳定统一链接）')
     print(f'\n[agent-sync] 闭环完成：main / 线上 / 本地一致，版本 v{version}')
-    print(f'  线上链接见 docs/state/CURRENT.md 与上面 publish 打印的 shareLink')
+    print(f'  权威线上链接（Pages，需一次性在仓库 Settings → Pages 开启）：'
+          f'https://{owner}.github.io/{repo}/')
     return 0
 
 

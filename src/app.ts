@@ -430,7 +430,7 @@ export function startApp(): void {
       dummies: world.dummies.length,
       // 表现层已建好的渲染对象数：应与 dummies 严格相等，否则「生成了但没画出来」。
       rendered: view.dummyRenderCount(),
-      // v9s.47：地板读数 —— 验收「每块地都有地板、地板铺满包围盒、没有洞」直接读这两个。
+      // v9s.49：地板读数 —— 验收「每块地都有地板、地板铺满包围盒、没有洞」直接读这两个。
       bounds: PLOT_ASSEMBLY.bounds,
       worldBounds: world.config.worldBounds,
       slabs: PLOT_ASSEMBLY.slabs.map((s) => ({

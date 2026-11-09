@@ -110,7 +110,7 @@ export type StationSpec = {
 };
 
 export type SceneConfig = {
-  /** 单块地面（v9s.47 之前的老模型；有 `slabs` 时不再使用，保留给测试夹具兜底）。 */
+  /** 单块地面（v9s.49 之前的老模型；有 `slabs` 时不再使用，保留给测试夹具兜底）。 */
   ground: { size: number; thickness: number };
   steps: StepSpec[];
   doorways: DoorwaySpec[];
@@ -123,7 +123,7 @@ export type SceneConfig = {
   grass?: GrassSceneSpec;
   /** v9s.x：可破坏物件（由 assemblePlots 从 config/plots/*.json 拼合注入） */
   destructibles?: DestructibleSpec[];
-  /** v9s.47：每块测试地自带的承重地板。有值就逐块生成 `kind:'ground'` 的盒，
+  /** v9s.49：每块测试地自带的承重地板。有值就逐块生成 `kind:'ground'` 的盒，
    *  不再用 `ground.size` 那块 32×32 的单体底板。 */
   slabs?: SlabSpec[];
 };
@@ -137,7 +137,7 @@ export type SceneConfig = {
  * 再把「地块中心 + 相对偏移」解算成 `StationSpec` / `GrassPlotSpec` 的绝对坐标。
  * 因此拼合结果与文件加载顺序、agent 提交先后完全无关 —— 这就是消除冲突的根本。
  *
- * v9s.47 起槽位改为**整数格**：1 格 = `PlotLayout.cellMeters`（5 m），
+ * v9s.49 起槽位改为**整数格**：1 格 = `PlotLayout.cellMeters`（5 m），
  * 地块用 `span: [列, 行]` 声明占几格，底板也随地块一块块拼出来。
  * 不重叠是构造性的（不用浮点圆相交），加地只往地图边缘长、不挪旧板。
  * ------------------------------------------------------------------ */
@@ -218,7 +218,7 @@ export type PlotDef = {
   radius?: number;
   color?: string;
   /**
-   * v9s.47：占几格，默认 `[2,2]`（10×10 m）。
+   * v9s.49：占几格，默认 `[2,2]`（10×10 m）。
    * 5×5 用 `[1,1]`、10×5 用 `[2,1]`、20×10 跑道用 `[4,2]`。
    */
   span?: PlotSpan;
@@ -240,7 +240,7 @@ export type PlotDef = {
   testSpawn?: PlotTestSpawn;
   /** v9s.x：该地块上的可破坏物件（相对坐标，绝对位置由拼合器解算） */
   destructibles?: PlotDestructibleDef[];
-  /** v9s.47：地块自带的地形 / 门洞 / 障碍 / 初始假人（相对坐标） */
+  /** v9s.49：地块自带的地形 / 门洞 / 障碍 / 初始假人（相对坐标） */
   steps?: PlotStepDef[];
   doorways?: PlotDoorwayDef[];
   obstacles?: PlotObstacleDef[];
@@ -271,7 +271,7 @@ export type PlotTestSpawn = {
 export type PlotLayout = {
   /** 格边长（米），用于**草块**格坐标 ↔ 世界坐标换算 */
   cellSize: number;
-  /** v9s.47：地块模数（米）。1 个地块格 = cellMeters × cellMeters */
+  /** v9s.49：地块模数（米）。1 个地块格 = cellMeters × cellMeters */
   cellMeters: number;
   /** 网格列数；行数按需增长，上限 maxRows */
   columns: number;
@@ -306,7 +306,7 @@ export type AssembledPlot = {
   placement: 'pinned' | 'auto';
   /** 兼容字段：pin 为 -1，auto 为扫描到的线性槽号（c + r * columns） */
   slot: number;
-  /** v9s.47：占用格（西南角）与跨度 */
+  /** v9s.49：占用格（西南角）与跨度 */
   cell: { c: number; r: number };
   span: PlotSpan;
   /** 该地块的承重地板 */
@@ -346,11 +346,11 @@ export type PlotAssembly = {
   grassPlots: GrassPlotSpec[];
   /** v9s.x：所有地块产出的可破坏物件（绝对世界坐标，按地块 id 字典序稳定） */
   destructibles: DestructibleSpec[];
-  /** v9s.47：每块地一块承重地板 */
+  /** v9s.49：每块地一块承重地板 */
   slabs: SlabSpec[];
-  /** v9s.47：地板整体包围盒 */
+  /** v9s.49：地板整体包围盒 */
   bounds: Bounds;
-  /** v9s.47：地块自带的地形 / 门洞 / 障碍 / 假人，已解算成绝对坐标 */
+  /** v9s.49：地块自带的地形 / 门洞 / 障碍 / 假人，已解算成绝对坐标 */
   steps: StepSpec[];
   doorways: DoorwaySpec[];
   obstacles: ObstacleSpec[];

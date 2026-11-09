@@ -380,7 +380,7 @@ def main() -> int:
                     key=lambda q: q["index"],
                 )
                 auto = [p for p in plot["plots"] if p["placement"] == "auto"]
-                # v9s.47：pin 从前是「7 块手写 anchor」，现在只有 hub 一块钉在原点，
+                # v9s.49：pin 从前是「7 块手写 anchor」，现在只有 hub 一块钉在原点，
                 # 其余全部按整数格 first-fit。判据改为「pin 唯一 + index 1..7 的历史地块都在」。
                 hist_ids = {"hub", "rings", "windup", "terrain", "meter", "dash", "gait"}
                 hist = [p for p in plot["plots"] if p["id"] in hist_ids]
@@ -738,7 +738,7 @@ def main() -> int:
                 check(f"慢放转身下盘不「拧出去再拧回来」（最低 {hipd['lo']:.1f}° > −6°）",
                       hipd["lo"] > -6, str(hipd))
 
-                # ---- v9s.47：底板按地块拆开 ----
+                # ---- v9s.49：底板按地块拆开 ----
                 slab = page.evaluate("""() => {
                   const h = window.__harness, p = h.plotDebug();
                   const inside = (s, x, z) => x >= s.rect[0] - 1e-6 && x <= s.rect[1] + 1e-6
@@ -854,14 +854,19 @@ def main() -> int:
                   h.world.modules.targeting = false;
                   h.resetBreaks();
                 }""")
-                page.keyboard.press("j")
-                try:
-                    page.wait_for_function(
-                        "() => window.__harness.breakDebug().broken > 0", timeout=5000,
-                    )
-                    live_ok = True
-                except Exception:
-                    live_ok = False
+                # 挥刀偶发不中：软件渲染下按键可能落在两帧之间（实测 4 次里 1 次）。
+                # 最多试 3 次，每次等一刀完整出手 + 收势。
+                live_ok = False
+                for _ in range(3):
+                    page.keyboard.press("j")
+                    try:
+                        page.wait_for_function(
+                            "() => window.__harness.breakDebug().broken > 0", timeout=6000,
+                        )
+                        live_ok = True
+                        break
+                    except Exception:
+                        page.wait_for_timeout(600)
                 live = page.evaluate("""() => {
                   const h = window.__harness;
                   const d = h.breakDebug();

@@ -29,7 +29,7 @@ const def = (id: string, extra: Partial<PlotDef> = {}): PlotDef => ({
 const spanArea = (span: PlotSpan, layout: PlotLayout): number =>
   span[0] * span[1] * layout.cellMeters * layout.cellMeters;
 
-describe('v9s.47 · assemblePlots 确定性', () => {
+describe('v9s.49 · assemblePlots 确定性', () => {
   it('结果与输入顺序、agent 提交先后无关（按 id 字典序）', () => {
     const defs = [def('c'), def('a'), def('b')];
     const x = assemblePlots(defs, L);
@@ -132,7 +132,7 @@ describe('v9s.47 · assemblePlots 确定性', () => {
   });
 });
 
-describe('v9s.47 · 地块自带的物件跟着地块走', () => {
+describe('v9s.49 · 地块自带的物件跟着地块走', () => {
   it('台阶 / 门洞 / 障碍 / 假人都解算成「板中心 + 相对偏移」', () => {
     const r = assemblePlots([def('h', {
       pin: 'origin',
@@ -169,7 +169,7 @@ describe('v9s.47 · 地块自带的物件跟着地块走', () => {
   });
 });
 
-describe('v9s.47 · 草块格坐标换算', () => {
+describe('v9s.49 · 草块格坐标换算', () => {
   it('相对草块按地块中心换算格偏移（cellSize=0.5）', () => {
     const r = assemblePlots([def('g', {
       pin: 'origin', span: [2, 2],
@@ -190,7 +190,7 @@ describe('v9s.47 · 草块格坐标换算', () => {
   });
 });
 
-describe('v9s.47 · 真实配置拼合结果', () => {
+describe('v9s.49 · 真实配置拼合结果', () => {
   it('与组装层 / 测试夹具注入的结果完全一致，无重复、无未放置', () => {
     expect(PLOT_ASSEMBLY.stations).toEqual(CONFIG.scene.stations);
     expect(PLOT_ASSEMBLY.slabs).toEqual(CONFIG.scene.slabs);
