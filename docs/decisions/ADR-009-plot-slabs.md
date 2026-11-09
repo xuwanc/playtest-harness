@@ -1,6 +1,6 @@
 # ADR-009 · 测试场地块化：模数 5m + 整数跨格拼底板
 
-> 状态：**设计稿（未实现）** · 2026-11-09 · 决策人：用户（选定方案 A）· 执行：待排期
+> 状态：**已实现（v9s.47 / v0.9.68）** · 2026-11-09 · 决策人：用户（选定方案 A）
 > 关联：[`../systems/plot-assembly.md`](../systems/plot-assembly.md)（现行拼合实现）、
 > [`../systems/test-scene-policy.md`](../systems/test-scene-policy.md)（单一主场景）
 

@@ -52,6 +52,7 @@
 | 多个 agent 同时开发 / 怎么合并提交 | `tools/gh-commit.mjs`、冲突分类 | `--apply`、ref SHA 乐观锁 | [systems/multi-agent-workflow.md](systems/multi-agent-workflow.md) | `node tools/gh-commit.mjs`（dry-run） |
 | 用户通知 push 后怎么推到功能分支（`git push` 无凭证） | `tools/push-branch.py`、GitHub MCP 网关 | `push_files` / `delete_file`、tree 一致校验 | 同上 §1 | `python3.11 tools/push-branch.py --dry` → 去掉 `--dry` |
 | 测试场景该用哪个 / 新功能要加测试环境 | `config/plots/*.json`、`core/plot-assembly.ts` | 主场景 `index.html`、一地块一文件 | [systems/plot-assembly.md](systems/plot-assembly.md) | 只保留主场景、单入口 build |
+| 底板装不下第 10 块测试地 / 地面有洞 / 走上去掉下去 | `core/plot-assembly.ts`、`core/scene.ts` | `span`、`s`、`slab`、`applyPlotAssembly` | [systems/plot-assembly.md](systems/plot-assembly.md) §4 | `plotDebug().slabs` + smoke「地板铺满包围盒」 |
 | 两边同时加同一位置地块 / 不想写绝对坐标 | `core/plot-assembly.ts`、`src/config.ts` | `assemblePlots`、`PLOT_ASSEMBLY`、`plotDebug()` | [systems/plot-assembly.md](systems/plot-assembly.md) §2/§4 | `tests/plot-assembly.test.ts`、`__harness.plotDebug()` |
 | 工位传送没跟着地块走 / 拼合后坐标不对 | `lab-panel.ts` 的 `goto()` | `StationSpec.spawnX/spawnZ` | 同上 §4 | `__harness.lab.goto(id)` + `plotDebug()` |
 | 地块测试按钮生成 / 清除假人陪练 | `core/plot-spawn.ts`、`presentation/three-scene.ts` | `spawnPlotTestUnits`、`syncDummyCapacity`、`dummyRenderCount` | 同上 §5 | `tests/plot-spawn.test.ts`、`__harness.spawnAt()` |
@@ -74,7 +75,7 @@
 | `abilities.ts` / `skills/*` / `arrows.ts` | 技能、投射物 | `abilitiesUpdate`、`channelVolley` |
 | `notify.ts` / `pose-clip.ts` | 关键帧事件扫描 / 语义关键帧采样 | `notifyUpdate`、`samplePoseClip` |
 | `grass.ts` | 体素草块：生成 / 压弯 / 恢复 / 割断 / **缓慢生长 / 枢轴风公式**（确定性、网格桶） | `createGrassState`、`grassUpdate`、`grassCut`、`grassReset`、`grassGrowth`、`windPivotAngles`、`windPivotEffLength`、`windPivotRotate` |
-| `plot-assembly.ts` | **确定性地块拼合**：按 id 排序、分配不重叠槽位、解算绝对坐标 | `assemblePlots`、`DEFAULT_PLOT_LAYOUT` |
+| `plot-assembly.ts` | **确定性地块拼合**：按 id 排序、整数格 first-fit、解算地板 / 工位 / 自带物件 | `assemblePlots`、`applyPlotAssembly`、`DEFAULT_PLOT_LAYOUT` |
 | `plot-spawn.ts` | 地块测试按钮就地生成 / 清除假人陪练（运行时调试，不进 `step`） | `spawnPlotTestUnits`、`clearPlotTestUnits`、`plotTestUnitCount` |
 | `hits.ts` 的刀风导出 | 本帧命中形状（草块等周边系统复用，不改 `playerHits`） | `currentMeleeShape`、`inMeleeShape`、`inSlamShape` |
 
@@ -99,10 +100,10 @@
 | 路径 | 说明 |
 |---|---|
 | `config/game.json` | 所有可调数值（`core.*` 逻辑 / `view.*` 表现 / `scene.*` 关卡；工位 / 草块区域已迁出） |
-| `config/plots/*.json` | 一地块一文件（不写世界坐标，`assemblePlots()` 动态拼合成工位 / 草块） |
+| `config/plots/*.json` | 一地块一文件（不写世界坐标；`span` 声明占几格，自带地形 / 摆设 / 假人 / 草块） |
 | `src/app.ts` | 组装层 + `window.__harness`（所有 `*Debug()` 验收接口在这里暴露） |
 | `tests/` | vitest；`tests/helpers.ts` 的 `FIXTURE_CORE_PATCH` 是**冻结夹具**，另用同一套拼合器注入线上配置 |
-| `tools/smoke.py` | 线上自检（41 项）；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样 |
+| `tools/smoke.py` | 线上自检（53 项）；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样 |
 | `tools/publish-preview.mjs` | **每次任务完成的发布闸门**：build → 发布 `dist/` → 校验资源 → 打印公网链接 |
 
 ### 3.4 调试面板分组
@@ -124,10 +125,10 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（99 文件 / 977 例） | 提交前 |
+| `npm test` | vitest 全量（100 文件 / 1007 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
-| `npm run smoke` | 起 `dist/`，跑 41 项画面层 + 契约自检 | 发布前 |
+| `npm run smoke` | 起 `dist/`，跑 53 项画面层 + 契约自检 | 发布前 |
 | `npm run verify` | build → test → portable → docs → smoke 全链 | **发布前必跑** |
 | `npm run publish:preview` | 发布 `dist/` 到唯一线上地址 + 校验资源 + **打印公网链接** | **每次任务完成必跑**，把链接贴进回复 |
 | `npm run docs:check` | README 行数 / INDEX 链接 / 单文件 300 行 | 改文档后 |
@@ -183,7 +184,7 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/grass-growth-pivot.md`](systems/grass-growth-pivot.md) | v9s.46 缓慢连续生长 + 枢轴顶点动画（每节 box 刚体旋转，实现正本） |
 | [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒（实现正本） |
 | [`systems/test-scene-policy.md`](systems/test-scene-policy.md) | 单一主测试场景 + 三条规则（规则正本） |
-| [`systems/plot-assembly.md`](systems/plot-assembly.md) | 动态地块拼合 / 工位传送 / 测试按钮 / 每次任务更新线上（实现正本） |
+| [`systems/plot-assembly.md`](systems/plot-assembly.md) | 地块拼合：整数格底板 / 自带物件 / 工位传送 / 测试按钮（实现正本） |
 | [`systems/multi-agent-workflow.md`](systems/multi-agent-workflow.md) | 多 agent 分支、版本号分配、契约先行、冲突分类、合并闸门、**无人值守执行层 §11** |
 | [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 108 步手动验收 |
 | [`state/CURRENT.md`](state/CURRENT.md) | 当前状态 + 下一步（覆盖写） |
@@ -199,5 +200,5 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`decisions/ADR-006`](decisions/ADR-006-fixed-step-events.md) | 固定步长 + 显式事件队列 |
 | [`decisions/ADR-007`](decisions/ADR-007-knockback-default.md) | 默认配置反映真实手感 |
 | [`decisions/ADR-008`](decisions/ADR-008-grass.md) | 草块状态在 Core、几何在表现层、判定复用 hits |
-| [`decisions/ADR-009`](decisions/ADR-009-plot-slabs.md) | 测试场地块化：模数 5m + 整数跨格拼底板（**设计稿**） |
-| [`journal/`](journal/) | 按日期的迭代记录（32 份，2026-11-05 起；`-00` 是功能总表，`-02` 是 v9s.41 换腿、`-06` 是 v9s.45 慢放；带 `<主题>` 后缀的按内容命名） |
+| [`decisions/ADR-009`](decisions/ADR-009-plot-slabs.md) | 测试场地块化：模数 5m + 整数跨格拼底板（已实现，v9s.48） |
+| [`journal/`](journal/) | 按日期的迭代记录（36 份，2026-11-05 起；`-00` 是功能总表，`-02` 是 v9s.41 换腿、`-06` 是 v9s.45 慢放、`-08-plot-slabs` 是 v9s.48 底板；带 `<主题>` 后缀的按内容命名） |

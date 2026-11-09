@@ -17,7 +17,9 @@
  */
 import * as THREE from 'three';
 import type { GroundBasis } from '../adapters/input';
-import type { BodyTypeConfig, Box, BreakHit, DummyState, StationSpec, ViewConfig, World } from '../core';
+import type {
+  BodyTypeConfig, Box, BreakHit, DummyState, SlabSpec, StationSpec, ViewConfig, World,
+} from '../core';
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
 import { createFighterRig } from './fighter-rig';
@@ -224,6 +226,7 @@ export function createSceneView(
   world: World,
   view: ViewConfig,
   stations?: StationSpec[],
+  slabs?: SlabSpec[],
 ): SceneView {
   const w0 = Math.max(1, container.clientWidth);
   const h0 = Math.max(1, container.clientHeight);
@@ -239,14 +242,23 @@ export function createSceneView(
   scene.background = new THREE.Color('#12161d');
 
   scene.add(new THREE.HemisphereLight(0xa8c8ee, 0x2a2f38, 1.15));
+  // v9s.47：底板拼合后不再是 32×32，阴影相机跟着包围盒走 —— 否则地图远端没有影子。
+  const mapCx = (world.gridMeta.minX + world.gridMeta.maxX) / 2;
+  const mapCz = (world.gridMeta.minZ + world.gridMeta.maxZ) / 2;
+  const mapHalf = Math.max(
+    world.gridMeta.maxX - world.gridMeta.minX,
+    world.gridMeta.maxZ - world.gridMeta.minZ,
+  ) / 2 + 4;
   const sun = new THREE.DirectionalLight(0xfff2dc, 1.5);
-  sun.position.set(9, 18, 11);
+  sun.position.set(mapCx + 9, 18, mapCz + 11);
+  sun.target.position.set(mapCx, 0, mapCz);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
+  sun.shadow.mapSize.set(2048, 2048);
   const sc = sun.shadow.camera;
-  sc.left = -20; sc.right = 20; sc.top = 20; sc.bottom = -20;
-  sc.near = 1; sc.far = 60;
+  sc.left = -mapHalf; sc.right = mapHalf; sc.top = mapHalf; sc.bottom = -mapHalf;
+  sc.near = 1; sc.far = 90;
   scene.add(sun);
+  scene.add(sun.target);
 
   // ---- 碰撞白盒 ----
   // v9s.38：地块默认**不透明**。旧版给每一块都设了 `transparent: true`（即使 opacity=1），
@@ -278,14 +290,38 @@ export function createSceneView(
   scene.add(boxGroup);
 
   // ---- 地面网格 ----
-  const gridSize = world.gridMeta.maxX - world.gridMeta.minX;
-  const grid = new THREE.GridHelper(gridSize, gridSize, 0x4a5c70, 0x33404d);
-  grid.position.y = 0.002;
-  grid.visible = view.showGrid;
-  scene.add(grid);
+  // v9s.47：底板不再是 32×32 的正方形，`GridHelper` 只能画正方形，改用自建线段，
+  // 按地板的真实包围盒铺（30×40 这种长方形也能贴边），每 5m 一条亮线当尺子。
+  const gb = world.gridMeta;
+  const minorPts: number[] = [];
+  const majorPts: number[] = [];
+  const GY = 0.002;
+  const step = 1;
+  for (let x = gb.minX; x <= gb.maxX + 1e-6; x += step) {
+    const arr = Math.round(x / step) % 5 === 0 ? majorPts : minorPts;
+    arr.push(x, GY, gb.minZ, x, GY, gb.maxZ);
+  }
+  for (let z = gb.minZ; z <= gb.maxZ + 1e-6; z += step) {
+    const arr = Math.round(z / step) % 5 === 0 ? majorPts : minorPts;
+    arr.push(gb.minX, GY, z, gb.maxX, GY, z);
+  }
+  const gridGroup = new THREE.Group();
+  const gridColors: Array<[number[], number, number]> = [
+    [minorPts, 0x33404d, 0.5],
+    [majorPts, 0x4a5c70, 0.85],
+  ];
+  for (const [pts, color, opacity] of gridColors) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    gridGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+      color, transparent: true, opacity,
+    })));
+  }
+  gridGroup.visible = view.showGrid;
+  scene.add(gridGroup);
 
   // ---- v9s.15 测试工位标识（纯表现：地面盘 / 标牌 / 量具） ----
-  const lab = createLabLayer(stations, view);
+  const lab = createLabLayer(stations, view, slabs);
   scene.add(lab.group);
 
   // ---- v9s.39 体素草块 ----
@@ -1271,7 +1307,7 @@ export function createSceneView(
       }
     },
     setGridVisible(v): void {
-      grid.visible = v;
+      gridGroup.visible = v;
     },
     setLabVisible(v): void {
       lab.setVisible(v);

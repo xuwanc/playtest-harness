@@ -2,9 +2,20 @@
   "id": "sparring-demo",
   "name": "陪练试验场",
   "hint": "动态拼合示范地块 · 点「生成 4 人」就地摆出假人 + 持械陪练，用完点「清除」回基线",
+  "span": [
+    2,
+    2
+  ],
   "radius": 2.0,
   "color": "#7fd8c0",
   "owner": "v9s.43 动态拼合示范（auto 地块，不写世界坐标，由 assemblePlots 自动分配槽位）",
+  "grass": {
+    "minCellX": -9,
+    "maxCellX": 9,
+    "minCellZ": -9,
+    "maxCellZ": 9,
+    "density": 0.72
+  },
   "testSpawn": {
     "label": "生成 4 人",
     "dummies": 2,

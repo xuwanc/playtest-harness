@@ -802,33 +802,8 @@
       "saturation": 2.6
     },
     "dummies": {
-      "count": 6,
-      "spawn": [
-        {
-          "x": -11.1,
-          "z": -8.35
-        },
-        {
-          "x": -9.5,
-          "z": -8.35
-        },
-        {
-          "x": -7.9,
-          "z": -8.35
-        },
-        {
-          "x": 0,
-          "z": -10.2
-        },
-        {
-          "x": -9.5,
-          "z": 0
-        },
-        {
-          "x": -9.5,
-          "z": 7.2
-        }
-      ],
+      "count": 0,
+      "spawn": [],
       "initialModes": [
         "idle",
         "keep-distance",
@@ -857,11 +832,7 @@
       "attackRecovery": 0.4,
       "fighters": {
         "weapons": ["sword-shield", "dual-swords", "greatsword"],
-        "spawn": [
-          { "x": -3.6, "z": 3.8 },
-          { "x": 3.9, "z": 3.6 },
-          { "x": 0.2, "z": 5.9 }
-        ],
+        "spawn": [],
         "initialModes": ["spar", "spar", "spar"],
         "moveSpeed": 2.1,
         "attackInterval": 3.4,
@@ -903,112 +874,9 @@
       "size": 32,
       "thickness": 0.4
     },
-    "steps": [
-      {
-        "id": "stair-1",
-        "x": 6.6,
-        "z": -5.6,
-        "width": 2.4,
-        "depth": 0.9,
-        "height": 0.2
-      },
-      {
-        "id": "stair-2",
-        "x": 6.6,
-        "z": -6.5,
-        "width": 2.4,
-        "depth": 0.9,
-        "height": 0.4
-      },
-      {
-        "id": "stair-3",
-        "x": 6.6,
-        "z": -7.4,
-        "width": 2.4,
-        "depth": 0.9,
-        "height": 0.6
-      },
-      {
-        "id": "stair-4",
-        "x": 6.6,
-        "z": -8.3,
-        "width": 2.4,
-        "depth": 0.9,
-        "height": 0.8
-      },
-      {
-        "id": "plateau",
-        "x": 6.6,
-        "z": -9.6,
-        "width": 2.4,
-        "depth": 1.6,
-        "height": 0.8
-      },
-      {
-        "id": "block-060",
-        "x": 11.4,
-        "z": -6.0,
-        "width": 1.4,
-        "depth": 1.4,
-        "height": 0.6
-      },
-      {
-        "id": "block-090",
-        "x": 11.4,
-        "z": -7.9,
-        "width": 1.4,
-        "depth": 1.4,
-        "height": 0.9
-      },
-      {
-        "id": "block-120",
-        "x": 11.4,
-        "z": -9.8,
-        "width": 1.4,
-        "depth": 1.4,
-        "height": 1.2
-      }
-    ],
-    "doorways": [
-      {
-        "id": "gate-wide",
-        "x": 6.6,
-        "z": -4.3,
-        "openingWidth": 2.4,
-        "openingHeight": 1.85,
-        "wallThickness": 0.5,
-        "wallSpan": 1.1,
-        "wallHeight": 2
-      },
-      {
-        "id": "gate-narrow",
-        "x": 11.4,
-        "z": -4.3,
-        "openingWidth": 0.5,
-        "openingHeight": 1.85,
-        "wallThickness": 0.5,
-        "wallSpan": 1.1,
-        "wallHeight": 2
-      }
-    ],
-    "obstacles": [
-      {
-        "id": "crate-hub",
-        "x": 2.5,
-        "z": -2.5,
-        "width": 1.1,
-        "depth": 1.1,
-        "height": 0.8
-      },
-      {
-        "id": "pillar-sw",
-        "x": -14.3,
-        "z": 12.8,
-        "width": 1.2,
-        "depth": 1.2,
-        "height": 2.2
-      }
-    ],
+    "steps": [],
+    "doorways": [],
+    "obstacles": [],
     "grid": {
       "cellSize": 0.5,
       "minX": -16,
@@ -1017,10 +885,10 @@
       "maxZ": 16
     },
     "grass": {
-      "minCellX": -12,
-      "maxCellX": 12,
-      "minCellZ": 4,
-      "maxCellZ": 24,
+      "minCellX": 0,
+      "maxCellX": 0,
+      "minCellZ": 0,
+      "maxCellZ": 0,
       "density": 0.72,
       "bladesPerPatch": [3, 6],
       "avoidMargin": 0.45,

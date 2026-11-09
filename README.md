@@ -69,8 +69,8 @@ src/app.ts          组装层（唯一同时认识 Core 与 Web 的地方）
 config/game.json    可调数值（core.* 逻辑 / view.* 表现 / scene.* 关卡；工位已迁出）
 config/plots/*.json 一地块一文件（不写世界坐标，assemblePlots 动态拼合）
 index.html          唯一主测试场景（单入口）
-tests/              vitest：99 文件 / 977 例
-tools/              smoke.py（41 项自检）、clip-lab（动作验证台）、publish-preview.mjs（线上发布）
+tests/              vitest：100 文件 / 1007 例
+tools/              smoke.py（53 项自检）、clip-lab（动作验证台）、publish-preview.mjs（线上发布）
 shots/              截图（唯一存放处，整目录不入库；见 docs/assets/conventions.md）
 docs/               INDEX 索引 + systems / state / decisions / journal / checklists / assets
 ```

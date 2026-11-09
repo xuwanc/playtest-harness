@@ -56,7 +56,9 @@ export function startApp(): void {
 
   // 组装层是唯一同时认识 Core 与 Web 的地方；换平台时只重写这一层。
   const world = createWorld(CORE_CONFIG, SCENE_CONFIG);
-  const view = createSceneView(container, world, VIEW_CONFIG, SCENE_CONFIG.stations);
+  const view = createSceneView(
+    container, world, VIEW_CONFIG, SCENE_CONFIG.stations, SCENE_CONFIG.slabs,
+  );
   const clock = createClock(world);
   const hud = createHud(hudEl);
   // v9r：状态 / 手感 / 调试收成一排胶囊，默认全部收起；v9s：点画布不再自动收起，
@@ -428,15 +430,28 @@ export function startApp(): void {
       dummies: world.dummies.length,
       // 表现层已建好的渲染对象数：应与 dummies 严格相等，否则「生成了但没画出来」。
       rendered: view.dummyRenderCount(),
+      // v9s.47：地板读数 —— 验收「每块地都有地板、地板铺满包围盒、没有洞」直接读这两个。
+      bounds: PLOT_ASSEMBLY.bounds,
+      worldBounds: world.config.worldBounds,
+      slabs: PLOT_ASSEMBLY.slabs.map((s) => ({
+        plotId: s.plotId,
+        cell: s.cell,
+        span: s.span,
+        rect: [s.minX, s.maxX, s.minZ, s.maxZ],
+        top: s.top,
+      })),
       plots: PLOT_ASSEMBLY.plots.map((p) => ({
         id: p.id,
         index: p.index,
         placement: p.placement,
         slot: p.slot,
+        cell: p.cell,
+        span: p.span,
         centerX: p.centerX,
         centerZ: p.centerZ,
         spawnX: p.station.spawnX,
         spawnZ: p.station.spawnZ,
+        slab: [p.slab.minX, p.slab.maxX, p.slab.minZ, p.slab.maxZ],
         hasTest: !!p.testSpawn,
       })),
     }),

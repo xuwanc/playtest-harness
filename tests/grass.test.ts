@@ -61,12 +61,24 @@ describe('v9s.39 体素草块 · 生成契约', () => {
   });
 
   it('2×2 格 footprint、1~2 格高、参次不齐（高度与朝向都有分布）', () => {
-    const g = grassWorld().grass;
+    const w = grassWorld();
+    const g = w.grass;
     const cell = g.cellSize;
+    const foot = w.config.grass.footprintCells;
+    // v9s.47：主草场已改为地块自带（全局区域 min=max=0），格网奇偶不再有统一基准。
+    // 改为校验「同一行内相邻 patch 间距 = footprint」，这才是 footprint 的真实语义。
+    const byRow = new Map<number, number[]>();
     for (const p of g.patches) {
-      // plot 可能落在 minCell 之前，差值取模会得到 -0，取绝对值只校验「同奇偶」
-      expect(Math.abs((p.cellX - g.spec.minCellX) % 2)).toBe(0);
-      expect(Math.abs((p.cellZ - g.spec.minCellZ) % 2)).toBe(0);
+      const row = byRow.get(p.cellZ) ?? [];
+      row.push(p.cellX);
+      byRow.set(p.cellZ, row);
+    }
+    for (const xs of byRow.values()) {
+      const sorted = [...xs].sort((a, b) => a - b);
+      for (let i = 1; i < sorted.length; i++) {
+        expect(sorted[i] - sorted[i - 1]).toBeGreaterThanOrEqual(foot);
+        expect((sorted[i] - sorted[i - 1]) % foot).toBe(0);
+      }
     }
     for (const b of g.blades) {
       expect(b.height).toBeGreaterThanOrEqual(cell - 1e-6);

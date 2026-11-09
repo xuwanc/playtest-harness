@@ -380,15 +380,25 @@ def main() -> int:
                     key=lambda q: q["index"],
                 )
                 auto = [p for p in plot["plots"] if p["placement"] == "auto"]
-                check("历史 7 个 pinned 工位零回归（index 1..7）",
-                      len(pinned) == 7
-                      and all(p["index"] == i + 1 for i, p in enumerate(pinned)),
-                      f"pinned={len(pinned)}")
-                check("auto 地块落点 = 拼合后中心（工位传送读拼合位置）",
-                      len(auto) >= 1
-                      and all(abs(a["spawnX"] - a["centerX"]) < 1e-6
-                              and abs(a["spawnZ"] - a["centerZ"]) < 1e-6 for a in auto),
-                      str(auto[:1]))
+                # v9s.47：pin 从前是「7 块手写 anchor」，现在只有 hub 一块钉在原点，
+                # 其余全部按整数格 first-fit。判据改为「pin 唯一 + index 1..7 的历史地块都在」。
+                hist_ids = {"hub", "rings", "windup", "terrain", "meter", "dash", "gait"}
+                hist = [p for p in plot["plots"] if p["id"] in hist_ids]
+                check("hub 是唯一定在原点的地块，其余按整数格自动拼合",
+                      len(pinned) == 1 and pinned[0]["id"] == "hub"
+                      and abs(pinned[0]["centerX"]) < 1e-6 and abs(pinned[0]["centerZ"]) < 1e-6
+                      and len(auto) == plot["count"] - 1,
+                      f"pinned={[q['id'] for q in pinned]} auto={len(auto)}")
+                check("历史 7 块地仍在（index 1..7 各一块）",
+                      len(hist) == 7 and all(p["index"] <= 7 for p in hist),
+                      f"hist={sorted(p['id'] for p in hist)}")
+                # 落点必须落在自己的地板里（地块挪了，传送就跟着挪）
+                check("每个工位的落点都在自己的地板范围内（传送读拼合结果）",
+                      all(p["slab"][0] - 1e-6 <= p["spawnX"] <= p["slab"][1] + 1e-6
+                          and p["slab"][2] - 1e-6 <= p["spawnZ"] <= p["slab"][3] + 1e-6
+                          for p in plot["plots"]),
+                      str([p["id"] for p in plot["plots"]
+                           if not (p["slab"][2] - 1e-6 <= p["spawnZ"] <= p["slab"][3] + 1e-6)]))
                 check("表现层渲染对象与 Core dummies 对齐",
                       plot["rendered"] == plot["dummies"],
                       f"rendered={plot['rendered']} dummies={plot['dummies']}")
@@ -426,12 +436,15 @@ def main() -> int:
                       and spawned["p"]["rendered"] == spawned["d"],
                       f"base={base} d={spawned['d']} rendered={spawned['p']['rendered']} "
                       f"testUnits={spawned['p']['testUnits']}")
+                # 按钮点的是「带 testSpawn 的地块」，不一定是 id 序第一块 auto
+                test_plot = [p for p in plot["plots"] if p["hasTest"]]
                 check("点测试按钮先传送到该地块的拼合落点",
-                      bool(auto)
-                      and abs(spawned["x"] - auto[0]["spawnX"]) < 1e-6
-                      and abs(spawned["z"] - auto[0]["spawnZ"]) < 1e-6,
+                      bool(test_plot)
+                      and abs(spawned["x"] - test_plot[0]["spawnX"]) < 1e-6
+                      and abs(spawned["z"] - test_plot[0]["spawnZ"]) < 1e-6,
                       f"player=({spawned['x']},{spawned['z']}) "
-                      f"spawn=({auto[0]['spawnX'] if auto else '?'},{auto[0]['spawnZ'] if auto else '?'})")
+                      f"spawn=({test_plot[0]['spawnX'] if test_plot else '?'},"
+                      f"{test_plot[0]['spawnZ'] if test_plot else '?'})")
 
                 page.evaluate("""() => document.querySelector('[data-clear-test-units]')
                     .dispatchEvent(new PointerEvent('pointerdown', {bubbles:true, cancelable:true}))""")
@@ -724,6 +737,45 @@ def main() -> int:
                 # 转身途中不该再把胯拖到后退族的 −48° 再拖回来
                 check(f"慢放转身下盘不「拧出去再拧回来」（最低 {hipd['lo']:.1f}° > −6°）",
                       hipd["lo"] > -6, str(hipd))
+
+                # ---- v9s.47：底板按地块拆开 ----
+                slab = page.evaluate("""() => {
+                  const h = window.__harness, p = h.plotDebug();
+                  const inside = (s, x, z) => x >= s.rect[0] - 1e-6 && x <= s.rect[1] + 1e-6
+                                           && z >= s.rect[2] - 1e-6 && z <= s.rect[3] + 1e-6;
+                  // 0.5m 采样：包围盒内每个点都必须落在某块地板里（没有洞）
+                  const step = 0.5;
+                  let holes = 0, total = 0;
+                  for (let x = p.bounds.minX; x <= p.bounds.maxX + 1e-6; x += step) {
+                    for (let z = p.bounds.minZ; z <= p.bounds.maxZ + 1e-6; z += step) {
+                      total += 1;
+                      if (!p.slabs.some(s => inside(s, x, z))) holes += 1;
+                    }
+                  }
+                  let overlaps = 0;
+                  for (let i = 0; i < p.slabs.length; i++) {
+                    for (let j = i + 1; j < p.slabs.length; j++) {
+                      const a = p.slabs[i].rect, b = p.slabs[j].rect;
+                      if (Math.min(a[1], b[1]) - Math.max(a[0], b[0]) > 1e-6
+                       && Math.min(a[3], b[3]) - Math.max(a[2], b[2]) > 1e-6) overlaps += 1;
+                    }
+                  }
+                  const units = h.world.dummies.map(d => [d.position.x, d.position.z]);
+                  return { count: p.count, slabs: p.slabs.length,
+                           fill: p.slabs.filter(s => !s.plotId).length,
+                           holes, total, overlaps,
+                           tops: [...new Set(p.slabs.map(s => s.top))],
+                           noSlab: p.plots.filter(q => !q.slab).map(q => q.id),
+                           floating: units.filter(([x, z]) => !p.slabs.some(s => inside(s, x, z))).length,
+                           units: units.length,
+                           bounds: p.bounds, worldBounds: p.worldBounds };
+                }""")
+                check(f"每块测试地都自带地板（{slab['count']} 块地 / {slab['slabs']} 块板 / {slab['fill']} 块填充）",
+                      not slab["noSlab"] and slab["slabs"] >= slab["count"], str(slab["noSlab"]))
+                check(f"地板铺满包围盒、无缝无洞（0.5m 采样 {slab['total']} 点，洞 {slab['holes']}）",
+                      slab["holes"] == 0 and slab["overlaps"] == 0, str(slab))
+                check(f"所有单位都站在地板上（{slab['units']} 个，悬空 {slab['floating']}）",
+                      slab["floating"] == 0 and slab["tops"] == [0], str(slab))
 
                 # ---- v9s.x：可破坏物件（断面高度 / 切口方向 / 斜切渲染）----
                 br = page.evaluate("""() => {

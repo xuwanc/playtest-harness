@@ -3,20 +3,108 @@
   "index": 4,
   "name": "地形 / 门洞",
   "hint": "宽门 2.4m / 窄门 0.5m · 0.2m 台阶可走，0.6/0.9/1.2m 要跳",
+  "span": [
+    2,
+    2
+  ],
   "shape": "square",
-  "radius": 5.2,
+  "radius": 4.8,
   "color": "#7fb8d8",
   "owner": "v9s.15 历史固定工位",
-  "anchor": {
-    "x": 8.9,
-    "z": -7.4
-  },
   "spawn": {
     "dx": 0,
     "dz": 4.6
   },
   "label": {
     "dx": 0,
-    "dz": -4.5
-  }
+    "dz": -4.2
+  },
+  "steps": [
+    {
+      "id": "stair-1",
+      "dx": -2.3,
+      "dz": 1.8,
+      "width": 2.4,
+      "depth": 0.9,
+      "height": 0.2
+    },
+    {
+      "id": "stair-2",
+      "dx": -2.3,
+      "dz": 0.9,
+      "width": 2.4,
+      "depth": 0.9,
+      "height": 0.4
+    },
+    {
+      "id": "stair-3",
+      "dx": -2.3,
+      "dz": 0.0,
+      "width": 2.4,
+      "depth": 0.9,
+      "height": 0.6
+    },
+    {
+      "id": "stair-4",
+      "dx": -2.3,
+      "dz": -0.9,
+      "width": 2.4,
+      "depth": 0.9,
+      "height": 0.8
+    },
+    {
+      "id": "plateau",
+      "dx": -2.3,
+      "dz": -2.2,
+      "width": 2.4,
+      "depth": 1.6,
+      "height": 0.8
+    },
+    {
+      "id": "block-060",
+      "dx": 2.5,
+      "dz": 1.4,
+      "width": 1.4,
+      "depth": 1.4,
+      "height": 0.6
+    },
+    {
+      "id": "block-090",
+      "dx": 2.5,
+      "dz": -0.5,
+      "width": 1.4,
+      "depth": 1.4,
+      "height": 0.9
+    },
+    {
+      "id": "block-120",
+      "dx": 2.5,
+      "dz": -2.4,
+      "width": 1.4,
+      "depth": 1.4,
+      "height": 1.2
+    }
+  ],
+  "doorways": [
+    {
+      "id": "gate-wide",
+      "dx": -2.3,
+      "dz": 3.1,
+      "openingWidth": 2.4,
+      "openingHeight": 1.85,
+      "wallThickness": 0.5,
+      "wallSpan": 1.1,
+      "wallHeight": 2.0
+    },
+    {
+      "id": "gate-narrow",
+      "dx": 2.5,
+      "dz": 3.1,
+      "openingWidth": 0.5,
+      "openingHeight": 1.85,
+      "wallThickness": 0.5,
+      "wallSpan": 1.1,
+      "wallHeight": 2.0
+    }
+  ]
 }

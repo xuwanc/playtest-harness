@@ -1,4 +1,4 @@
-# 测试场景约定：单一主场景 + 动态拼合（v9s.46）
+# 测试场景约定：单一主场景 + 动态拼合（v9s.47）
 
 > **规则正本**。用户在 2026-11-09 定的三条规则，别的 agent 拉下 git 后按此执行。
 > 3 分钟快速入口：[`../../AGENTS.md`](../../AGENTS.md)。
@@ -17,12 +17,17 @@
 
 v9s.46 起，**取代**旧的「往 `config/game.json` 的 `scene.stations[]` 追加一条 + 手写绝对坐标」。
 
-- 一地块一文件 `config/plots/<id>.json`，只写 `id/name/hint` 与相对布局意图；
-- `config/game.json` 里**已删除** `scene.stations` 与 `scene.grass.plots`，不要再往回加；
-- `assemblePlots()`（`src/core/plot-assembly.ts`）按 `id` 字典序排序、自动分配不重叠槽位，
-  **两边同时想加同一个位置也各得其所、自动顺延**，从根上消除 git 冲突与地块叠放；
+- 一地块一文件 `config/plots/<id>.json`，只写 `id/name/hint`、占几格（`span`）与相对偏移；
+- `config/game.json` 里**已清空** `scene.stations` / `slabs` / `steps` / `doorways` / `obstacles` /
+  `dummies.spawn`，不要再往回加坐标；
+- `assemblePlots()`（`src/core/plot-assembly.ts`）按 `id` 字典序排序、整数格 first-fit 占位，
+  **不重叠是构造性的**（占用表是 Set），从根上消除 git 冲突与地块叠放；
+- **每块地自带一张 `span × 5 m` 的承重地板**，进场景时拼成连续地面（空隙由填充板补齐），
+  第 10 块地只往地图边缘长，不挪旧板；
 - **工位传送读拼合后的 `spawnX/spawnZ`**：面板自动多一行、点一下就传送到实际位置，
   不用改 `src/config.ts` / `app.ts` / `lab-panel.ts`，不用手写任何坐标；
+- **地形 / 门洞 / 障碍 / 初始假人 / 草块也写在地块文件里**（`dx/dz` 相对坐标），
+  谁的地块谁负责摆；`worldBounds` 与寻路格网从拼合包围盒推导，不再手写 ±15.5；
 - 地块带 `testSpawn` 时，面板自动多一枚「生成 N 人」测试按钮，先传送到该地块、再就地
   生成假人 / 持械陪练；「清除测试单位」回到配置基线；
 - 新功能自带它需要的地块，和代码**同批提交**，别等别人补。
@@ -35,6 +40,7 @@ cat > config/plots/my-feature.json <<'JSON'
   "id": "my-feature",
   "name": "我的功能试炼场",
   "hint": "点生成按钮摆出陪练，测 XX 手感",
+  "span": [2, 2],
   "owner": "agent-A",
   "testSpawn": { "label": "生成 3 人", "dummies": 1, "fighters": 2 }
 }
@@ -59,10 +65,10 @@ npm run publish:preview        # 更新线上 + 打印链接，贴进任务回�
 
 - 效果类改动给**可复现入口**：主场景按钮 / 快捷键 / `__harness.*` 调试读数，
   或 `tools/*-shot.py` 截图脚本（产物进 `shots/<批次>/`，整目录不入库）。
-- 动态拼合：`__harness.plotDebug()`（地块数 / `placement` / `slot` / 拼合中心 / 传送落点 /
-  `diagnostics` / `dummies` / `rendered` / `testUnits`）、`__harness.spawnAt(id)`、
-  `__harness.clearSpawned()`、`__harness.lab.goto(id)`。
-  `rendered` 应始终等于 `world.dummies.length`（表现层真的扩容了）。
+- 动态拼合：`__harness.plotDebug()`（`count` / `diagnostics` / `bounds` / `slabs[]` /
+  `plots[]`（含 `cell`·`span`·`slab`）/ `dummies` / `rendered` / `testUnits`）、
+  `__harness.spawnAt(id)`、`__harness.clearSpawned()`、`__harness.lab.goto(id)`。
+  `rendered` 应始终等于 `world.dummies.length`；`slabs` 里 `plotId === ''` 的是填充板。
 - 风场 A/B：主场景顶部「风：开」按钮（`G` 键）切 `core.grass.wind.enabled`，
   `__harness.windDebug()` 区分 `configured`（配置）/ `rendered`（shader 实跑值）。
 - 草与实例读数：`__harness.grassDebug()`（instances / drawCalls / dirty / bent / cut / debris）。
@@ -86,4 +92,5 @@ npm run publish:preview        # 更新线上 + 打印链接，贴进任务回�
 - 动态拼合实现正本：[`plot-assembly.md`](plot-assembly.md)
 - 分支与冲突分类：[`multi-agent-workflow.md`](multi-agent-workflow.md)
 - 草块实现：[`grass.md`](grass.md) · 决策修订：[`../decisions/ADR-008-grass.md`](../decisions/ADR-008-grass.md)
-- 关卡地形 / 碰撞：`config/game.json` → `scene.*`（`ground` / `steps` / `doorways` / `obstacles` / `grid` / `grass`）
+- 关卡地形 / 碰撞：每块地的 `steps` / `doorways` / `obstacles`（写在 `config/plots/<id>.json`）
+  + `config/game.json` → `scene.grid`（其余由拼合器推导）

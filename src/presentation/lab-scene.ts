@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { StationSpec, ViewConfig } from '../core';
+import type { SlabSpec, StationSpec, ViewConfig } from '../core';
 
 /**
  * v9s.15 · 测试场标识层（纯表现，只读 stations 配置）。
@@ -30,6 +30,7 @@ const Y_TEXT = 0.016;
 export function createLabLayer(
   stations: StationSpec[] | undefined,
   view: ViewConfig,
+  slabs: SlabSpec[] = [],
 ): LabLayer {
   const cfg = view.lab;
   const group = new THREE.Group();
@@ -157,7 +158,56 @@ export function createLabLayer(
     return g;
   }
 
+  /**
+   * v9s.47 · 地板外框：每块测试地一圈主色细线 + 四角小方块。
+   *
+   * 底板已经按地块拆开了，但相邻板齐边同高、走上去没有台阶 —— 所以「这是几块板」
+   * 只能靠描边表示。放在 y=0.006（低于地面盘 0.012），不挡脚下的指示环。
+   * 填充板（plotId 为空）不画：它们是补齐包围盒用的，不属于任何测试地。
+   */
+  function slabFrame(s: SlabSpec, color: string): THREE.Group {
+    const g = new THREE.Group();
+    const w = s.maxX - s.minX;
+    const d = s.maxZ - s.minZ;
+    const cx = (s.minX + s.maxX) / 2;
+    const cz = (s.minZ + s.maxZ) / 2;
+    const t = 0.09;
+    const y = 0.006;
+    const edges: Array<[number, number, number, number]> = [
+      [cx, s.minZ + t / 2, w, t],
+      [cx, s.maxZ - t / 2, w, t],
+      [s.minX + t / 2, cz, t, d],
+      [s.maxX - t / 2, cz, t, d],
+    ];
+    for (const [x, z, ww, dd] of edges) {
+      const m = flat(trackGeo(new THREE.PlaneGeometry(ww, dd)), color, 0.38, y);
+      m.position.set(x, y, z);
+      g.add(m);
+    }
+    const corner = 0.42;
+    for (const [x, z] of [
+      [s.minX + corner / 2, s.minZ + corner / 2],
+      [s.maxX - corner / 2, s.minZ + corner / 2],
+      [s.minX + corner / 2, s.maxZ - corner / 2],
+      [s.maxX - corner / 2, s.maxZ - corner / 2],
+    ]) {
+      const m = flat(trackGeo(new THREE.PlaneGeometry(corner, corner)), color, 0.55, y);
+      m.position.set(x, y, z);
+      g.add(m);
+    }
+    return g;
+  }
+
   const root = new THREE.Group();
+
+  // 板框先铺（在盘的下面一层），颜色取该地块工位的主色
+  const colorOf = new Map<string, string>();
+  for (const st of stations ?? []) colorOf.set(st.id, st.color);
+  for (const s of slabs) {
+    if (!s.plotId) continue;
+    root.add(slabFrame(s, colorOf.get(s.plotId) ?? '#7f8fa0'));
+  }
+
 
   for (const st of stations ?? []) {
     const pad = new THREE.Group();

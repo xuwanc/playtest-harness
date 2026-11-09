@@ -1,5 +1,5 @@
 import raw from '../config/game.json';
-import { assemblePlots, DEFAULT_PLOT_LAYOUT } from './core';
+import { applyPlotAssembly, assemblePlots, DEFAULT_PLOT_LAYOUT } from './core';
 import type {
   AppConfig, AssembledPlot, CoreConfig, PlotAssembly, PlotDef,
   PlotLayout, SceneConfig, ViewConfig,
@@ -39,7 +39,7 @@ const PLOT_DEFS: PlotDef[] = Object.values(plotModules).filter(
 /** 自动槽位布局。当前用 Core 默认值；要改布局只需覆盖这一处。 */
 export const PLOT_LAYOUT: PlotLayout = DEFAULT_PLOT_LAYOUT;
 
-/** 拼合结果（含 diagnostics：重复 id / 顺延 / 无可用槽位）。 */
+/** 拼合结果（含 diagnostics：重复 id / 无可用槽位）。 */
 export const PLOT_ASSEMBLY: PlotAssembly = assemblePlots(PLOT_DEFS, PLOT_LAYOUT);
 
 /** 拼合后的地块列表，供工位面板生成「测试按钮」用。 */
@@ -49,9 +49,8 @@ export const CORE_CONFIG: CoreConfig = copy(source.core);
 export const SCENE_CONFIG: SceneConfig = copy(source.scene);
 export const VIEW_CONFIG: ViewConfig = copy(source.view);
 
-// 注入拼合结果。config/game.json 里已不再有 scene.stations / scene.grass.plots，
-// 这两处是运行时唯一来源；测试夹具（tests/helpers.ts）用同一套拼合器保持一致。
-SCENE_CONFIG.stations = PLOT_ASSEMBLY.stations;
-if (SCENE_CONFIG.grass) SCENE_CONFIG.grass.plots = PLOT_ASSEMBLY.grassPlots;
-// v9s.x：可破坏物件同样由拼合器把相对偏移解算成绝对坐标后注入。
-SCENE_CONFIG.destructibles = PLOT_ASSEMBLY.destructibles;
+// 注入拼合结果。`config/game.json` 里已不再有 scene.stations / scene.slabs / steps /
+// doorways / obstacles / 假人坐标 —— 全部由 `config/plots/*.json` 拼合后注入。
+// 注入逻辑只写一份（`applyPlotAssembly`），测试夹具走同一条路径，两边不会漂。
+applyPlotAssembly(CORE_CONFIG, SCENE_CONFIG, PLOT_ASSEMBLY, PLOT_LAYOUT);
+

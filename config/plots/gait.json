@@ -3,14 +3,14 @@
   "index": 7,
   "name": "侧后方步态",
   "hint": "面向假人贴到 1.2m，沿引线按 90 / 135 / 180 走",
+  "span": [
+    2,
+    2
+  ],
   "shape": "circle",
   "radius": 3.2,
   "color": "#6fc9a0",
   "owner": "v9s.15 历史固定工位",
-  "anchor": {
-    "x": -9.5,
-    "z": 0
-  },
   "spawn": {
     "dx": 0,
     "dz": 2.6
@@ -18,5 +18,12 @@
   "label": {
     "dx": 0,
     "dz": -2.5
-  }
+  },
+  "dummies": [
+    {
+      "dx": 0,
+      "dz": 0,
+      "mode": "follow"
+    }
+  ]
 }

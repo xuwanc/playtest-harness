@@ -25,14 +25,10 @@ function soloDummy(w: World, mode: World['dummies'][number]['mode'], homeX: numb
 describe('v9s.15 · 测试场工位布局', () => {
   const stations = CONFIG.scene.stations ?? [];
 
-  it('历史 7 个 pinned 工位零回归，index 1..7 唯一；新地块 index 从 8 起', () => {
-    // v9s.43：scene.stations 由 assemblePlots() 从 config/plots/*.json 动态拼合，
-    // agent 可继续加地块，因此这里不写死总数，只保证历史 7 个的坐标逐字节不变。
+  it('9 块地各占一格区、index 唯一；hub 钉在原点，新地块按 id 序顺延', () => {
+    // v9s.47：地块改为「5m 模数 + 整数格 first-fit」，坐标随布局走，不再逐字节冻结。
+    // 这里只锁契约：每块地有唯一 index、有独立地板、hub 在原点、history 7 块都在。
     expect(stations.length).toBeGreaterThanOrEqual(7);
-    const pinned = stations.filter((s) => s.index >= 1 && s.index <= 7);
-    expect(pinned).toHaveLength(7);
-    expect(pinned.map((s) => s.index).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
-    expect(new Set(pinned.map((s) => s.id)).size).toBe(7);
     expect(new Set(stations.map((s) => s.index)).size).toBe(stations.length);
     for (const s of stations) {
       expect(s.name.length).toBeGreaterThan(0);
@@ -40,15 +36,41 @@ describe('v9s.15 · 测试场工位布局', () => {
       expect(s.radius).toBeGreaterThan(0);
       expect(s.color).toMatch(/^#[0-9a-f]{6}$/i);
     }
-    // 历史 7 个工位的绝对坐标（拼合器不得改动）
-    expect(stationById(stations, 'hub')?.x).toBe(0);
-    expect(stationById(stations, 'gait')?.spawnZ).toBe(2.6);
-    expect(stationById(stations, 'dash')?.labelX).toBe(7.0);
-    // 动态拼合出来的示范地块：index 顺延，落点 = 拼合后的中心
+    // 历史 7 块仍在，index 1..7
+    for (const id of ['hub', 'rings', 'windup', 'terrain', 'meter', 'dash', 'gait']) {
+      const s = stationById(stations, id);
+      expect(s, id).toBeDefined();
+      expect(s!.index, id).toBeLessThanOrEqual(7);
+    }
+    // hub 是唯一的 pin：板中心 = 世界原点 = 出生点
+    const hub = stationById(stations, 'hub')!;
+    expect([hub.x, hub.z]).toEqual([0, 0]);
+    const hubPlot = CONFIG.scene.slabs!.find((b) => b.plotId === 'hub')!;
+    expect([hubPlot.minX, hubPlot.maxX, hubPlot.minZ, hubPlot.maxZ]).toEqual([-5, 5, -5, 5]);
+    expect(CONFIG.core.spawn).toMatchObject({ x: 0, z: 0 });
+    // 动态拼合出来的示范地块：index 顺延到 8 之后，落点 = 板中心
     const auto = stations.find((s) => s.index > 7);
     expect(auto).toBeDefined();
-    expect(auto!.spawnX).toBe(0);
-    expect(auto!.spawnZ).toBe(14);
+    expect([auto!.spawnX, auto!.spawnZ])
+      .toEqual([auto!.x, auto!.z]);
+  });
+
+  it('每块地都有一块尺寸 = 占格 × 5m 的地板，且齐边同高', () => {
+    const slabs = CONFIG.scene.slabs ?? [];
+    const plots = CONFIG.scene.stations ?? [];
+    expect(slabs.length).toBeGreaterThanOrEqual(plots.length);
+    const cell = 5;
+    for (const p of plots) {
+      const s = slabs.find((b) => b.plotId === p.id);
+      expect(s, p.id).toBeDefined();
+      expect(s!.top).toBe(0);
+      expect(s!.thickness).toBeGreaterThan(0);
+      // 中心与工位中心一致
+      expect((s!.minX + s!.maxX) / 2).toBeCloseTo(p.x, 6);
+      expect((s!.minZ + s!.maxZ) / 2).toBeCloseTo(p.z, 6);
+      // 尺寸是 5m 的整数倍
+      expect((s!.maxX - s!.minX) / cell).toBeCloseTo(Math.round((s!.maxX - s!.minX) / cell), 6);
+    }
   });
 
   it('每个传送落点都在世界边界内、且在工位作用域内', () => {
@@ -80,32 +102,33 @@ describe('v9s.15 · 测试场工位布局', () => {
   });
 
   it('宽门 2.4m 走得过去，窄门 0.5m 被挡住', () => {
+    // v9s.47：terrain 板中心移到 (10,20)，门在 z=23.1，台阶往南 −z 方向
     const wide = makeLabWorld();
-    place(wide, 6.6, -2.8);
+    place(wide, 7.7, 24.8);
     run(wide, 80, intent({ moveZ: -1 }));
-    expect(wide.character.position.z).toBeLessThan(-5);
+    expect(wide.character.position.z).toBeLessThan(22.4);
 
     const narrow = makeLabWorld();
-    place(narrow, 11.4, -2.8);
+    place(narrow, 12.5, 24.8);
     run(narrow, 80, intent({ moveZ: -1 }));
-    // 墙在 z=-4.05，角色半径 0.3 → 停在 -3.75 附近，不可能穿到 -4.5
-    expect(narrow.character.position.z).toBeGreaterThan(-4.05);
-    expect(Math.abs(narrow.character.position.x - 11.4)).toBeLessThan(0.8);
+    // 墙在 z=23.1（厚 0.5），角色半径 0.3 → 停在 23.65 附近，不可能穿到 23.1
+    expect(narrow.character.position.z).toBeGreaterThan(23.1);
+    expect(Math.abs(narrow.character.position.x - 12.5)).toBeLessThan(0.8);
   });
 
   it('地形工位：0.2m 台阶自动上，1.2m 高台要跳', () => {
     const w = makeLabWorld();
-    place(w, 6.6, -2.8);
+    place(w, 7.7, 24.8);
     run(w, 90, intent({ moveZ: -1 }));
     expect(w.character.position.y).toBeGreaterThan(0.75); // 走到 0.8 平台
 
     const block = makeLabWorld();
-    place(block, 11.4, -5.0); // 正对 0.6m 高的独立台
+    place(block, 12.5, 22.4); // 正对 0.6m 高的独立台（block-060 @ z=21.4）
     run(block, 40, intent({ moveZ: -1 }));
     expect(block.character.position.y).toBeLessThan(0.1); // 走不上去
 
     const jump = makeLabWorld();
-    place(jump, 11.4, -5.0);
+    place(jump, 12.5, 22.4);
     run(jump, 4, intent({ moveZ: -1 }));
     run(jump, 30, intent({ moveZ: -1, jumpPressed: true }));
     expect(jump.character.position.y).toBeGreaterThan(0.35);
@@ -153,7 +176,7 @@ describe('v9s.15 · warpTo 传送', () => {
 
   it('传送到高台会落到台面高度（不嵌进台子里）', () => {
     const w = makeLabWorld();
-    warpTo(w, 6.6, -9.6); // 0.8m 平台
+    warpTo(w, 7.7, 17.8); // 0.8m 平台（plateau @ z=17.8）
     expect(w.character.position.y).toBeCloseTo(0.8, 5);
   });
 });
@@ -200,10 +223,11 @@ describe('v9s.15 · 工位查找（纯函数）', () => {
 
   it('stationAt 取最近且在半径内的工位；空处返回 null', () => {
     expect(stationAt(stations, 0, 0)?.id).toBe('hub');
-    expect(stationAt(stations, -9.5, 2.6)?.id).toBe('gait');
-    // v9s.43：历史 7 工位之外才算空处；将来自动地块若分到这里也不算回归。
-    const empty = stationAt(stations, 2, 6);
-    expect(empty === null || empty.index > 7).toBe(true);
+    expect(stationAt(stations, 20, 2.6)?.id).toBe('gait');
+    // v9s.47：地块是连续的，空地只剩填充板 —— 取一块填充板中央应当没有工位。
+    const fill = CONFIG.scene.slabs!.find((b) => b.plotId === '');
+    expect(fill).toBeDefined();
+    expect(stationAt(stations, (fill!.minX + fill!.maxX) / 2, (fill!.minZ + fill!.maxZ) / 2)).toBeNull();
     expect(stationAt(stations, 15.4, 15.4)).toBeNull();
   });
 

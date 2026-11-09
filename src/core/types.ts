@@ -110,6 +110,7 @@ export type StationSpec = {
 };
 
 export type SceneConfig = {
+  /** 单块地面（v9s.47 之前的老模型；有 `slabs` 时不再使用，保留给测试夹具兜底）。 */
   ground: { size: number; thickness: number };
   steps: StepSpec[];
   doorways: DoorwaySpec[];
@@ -122,9 +123,12 @@ export type SceneConfig = {
   grass?: GrassSceneSpec;
   /** v9s.x：可破坏物件（由 assemblePlots 从 config/plots/*.json 拼合注入） */
   destructibles?: DestructibleSpec[];
+  /** v9s.47：每块测试地自带的承重地板。有值就逐块生成 `kind:'ground'` 的盒，
+   *  不再用 `ground.size` 那块 32×32 的单体底板。 */
+  slabs?: SlabSpec[];
 };
 
-/* ---------------- v9s.43 · 动态地块拼合契约 ----------------
+/* ---------------- v9s.43/47 · 动态地块拼合契约 ----------------
  * 背景：多个 agent 同时往 `scene.stations` 数组里「加一块地」，既会改同一个文件
  * 产生 git 冲突，又容易抢同一个绝对坐标导致两块地重叠。
  *
@@ -132,11 +136,79 @@ export type SceneConfig = {
  * 只写相对布局意图；`assemblePlots()` 按 id 字典序排序后统一分配不重叠的槽位，
  * 再把「地块中心 + 相对偏移」解算成 `StationSpec` / `GrassPlotSpec` 的绝对坐标。
  * 因此拼合结果与文件加载顺序、agent 提交先后完全无关 —— 这就是消除冲突的根本。
+ *
+ * v9s.47 起槽位改为**整数格**：1 格 = `PlotLayout.cellMeters`（5 m），
+ * 地块用 `span: [列, 行]` 声明占几格，底板也随地块一块块拼出来。
+ * 不重叠是构造性的（不用浮点圆相交），加地只往地图边缘长、不挪旧板。
  * ------------------------------------------------------------------ */
+
+/** 地块占几格：`[列, 行]`，1 格 = `PlotLayout.cellMeters` 米。 */
+export type PlotSpan = [number, number];
+
+/** 拼合产物里的一块承重地板。相邻地块齐边同高（顶面恒 y=0），走上去不掉、不卡缝。 */
+export type SlabSpec = {
+  plotId: string;
+  /** 西南角格子坐标（列, 行），未平移前的网格索引 */
+  cell: { c: number; r: number };
+  span: PlotSpan;
+  /** 世界矩形（已含整体平移） */
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  /** 顶面 y（恒 0） */
+  top: number;
+  /** 向下厚度 */
+  thickness: number;
+};
+
+/** 相对地块中心声明的台阶（绝对坐标由拼合器解算）。 */
+export type PlotStepDef = {
+  id: string;
+  dx: number;
+  dz: number;
+  width: number;
+  depth: number;
+  height: number;
+};
+
+/** 相对地块中心声明的门洞。 */
+export type PlotDoorwayDef = {
+  id: string;
+  dx: number;
+  dz: number;
+  openingWidth: number;
+  openingHeight: number;
+  wallThickness: number;
+  wallSpan: number;
+  wallHeight: number;
+};
+
+/** 相对地块中心声明的障碍物。 */
+export type PlotObstacleDef = {
+  id: string;
+  dx: number;
+  dz: number;
+  width: number;
+  depth: number;
+  height: number;
+};
+
+/** 相对地块中心声明的初始假人（模式沿用 `core.dummies.initialModes` 的同序号）。 */
+export type PlotDummyDef = {
+  dx: number;
+  dz: number;
+  /** 该假人单独指定的行为模式（省略则用 initialModes[序号]） */
+  mode?: string;
+  /** 持械陪练（对应 `core.dummies.fighters`，位置与武器都随地块走） */
+  fighter?: boolean;
+  /** 陪练武器（省略则用 `core.dummies.fighters.weapons` 轮转） */
+  weapon?: WeaponId;
+};
 
 /** 单个地块的声明（对应 `config/plots/*.json` 一个文件）。 */
 export type PlotDef = {
-  /** 稳定唯一 id，决定拼合顺序（字典序）。带数字前缀便于控制顺序，如 `10-hub`。 */
+  /** 稳定唯一 id，决定拼合顺序（字典序）。**发布后不要改名**，改名等于重排。 */
   id: string;
   /** 工位序号（1 起），省略则由拼合器按排序自动编号 */
   index?: number;
@@ -145,24 +217,34 @@ export type PlotDef = {
   shape?: StationShape;
   radius?: number;
   color?: string;
-  /** 仅历史固定工位使用：显式世界中心。新地块一律省略，由拼合器自动分配。 */
-  anchor?: { x: number; z: number };
+  /**
+   * v9s.47：占几格，默认 `[2,2]`（10×10 m）。
+   * 5×5 用 `[1,1]`、10×5 用 `[2,1]`、20×10 跑道用 `[4,2]`。
+   */
+  span?: PlotSpan;
+  /** 钉在世界原点（同一份配置里只允许一个，通常是 hub）。 */
+  pin?: 'origin';
   /** 传送落点相对地块中心的偏移（米） */
   spawn?: { dx: number; dz: number };
-  /** 地面标牌相对地块中心的偏移（米） */
+  /** 地面标牌相对地块中心的偏移（米）；省略则贴在地板南沿内侧 */
   label?: { dx: number; dz: number };
   /** 可选：该地块自带的草块区域，格坐标相对地块中心 */
   grass?: {
     minCellX: number; maxCellX: number;
     minCellZ: number; maxCellZ: number;
     density?: number; clearMarginCells?: number;
-    /** 绝对格坐标（历史草块兼容，跳过中心偏移换算） */
+    /** 绝对格坐标（跳过中心偏移换算） */
     absolute?: boolean;
   };
   /** 可选：地块上的「测试按钮」配方，点击就地生成假人 / 陪练 */
   testSpawn?: PlotTestSpawn;
   /** v9s.x：该地块上的可破坏物件（相对坐标，绝对位置由拼合器解算） */
   destructibles?: PlotDestructibleDef[];
+  /** v9s.47：地块自带的地形 / 门洞 / 障碍 / 初始假人（相对坐标） */
+  steps?: PlotStepDef[];
+  doorways?: PlotDoorwayDef[];
+  obstacles?: PlotObstacleDef[];
+  dummies?: PlotDummyDef[];
   /** 归属说明（哪个 agent / 哪个功能加的），只用于文档与诊断 */
   owner?: string;
 };
@@ -187,30 +269,27 @@ export type PlotTestSpawn = {
 
 /** 自动槽位的布局参数（纯数据，组装层注入；省略时用 DEFAULT_PLOT_LAYOUT）。 */
 export type PlotLayout = {
-  /** 格边长（米），用于格坐标 ↔ 世界坐标换算 */
+  /** 格边长（米），用于**草块**格坐标 ↔ 世界坐标换算 */
   cellSize: number;
-  /** 自动槽位网格起点 */
-  originX: number;
-  originZ: number;
-  /** 槽位步长 */
-  stepX: number;
-  stepZ: number;
-  /** 每行槽位数 */
+  /** v9s.47：地块模数（米）。1 个地块格 = cellMeters × cellMeters */
+  cellMeters: number;
+  /** 网格列数；行数按需增长，上限 maxRows */
   columns: number;
-  /** 地块之间的最小间隙（米） */
-  gap: number;
-  /** 默认传送落点 / 标牌相对偏移 */
+  /** 网格行数上限（防无解时无限扫描） */
+  maxRows: number;
+  /** 默认传送落点相对地块中心的偏移 */
   spawnDz: number;
-  labelDz: number;
+  /** 未写 `label` 时，标牌贴在地板南沿内侧多少米 */
+  labelInset: number;
   defaultRadius: number;
   defaultShape: StationShape;
   defaultColor: string;
-  /**
-   * 自动槽位中心允许的世界范围（纯数据，组装层注入）。
-   * 超出范围的槽位直接跳过，避免地块被自动分配到地图外 / 边界外。
-   * 省略时不限制，仍由 `MAX_SLOTS` 兜底防死循环。
-   */
-  bounds?: { minX: number; maxX: number; minZ: number; maxZ: number };
+  /** 未写 `span` 时的默认占格 */
+  defaultSpan: PlotSpan;
+  /** 地板厚度（米） */
+  slabThickness: number;
+  /** `worldBounds` 相对地板包围盒的内缩（米），等于角色半径量级 */
+  boundInset: number;
 };
 
 /** 一个地块拼合后的结果。 */
@@ -223,9 +302,15 @@ export type AssembledPlot = {
   /** 拼合后的实际世界中心（工位传送就以此为准） */
   centerX: number;
   centerZ: number;
-  /** 位置来源：pinned = 显式 anchor；auto = 拼合器自动分配的槽位序号 */
+  /** 位置来源：pin = 钉在原点；auto = 拼合器 first-fit 分配 */
   placement: 'pinned' | 'auto';
+  /** 兼容字段：pin 为 -1，auto 为扫描到的线性槽号（c + r * columns） */
   slot: number;
+  /** v9s.47：占用格（西南角）与跨度 */
+  cell: { c: number; r: number };
+  span: PlotSpan;
+  /** 该地块的承重地板 */
+  slab: SlabSpec;
   shape: StationShape;
   radius: number;
   color: string;
@@ -241,10 +326,18 @@ export type AssembledPlot = {
 export type PlotDiagnostics = {
   /** 重复 id（后者被跳过，避免静默覆盖） */
   duplicates: string[];
-  /** 因与已占用区域重叠而顺延过槽位的地块 */
-  relocated: string[];
-  /** 在布局网格里找不到可用槽位的地块 */
+  /** 在网格里找不到可用槽位的地块 */
   unplaced: string[];
+};
+
+/** 拼合器解算出的初始单位（绝对坐标；`mode` 有值则覆盖同序号的 initialModes）。 */
+export type PlotDummySpawn = {
+  plotId: string;
+  x: number;
+  z: number;
+  mode?: string;
+  fighter?: boolean;
+  weapon?: WeaponId;
 };
 
 export type PlotAssembly = {
@@ -253,6 +346,15 @@ export type PlotAssembly = {
   grassPlots: GrassPlotSpec[];
   /** v9s.x：所有地块产出的可破坏物件（绝对世界坐标，按地块 id 字典序稳定） */
   destructibles: DestructibleSpec[];
+  /** v9s.47：每块地一块承重地板 */
+  slabs: SlabSpec[];
+  /** v9s.47：地板整体包围盒 */
+  bounds: Bounds;
+  /** v9s.47：地块自带的地形 / 门洞 / 障碍 / 假人，已解算成绝对坐标 */
+  steps: StepSpec[];
+  doorways: DoorwaySpec[];
+  obstacles: ObstacleSpec[];
+  dummySpawns: PlotDummySpawn[];
   diagnostics: PlotDiagnostics;
 };
 

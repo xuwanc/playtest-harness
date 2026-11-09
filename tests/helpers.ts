@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { assemblePlots, DEFAULT_PLOT_LAYOUT, EMPTY_INTENTS, createWorld, step } from '../src/core';
+import {
+  applyPlotAssembly, assemblePlots, DEFAULT_PLOT_LAYOUT, EMPTY_INTENTS, createWorld, step,
+} from '../src/core';
 import type { AppConfig, GameEvent, Intents, PlotDef, World } from '../src/core';
 
 /** 用 fs 直接读配置，证明 Core 不依赖 Vite 的 JSON 插件或任何构建工具。 */
@@ -23,9 +25,9 @@ const plotDefs: PlotDef[] = readdirSync(plotDir)
   .map((f) => JSON.parse(readFileSync(new URL(f, plotDir), 'utf8')) as PlotDef);
 
 export const PLOT_ASSEMBLY = assemblePlots(plotDefs, DEFAULT_PLOT_LAYOUT);
-raw.scene.stations = PLOT_ASSEMBLY.stations;
-if (raw.scene.grass) raw.scene.grass.plots = PLOT_ASSEMBLY.grassPlots;
-raw.scene.destructibles = PLOT_ASSEMBLY.destructibles;
+// 与 `src/config.ts` 走同一个注入函数：底板 / 地形 / 门洞 / 障碍 / 初始单位 / 边界 / 格网
+// 全部由拼合结果推导，测试看到的坐标与线上逐字节一致。
+applyPlotAssembly(raw.core, raw.scene, PLOT_ASSEMBLY, DEFAULT_PLOT_LAYOUT);
 
 export const CONFIG: AppConfig = raw;
 

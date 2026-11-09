@@ -3,20 +3,20 @@
   "index": 6,
   "name": "冲刺标尺",
   "hint": "沿刻度跑：翻滚 3.2m / 闪现 5m，看落点差多少",
+  "span": [
+    2,
+    4
+  ],
   "shape": "square",
-  "radius": 5.2,
+  "radius": 4.8,
   "color": "#bfe8ff",
   "owner": "v9s.15 历史固定工位",
-  "anchor": {
-    "x": 9.8,
-    "z": 8.2
-  },
   "spawn": {
     "dx": 0,
     "dz": 4.6
   },
   "label": {
     "dx": -2.8,
-    "dz": -4.0
+    "dz": 9.2
   }
 }
