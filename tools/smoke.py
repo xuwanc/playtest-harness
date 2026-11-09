@@ -495,23 +495,29 @@ def main() -> int:
                     "  window.__flipEnd();"
                     "  const h = window.__harness, P = window.__flipProbe;"
                     "  const dt = h.world.config.fixedDt;"
-                    "  let worst = 0, moving = 0;"
+                    "  let worst = 0, moving = 0, wp = null, base = 0;"
                     "  const dirs = [];"
                     "  for (let i = 1; i < P.rows.length; i++) {"
                     "    const a = P.rows[i - 1], b = P.rows[i];"
                     "    const steps = Math.max(1, Math.round((b.t - a.t) / dt));"
                     "    const jump = Math.abs(b.d - a.d) / steps;"
-                    "    if (b.spd > 0.3 || a.spd > 0.3) { worst = Math.max(worst, jump); moving += 1; }"
+                    "    if (b.spd > 0.3 || a.spd > 0.3) { if (jump > worst) { worst = jump; wp = [+a.t.toFixed(3), +b.t.toFixed(3), steps, +a.d.toFixed(3), +b.d.toFixed(3), +(b.t - a.t).toFixed(4)]; } moving += 1; }"
+                    # 同一次采样里的「正常跨步」基线：两端 dirF 都是满值（没在换向）的那几帧。
+                    # 软件渲染 ~13fps，每个 rAF 跨 4~5 个固定步，基线会随步幅 / 采样相位浮动，
+                    # 所以判据用「相对基线」而不是写死的绝对值（mirror 会到 2 rad+，仍然拦得住）。
+                    "    if (Math.abs(a.dir) > 0.999 && Math.abs(b.dir) > 0.999) base = Math.max(base, jump);"
                     "    dirs.push(b.dir);"
                     "  }"
                     "  const mid = dirs.filter((v) => Math.abs(v) > 0.15 && Math.abs(v) < 0.85).length;"
-                    "  return { worst: +worst.toFixed(3), moving, mid,"
+                    "  return { worst: +worst.toFixed(3), base: +base.toFixed(3), moving, mid, wp,"
                     "    lo: +Math.min(...dirs).toFixed(2), hi: +Math.max(...dirs).toFixed(2),"
                     "    sec: h.viewConfig.gait.dirFlipSec, n: P.rows.length };"
                     "}"
                 )
-                check("换向不抽腿（单步腿角跳变 ≤ 0.62 rad，正常跨步 0.53）",
-                      flip["worst"] <= 0.62, str(flip))
+                lim = max(0.62, flip["base"] * 1.3)
+                check(f"换向不抽腿（单步腿角跳变 {flip['worst']:.2f} ≤ 上限 {lim:.2f} rad；"
+                      f"同次采样正常跨步 {flip['base']:.2f}）",
+                      flip["worst"] <= lim, str(flip))
                 # 软件渲染下 1s 游戏时间只有 ~12 个 rAF 样本，中间态可能只被采到 2 帧；
                 # 所以判「出现过中间态 + 两端符号都到过」，不要求逐帧序列完整。
                 check("换向融合真的在跑（dirF 经过中间态，两端符号都出现过）",

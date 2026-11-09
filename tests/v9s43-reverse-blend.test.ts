@@ -173,12 +173,27 @@ describe('v9s.43 · 换向融合（前 → 后、左 → 右 不抽腿）', () =
   });
 
   it('换向途中驱动量逐帧推进、方向真的翻过来（不是把符号冻住）', () => {
-    const rows = trace(makeWorld(), raw.view.gait.dirFlipSec, intent({ moveZ: -1 }), intent({ moveZ: 1 }));
-    // 起点是「前」、终点是「后」
-    expect(rows[0].dirF).toBe(1);
-    expect(rows[rows.length - 1].dirF).toBe(-1);
+    // v9s.44：把 bodyYaw 钉住 —— 有注视时身体会被拖着转，「前后」的基准自己也在动，
+    // 量的就不再是符号推进。钉住的这版是纯「原地倒走」：θ 从 0 扫到 180°。
+    const w = makeWorld();
+    const { rig } = makeRig(w, raw.view.gait.dirFlipSec);
+    const row = (): { dirF: number } => ({ dirF: rig.gaitDebug().dirF });
+    const rows: { dirF: number }[] = [];
+    const step = (dir: number): void => {
+      run(w, 1, intent({ moveZ: dir }));
+      w.character.bodyYaw = Math.PI;   // 前向 = −Z（与 moveZ: −1 一致），钉住不被注视带走
+      rig.update(w.character, w.combat, w.playerHurt, FIXED_DT, false, w.time);
+      rows.push(row());
+    };
+    for (let i = 0; i < 40; i++) step(-1);
+    const mark = rows.length - 1;
+    for (let i = 0; i < 60; i++) step(1);
+    const after = rows.slice(mark);
+    // 换向前是「前」、换向后翻到「后」
+    expect(after[0].dirF).toBe(1);
+    expect(after[after.length - 1].dirF).toBe(-1);
     // 中间确实经过了 0 附近的过渡带（至少 3 个中间值）
-    const mid = rows.filter((r) => r.dirF > -0.9 && r.dirF < 0.9);
+    const mid = after.filter((r) => r.dirF > -0.9 && r.dirF < 0.9);
     expect(mid.length).toBeGreaterThanOrEqual(3);
     // 每帧推进不超过速率上限，绝不出现「一帧从 +1 跳到 −1」
     const limit = (2 * FIXED_DT) / raw.view.gait.dirFlipSec + 1e-9;

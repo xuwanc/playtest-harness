@@ -196,6 +196,89 @@ export function dirDrive(x: number): number {
   return Math.sign(v) * a * a * (3 - 2 * a);
 }
 
+/* -------------------------------------------------------------------------- *
+ * v9s.44 · 下盘偏转目标限速：「朝向切换」时下盘不能整体甩一下
+ * -------------------------------------------------------------------------- *
+ * 现象：一边跑一边让身体转向（锁定目标 / 拖拽瞄准 / 攻击锁朝向）时，下盘会整体
+ * 晃一下 —— 腿先朝一侧拧过去，再拧回来。
+ *
+ * 根因不是角度不连续，而是**目标在几十毫秒里扫过一大段**：下盘偏转目标
+ * `backHipYawTarget` 有两个「族」——
+ *   · 侧移族：`strafeHipYaw` 让下盘朝移动方向带转（纯侧移 θ=90° 时 +50°）；
+ *   · 后退族：θ 落进 100°..180° 时改用 `θ − 180°`（θ=132° → −48°），让下盘前后轴
+ *     精确对准移动轴（v9s.14 的踩地前提）。
+ * 身体转动时 θ 会连续扫过 90° → 132°，两个族在同一 θ 上相差 ~100°，目标只能
+ * 「跳族」：实测 θ=99° 目标 +49°，θ=112° 已经 −24°，θ=133° −47°，再回到 0。
+ * 于是整条目标曲线是一个 **+50 → −48 → 0** 的大 S，hipYaw 平滑跟不上 → 单帧
+ * 12.9°（775°/s），整体摆幅 54°~75°。
+ *
+ * 修法：给**目标**加最大转速（不是给输出加，输出那层指数平滑是手感的「缓起」）。
+ * 目标被限速后，短促的扫掠（身体转身 0.3~0.5s）来不及爬到峰值就被拉回 0 →
+ * 负向那一段根本不出现；而真正持续的方向改变（横移换向、长期倒退走）只是慢一点
+ * 到位，稳态完全一致。物理上也说得通：胯是被上身带过去的，不可能比身体转得还快。
+ *
+ * 与 `slewDirSign` 的区别：那个是「符号」在固定时长内匀速走完（±1），这个是任意
+ * 角度按固定**角速度**推进。rate<=0 时不限速，精确回到旧行为（A/B 用）。
+ */
+export function slewAngle(
+  current: number,
+  target: number,
+  maxRate: number,
+  dt: number,
+): number {
+  if (!(maxRate > 0)) return target;
+  const step = maxRate * Math.max(0, dt);
+  const d = target - current;
+  if (Math.abs(d) <= step) return target;
+  return current + Math.sign(d) * step;
+}
+
+/** 身体角速度低于此值视为「没在转身」（rad/s，≈30°/s） */
+export const SPIN_RATE_START = (30 * Math.PI) / 180;
+/** 超过此值视为「纯转身」（rad/s，≈100°/s） */
+export const SPIN_RATE_FULL = (100 * Math.PI) / 180;
+/** 未转身时叠回的「等效不限速」（rad/s ≈ 3400°/s，单帧 57°） */
+const FREE_RATE = 60;
+
+/**
+ * v9s.44 · 下盘偏转目标的限速：**只在身体自己在转的时候**生效。
+ *
+ * 为什么不能一刀切限速：速度方向本身反转时（摇杆前推 → 后拉、身体朝敌人不动），
+ * θ 会在一瞬间翻 180°，此时下盘必须跟着全速拧过去，否则腿的摆动轴与世界速度方向
+ * 错开 = 踩不住地（v9s.43 用例实测腿角跳 0.55 → 0.63 rad）。
+ *
+ * 而「朝向切换」（锁定目标变了 / 攻击锁朝向 / 拖拽瞄准）时是**身体在转**、世界速度
+ * 方向没变：θ 是被 bodyYaw 拖着一路扫过 90°→132°，下盘却把那当成「我在侧移/后撤」，
+ * 于是拧出去再拧回来 —— 观感就是「下盘整体晃一下」。这一种才该限速：
+ * 胯是被上身带过去的，不可能比身体本身转得还快。
+ *
+ * `turnRate` 用的是**未平滑的身体角速度**（rad/s）。二者用 80°~240°/s 平滑过渡，
+ * 小角度微调（< 30°/s）时完全不限速，手感与旧版逐位一致。
+ */
+/** 身体「自己转」的程度：0 = 没转（速度换向），1 = 纯转身（rad/s 进，0..1 出） */
+export function turnSpinGate(turnRate: number): number {
+  return clamp(
+    (Math.abs(turnRate) - SPIN_RATE_START) / (SPIN_RATE_FULL - SPIN_RATE_START),
+    0, 1,
+  );
+}
+
+export function slewHipTarget(
+  current: number,
+  target: number,
+  maxRate: number,
+  dt: number,
+  spin: number,
+): number {
+  if (!(maxRate > 0)) return target;
+  const free = 1 - clamp(spin, 0, 1);
+  // free = 1（没在转身）：rate ≈ FREE_RATE，等于不限速 → 与旧行为逐位一致；
+  // free → 0（纯转身）：目标冻住，下盘跟着身体刚性转，一点都不自己拧。
+  // 中间按 free² 过渡，所以「转身」只在身体确实转得快时才接管。
+  if (free <= 1e-9) return current;
+  return slewAngle(current, target, free * (maxRate + free * FREE_RATE), dt);
+}
+
 export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
   if (!input.grounded || input.speed < EPS) return idle();
 
@@ -385,6 +468,9 @@ export function backHipYawTarget(
   localRight: number,
   strafeYaw: number,
   backKeep: number,
+  /** v9s.44：身体正在转身时传 >0（0..1），把翻转淡回侧移族 —— 身体自己在转的时候
+   *  不要同时把胯往「移动方向 − 180°」上拧，否则就是一个「拧出去再拧回来」的大 S。 */
+  spinGate = 0,
 ): number {
   const speed = Math.hypot(localForward, localRight);
   if (!(speed > 1e-6)) return strafeYaw;
@@ -398,7 +484,9 @@ export function backHipYawTarget(
   // 侧摆已经退了一半、下盘却只转了一小部分 —— 那是最难看的「半翻」状态：
   // 既没有侧摆补偿，轴也没对上。平方后这段时间直接跃到下盘朝反侧。
   const k = clamp(backKeep, 0, 1);
-  const flip = k * k;
+  // v9s.44：spinGate=1 时完全停在侧移族（flip=1）；转身结束再按常规比例翻过去。
+  // 注意纯后退（θ=180°）两族都是 0°，所以闸门开关在这里没有跳变。
+  const flip = k * k + (1 - k * k) * clamp(spinGate, 0, 1);
   return strafeYaw * flip + backYaw * (1 - flip);
 }
 

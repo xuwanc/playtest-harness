@@ -1209,7 +1209,8 @@
       "knockGaitScale": 1,
       "backStrafeStartDeg": 100,
       "backStrafeFullDeg": 132,
-      "dirFlipSec": 0.16
+      "dirFlipSec": 0.16,
+      "hipYawTrackRateDeg": 200
     },
     "animation": {
       "attack": {

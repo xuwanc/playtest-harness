@@ -17,7 +17,7 @@ import type {
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
   backHipYawTarget,
-  stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir, stopYawFade, slewDirSign,
+  stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir, stopYawFade, slewDirSign, slewHipTarget, turnSpinGate,
 } from './gait';
 import type { GaitInput } from './gait';
 import { solveHurtPose } from './hurt-pose';
@@ -224,6 +224,10 @@ export function createDummyRig(
   let stopDirWZ = 1;
   /** 下盘侧移偏转的平滑状态（与主角同构，避免单帧跳变） */
   let sideYaw = 0;
+  /** v9s.44：下盘偏转**目标**（限速后的值），与 sideYaw 分开存 */
+  let sideYawTarget = 0;
+  /** v9s.44：上一帧 bodyYaw，用于算身体角速度（决定下盘目标要不要限速） */
+  let prevHipBodyYaw = 0;
   /** v9o：上一帧速度，用于区分「减速停步」与「KEEP DIST 低速横移」（后者不该收相） */
   let prevSpeed = 0;
   // ---- v9s：停步下盘偏差消化窗口（与主角同构，全部纯表现层状态）----
@@ -383,9 +387,20 @@ export function createDummyRig(
       const strafeSide = strafeHipYaw(
         latRatio, gaitCfg.strafeHipScale, gaitCfg.strafeHipMaxDeg, gaitCfg.strafeHipBoost,
       );
-      const targetSide = backHipYawTarget(
-        bodyFwdRatio, latRatio, strafeSide, backKeep,
+      // v9s.44：与主角同构 —— 身体自己在转时停用「后退族」翻转，并给目标限速
+      const bodyYawRate = wrapAngle(s.bodyYaw - prevHipBodyYaw) / Math.max(1e-6, frameDt);
+      prevHipBodyYaw = s.bodyYaw;
+      // 一个开关管住整套对策：拉到 0 = 精确回到旧行为（A/B 用）
+      const hipRate = (gaitCfg.hipYawTrackRateDeg ?? 0) * Math.PI / 180;
+      const spinGate = hipRate > 0 ? turnSpinGate(bodyYawRate) : 0;
+      const rawTargetSide = backHipYawTarget(
+        bodyFwdRatio, latRatio, strafeSide, backKeep, spinGate,
       ) * yawFade;
+      const targetSide = slewHipTarget(
+        sideYawTarget, rawTargetSide,
+        hipRate, frameDt, spinGate,
+      );
+      sideYawTarget = targetSide;
       sideYaw += (targetSide - sideYaw) * (1 - Math.exp(-12 * Math.max(0, frameDt)));
       lower.rotation.y = sideYaw;
 

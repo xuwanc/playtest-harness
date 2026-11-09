@@ -29,7 +29,7 @@ import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
   backHipYawTarget,
   stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir,
-  stopYawFade, solveTurnStep, slewDirSign,
+  stopYawFade, solveTurnStep, slewDirSign, slewHipTarget, turnSpinGate,
 } from './gait';
 import type { GaitInput } from './gait';
 import {
@@ -185,6 +185,8 @@ export type VoxelRig = {
     /** v9s.43：本帧的换向驱动符号（−1..1）。稳态恒为 ±1；换向途中经过 0，
      *  前后摆幅按 |该值| 淡出（0.16s 走完）。验收「换向不抽腿」直接读它。 */
     dirF: number; dirR: number;
+    /** v9s.44：本帧下盘偏转目标（rad，相对身体）。hipYaw 是它的指数平滑结果。 */
+    hipYawTarget: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
    *  供验收「腿摆动方向」：投影基准必须与腿所在坐标系一致，否则非正前方时方向被歪。 */
@@ -613,6 +615,9 @@ export function createVoxelRig(
   let hipYaw = 0;
   /** 本帧 gait 投影基准（诊断用，等于 bodyYaw + hipYaw），随 update 刷新 */
   let lastGaitYaw = 0;
+  /** v9s.44：本帧下盘偏转的**目标值**（诊断用）。hipYaw 是它的指数平滑结果，
+   *  目标本身若在几十毫秒内扫过上百毫秒，观感就是「下盘整体晃一下」。 */
+  let lastHipYawTarget = 0;
 
   // ---- v9n 停步收相状态（纯表现层，不进 Core / 快照）----
   /** <0 = 未接管；0..1 = 收相进度；=1 后保持输出待机，直到重新起跑 */
@@ -2064,9 +2069,21 @@ export function createVoxelRig(
       const strafeYaw = strafeHipYaw(
         latRatio, ori.legYawScale, ori.hipYawMaxDeg, gaitCfg.strafeHipBoost,
       );
-      const targetHipYaw = backHipYawTarget(
-        bodyFwdRatio, latRatio, strafeYaw, backKeep,
+      // v9s.44：身体自己在转的时候（朝向切换），① 不让「后退族」把胯拧向移动方向的反侧，
+      // ② 目标推进限速 —— 两者合起来，转身只是一个干净的单向带转，不再「拧出去再拧回来」。
+      // 一个开关管住整套对策：拉到 0 = 精确回到旧行为（A/B 用）
+      const hipRate = (gaitCfg.hipYawTrackRateDeg ?? 0) * Math.PI / 180;
+      const spinGate = hipRate > 0 ? turnSpinGate(turnRate) : 0;
+      const rawTargetHipYaw = backHipYawTarget(
+        bodyFwdRatio, latRatio, strafeYaw, backKeep, spinGate,
       ) * yawFade;
+      // v9s.44：目标限速（度/秒 → rad/s）。短促的方向扫掠会被它削平：身体转身时
+      // 下盘不再「先朝一侧拧过去、再拧回来」。
+      const targetHipYaw = slewHipTarget(
+        lastHipYawTarget, rawTargetHipYaw,
+        hipRate, dt, spinGate,
+      );
+      lastHipYawTarget = targetHipYaw;
       hipYaw += (targetHipYaw - hipYaw) * (1 - Math.exp(-ori.hipYawSmoothing * dt));
 
       // ---- 程序化步态（v8 / v8b）----
@@ -2785,6 +2802,7 @@ export function createVoxelRig(
         legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,
         phase: lastDrive.phase,
         dirF: dirDriveF, dirR: dirDriveR,
+        hipYawTarget: lastHipYawTarget,
       };
     },
     gaitYaw(): number {
