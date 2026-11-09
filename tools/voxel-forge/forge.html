@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>voxel forge · 方盒子角色造型工坊</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0f1218; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; left: 14px; top: 14px; padding: 10px 13px;
+    font: 12px/1.7 ui-monospace, "SF Mono", Menlo, monospace;
+    color: #a8b4cc; background: rgba(18, 22, 30, .82);
+    border: 1px solid #263043; border-radius: 8px; min-width: 208px;
+    pointer-events: none; white-space: pre;
+  }
+  #hud b { color: #e6ecf8; font-weight: 600; }
+  #hud .k { color: #5f6f8d; }
+  #tip {
+    position: fixed; right: 14px; bottom: 14px; padding: 8px 12px;
+    font: 11px/1.6 ui-monospace, Menlo, monospace; color: #63718c;
+    background: rgba(18, 22, 30, .72); border: 1px solid #212a3a; border-radius: 8px;
+    pointer-events: none;
+  }
+  #err {
+    position: fixed; inset: 0; display: none; place-items: center; padding: 40px;
+    font: 13px/1.8 ui-monospace, monospace; color: #ff9b9b; background: #0f1218;
+    white-space: pre-wrap;
+  }
+</style>
+<script type="importmap">
+{ "imports": { "three": "/node_modules/three/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="hud"></div>
+<div id="tip">拖拽旋转 · 滚轮缩放 · 右键平移</div>
+<pre id="err"></pre>
+<script type="module" src="./forge.js"></script>
+</body>
+</html>

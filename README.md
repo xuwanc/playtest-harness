@@ -49,6 +49,7 @@ npm run publish:preview  # 每次任务完成必跑：发布 dist + 打印唯一
 | **新加入的 agent / 拉下 git 后第一步** | [`AGENTS.md`](AGENTS.md)（3 分钟：三条铁律 + 流程） |
 | **测试场景规则 / 怎么加地块与工位** | [`docs/systems/plot-assembly.md`](docs/systems/plot-assembly.md)（动态拼合正本）· [`docs/systems/test-scene-policy.md`](docs/systems/test-scene-policy.md) |
 | **蜘蛛主角 / 加另一副骨架** | [`docs/systems/spider-locomotion.md`](docs/systems/spider-locomotion.md) · [`docs/decisions/ADR-010`](docs/decisions/ADR-010-spider-locomotion.md) |
+| **快速试方盒子角色的造型** | [`docs/systems/voxel-forge.md`](docs/systems/voxel-forge.md)（写 JSON → 3D 预览 → 导出 TS） |
 | 有个现象要查（看不见 / 抖 / 卡 / 滑） | [`docs/INDEX.md` §2](docs/INDEX.md) |
 | 某系统现在怎么工作 | [`docs/systems/`](docs/systems/overview.md) |
 | 现在做到哪、下一步 | [`docs/state/CURRENT.md`](docs/state/CURRENT.md) |

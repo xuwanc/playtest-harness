@@ -130,7 +130,7 @@ describe('v9s.50 蜘蛛骨架', () => {
     expect(r.debug().clamped).toBeLessThanOrEqual(2);
   });
 
-  it('步频封顶：相位推进速率不超过 7.5 周期/秒，超出转成脚滑', () => {
+  it('步频封顶：相位推进速率不超过 6.4 周期/秒，超出转成脚滑', () => {
     const { r, step } = rig();
     const c = mkCharacter({ velocity: { x: 0, y: 0, z: 4.5 }, bodyYaw: 0 });
     for (let i = 0; i < 20; i++) step(c);       // 进入稳态
@@ -148,8 +148,36 @@ describe('v9s.50 蜘蛛骨架', () => {
       prev = p;
     }
     const hz = cycles / (60 * dt);
-    expect(hz).toBeLessThanOrEqual(7.6);
-    expect(hz).toBeGreaterThan(5);              // 也真的在走，不是卡死
+    // CAP_HZ = 6.4；帧离散化会给一点点误差，容差放到 6.5
+    expect(hz).toBeLessThanOrEqual(6.5);
+    expect(hz).toBeGreaterThan(4.5);             // 也真的在走，不是卡死
+  });
+
+  it('惯性：加速时身体后仰、急停时前栽，且是弹簧不是 lerp（会过冲）', () => {
+    const { r, step } = rig();
+    const c = mkCharacter();
+    const dt = 1 / 60;
+
+    // 原地起步：0 → 2.6 m/s，用 Core 的加速度上限（20 m/s²）爬升
+    for (let i = 0; i < 20; i++) {
+      c.velocity.z = Math.min(2.6, c.velocity.z + 20 * dt);
+      c.position.z += c.velocity.z * dt;
+      step(c, dt);
+    }
+    const accel = r.debug();
+    expect(accel.pitch).toBeLessThan(-0.005);      // rotation.x 负 = 抬头
+    expect(accel.leanZ).toBeLessThan(-0.002);      // 身体相对脚被压在后面
+
+    // 急停：一帧内速度归零，弹簧会先冲过头再回位
+    c.velocity.z = 0;
+    let peak = 0;
+    for (let i = 0; i < 45; i++) {
+      step(c, dt);
+      peak = Math.max(peak, r.debug().pitch);
+    }
+    expect(peak).toBeGreaterThan(0.004);           // 前栽（低头）
+    // 0.75s 后要收敛到峰值的 20% 以内 —— 说明是收敛的弹簧，不是一直歪着
+    expect(Math.abs(r.debug().pitch)).toBeLessThan(peak * 0.2);
   });
 
   it('确定性：同一输入序列跑两遍，落点逐字节一致', () => {

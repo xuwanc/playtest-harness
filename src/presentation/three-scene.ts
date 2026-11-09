@@ -371,8 +371,8 @@ export function createSceneView(
   // Core 的移动 / 碰撞 / 战斗一行不改 —— 换的是「腿怎么摆」，不是「角色是什么」。
   const buildRig = (bt?: BodyTypeConfig): PlayerRig => {
     if (bt?.rig === 'spider') {
-      bodyZoom = 0.24;                     // 17m → 4.1m
-      view.camera.pitchDeg = 32;
+      bodyZoom = 0.17;                     // 17m → 2.9m
+      view.camera.pitchDeg = 27;
       // 1.3× 视觉缩放：主角比杂兵有存在感，同时让 8 条腿在 4.8m 外仍然数得清。
       // 世界体高 = 0.35 × 1.3 ≈ 0.46，跨距 ≈ 1.25m。
       return createSpiderRig(view.colors, { height: 0.35, scale: 1.3 });

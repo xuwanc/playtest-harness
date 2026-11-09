@@ -58,6 +58,9 @@
 | 地块测试按钮生成 / 清除假人陪练 | `core/plot-spawn.ts`、`presentation/three-scene.ts` | `spawnPlotTestUnits`、`syncDummyCapacity`、`dummyRenderCount` | 同上 §5 | `tests/plot-spawn.test.ts`、`__harness.spawnAt()` |
 | 每次任务完成怎么更新线上 / 贴链接 | `tools/publish-preview.mjs` | `publish:preview` | 同上 §6 | `npm run publish:preview` 打印唯一公网链接 |
 | 想给主角换一副骨架 / 加多足角色 / 蜘蛛腿够不到 | `presentation/spider-rig.ts`、`view.bodyTypes[*].rig` | `createSpiderRig`、`solveLeg`、`CAP_HZ`、`strideUsed` | [systems/spider-locomotion.md](systems/spider-locomotion.md) §4 | `tests/v9s50-spider-rig.test.ts`、`__harness.spiderDebug()` |
+| 蜘蛛走起来没重量感 / 身体太「飘」 | `presentation/spider-rig.ts` | `stepSpring`、`springs`、`inertia` | [systems/spider-locomotion.md](systems/spider-locomotion.md) §4.4 | `tests/v9s50-spider-rig.test.ts`「惯性」例 |
+| 想快速试方盒子角色的造型 / 改一个盒子要 40 秒 | `tools/voxel-forge/` | `forge.html`、`shot.py`、`specs/*.json` | [systems/voxel-forge.md](systems/voxel-forge.md) §2 | `shot.py` 打印的 mesh / tris / size |
+| 角色零件太多、draw call 偏高 | `presentation/spider-rig.ts` | `partMesh`、`mergeParts`、`BoxGeometry` 合并 | [systems/voxel-forge.md](systems/voxel-forge.md) §5 | `__harness.spiderDebug().meshes` |
 | 蜘蛛走起来抽腿 / 冲刺时腿被拉直 / 原地转身腿拧成麻花 | `presentation/spider-rig.ts` | 步频封顶 + `slideStep`、`spinSpeed`、前伸量 `stride × duty` | 同上 §4.1~§4.3 | `__harness.spiderDebug().maxReach / clamped` |
 
 ## 3. 按模块查
@@ -188,6 +191,7 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒（实现正本） |
 | [`systems/test-scene-policy.md`](systems/test-scene-policy.md) | 单一主测试场景 + 三条规则（规则正本） |
 | [`systems/plot-assembly.md`](systems/plot-assembly.md) | 地块拼合：整数格底板 / 自带物件 / 工位传送 / 测试按钮（实现正本） |
+| [`systems/voxel-forge.md`](systems/voxel-forge.md) | 造型工坊：JSON spec → 3D 预览 → 导出 TS 片段（只在本地用，不进 dist） |
 | [`systems/multi-agent-workflow.md`](systems/multi-agent-workflow.md) | 多 agent 分支、版本号分配、契约先行、冲突分类、合并闸门、**无人值守执行层 §11** |
 | [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 108 步手动验收 |
 | [`state/CURRENT.md`](state/CURRENT.md) | 当前状态 + 下一步（覆盖写） |
@@ -204,5 +208,5 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`decisions/ADR-007`](decisions/ADR-007-knockback-default.md) | 默认配置反映真实手感 |
 | [`decisions/ADR-008`](decisions/ADR-008-grass.md) | 草块状态在 Core、几何在表现层、判定复用 hits |
 | [`decisions/ADR-009`](decisions/ADR-009-plot-slabs.md) | 测试场地块化：模数 5m + 整数跨格拼底板（已实现，v9s.49） |
-| [`decisions/ADR-010`](decisions/ADR-010-spider-locomotion.md) | 蜘蛛：复用的是解算器不是动画，不引入 FullBodyIK（已实施，v9s.50 主角可切换） |
+| [`decisions/ADR-010`](decisions/ADR-010-spider-locomotion.md) | 蜘蛛：复用的是解算器不是动画，不引入 FullBodyIK（已实施，v9s.51 造型/步幅/惯性定型） |
 | [`journal/`](journal/) | 按日期的迭代记录（36 份，2026-11-05 起；`-00` 是功能总表，`-02` 是 v9s.41 换腿、`-06` 是 v9s.45 慢放、`-08-plot-slabs` 是 v9s.49 底板；带 `<主题>` 后缀的按内容命名） |
