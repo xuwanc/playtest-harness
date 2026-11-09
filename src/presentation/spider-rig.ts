@@ -283,7 +283,7 @@ export function createSpiderRig(
     [0.268, 0.038, 0.268, 0, 0.046, 0],
     [0.228, 0.030, 0.228, 0, 0.078, 0],
     // 腹柄（细腰）：carapace 有 z +0.15 偏移，这里补回 -0.17 落在两节之间的缝里
-    [0.100, 0.078, 0.100, 0, 0.022, -0.170],
+    [0.130, 0.105, 0.115, 0, 0.030, -0.175],
   ];
   const caraColors: string[] = [
     COL.carapace, COL.carapaceTop, COL.carapaceEdge, COL.carapaceTop, '#231e33',
@@ -432,6 +432,8 @@ export function createSpiderRig(
 
   let prevVx = 0;
   let prevVz = 0;
+  let lastPX = 0;
+  let lastPZ = 0;
   /** 低通后的体轴加速度（前 / 右）。 */
   let accLong = 0;
   let accSide = 0;
@@ -494,7 +496,26 @@ export function createSpiderRig(
     lastYaw = yaw;
     const yawRate = dYaw / dt;
 
-    const planarSpeed = Math.hypot(c.velocity.x, c.velocity.z);
+    /**
+     * v9s.51 修：平动速度用**本帧实际位移**算，不用 `velocity`。
+     *
+     * `dt` 上面被截断到 1/20（低帧率下弹簧才稳），而 Core 是按真实帧间隔积分的。
+     * 一旦真实帧间隔 > 50 ms，rig 推进的相位就比身体走的路程少 —— 脚越落越远，
+     * 实测无头 Chromium（约 20 fps，偶尔掉到 8）在线上跑到 `reach 1.58 / clamp 4`。
+     * 换成位移之后，无论多少 fps，相位与「身体走了多远」严格同源。
+     */
+    const moved = Math.hypot(c.position.x - lastPX, c.position.z - lastPZ);
+    lastPX = c.position.x;
+    lastPZ = c.position.z;
+    // 传送（工位跳转 / 复位 / 调试）会有一次几十米的位移。当成走路看待的话，
+    // 相位会在一帧里跳几十个周期、8 条腿全部 clamp —— 识别成传送，本帧不推进相位，
+    // 脚由下面「站定收脚」那条分支 lerp 回静止落点。
+    const teleport = moved > 0.8;
+    if (teleport) {
+      phase = 0;
+      for (const leg of legs) leg.swinging = false;
+    }
+    const planarSpeed = teleport ? 0 : moved / dt;
     const spinSpeed = Math.abs(yawRate) * SPIN_RADIUS;
     // 步幅由**几何余量**夹住，不是拍脑袋的比例：
     //   最远的那对腿（第 4 对）静止落点距髋 0.504m，腿长 0.929m，髋高 0.318m
@@ -567,6 +588,8 @@ export function createSpiderRig(
     let clampedCount = 0;
     if (!primed) {
       primed = true;
+      lastPX = c.position.x;
+      lastPZ = c.position.z;
       for (const leg of legs) {
         homeWorld(leg, leg.foot, groundY, shrink);
         leg.from.copy(leg.foot);
