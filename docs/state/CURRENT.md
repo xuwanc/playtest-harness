@@ -33,13 +33,14 @@ v0.9.67：**草地 + 动态地块拼合分支已并入主线**（v9s.46）。草
 
 ## 正在做
 
-- 分支 `feat/integration-grass-wind`（6 个提交）已合入，**尚未 push 到 GitHub**
-  （本沙箱 `git push` 无写凭证，需要用户给 PAT）。
-- 待推：`v9s.41` ~ `v9s.46` 共 7 个提交。
+- 无。分支 `feat/integration-grass-wind` 已合入并推送，`origin/main` = 本地 `HEAD`，
+  标签 `v0.9.67` 已推。远端功能分支暂留（供对照），确认后删除。
+- 本地备份分支 `backup/pre-merge-1643`（合并前的 v9s.45）先留着，一周后可删。
 
 ## 下一步
 
-1. **推远端**：拿到 PAT 后 `git push origin main`（`backup/pre-merge-*` 先留着）。
+1. **收敛历史**：确认无回滚需求后删 `origin/feat/integration-grass-wind`
+   与本地 `backup/pre-merge-1643`。
 2. **`dist/` 的策略**：当前有意入库供 Pages 部署，代价是每次 build 产生大 diff、
    合并必冲突。规范已写「不手解、只 rebuild」；若不再用 Pages，优先 `.gitignore` 掉。
 3. **`config/game.json` 拆分**：2000+ 行、所有 agent 的唯一热点。可参考地块的做法，
