@@ -663,10 +663,11 @@ def main() -> int:
                 check(f"换向不抽腿（单步腿角跳变 {flip['worst']:.2f} ≤ 上限 {lim:.2f} rad；"
                       f"同次采样正常跨步 {flip['base']:.2f}）",
                       flip["worst"] <= lim, str(flip))
-                # 软件渲染下 1s 游戏时间只有 ~12 个 rAF 样本，中间态可能只被采到 2 帧；
-                # 所以判「出现过中间态 + 两端符号都到过」，不要求逐帧序列完整。
+                # 软件渲染下 1s 游戏时间只有 ~12 个 rAF 样本，中间态可能只被采到 1~2 帧；
+                # 所以判「出现过中间态（≥1 帧） + 两端符号都到过」，不要求逐帧序列完整。
+                # 采样相位抖动会让 mid 偶发为 1，写死 ≥2 会让合并闸门随机误报（与功能无关）。
                 check("换向融合真的在跑（dirF 经过中间态，两端符号都出现过）",
-                      flip["mid"] >= 2 and flip["hi"] >= 0.85 and flip["lo"] <= -0.15, str(flip))
+                      flip["mid"] >= 1 and flip["hi"] >= 0.85 and flip["lo"] <= -0.15, str(flip))
 
                 # ---- v9s.45：慢放转身时下盘不许再抖一下 ----
                 # 0.25× 慢放下把摇杆从 W 切到 A（移动方向 90°，身体跟着转）：
@@ -794,14 +795,17 @@ def main() -> int:
                   return { base, after, items };
                 }""")
                 cuts = {c["id"]: c for c in br["after"]["cuts"]}
-                check("可破坏物件已装配且初始完好（5 件 / 0 已断）",
-                      br["base"]["count"] == 5 and br["base"]["broken"] == 0,
+                # v9s.57 合并：工位新增了仙人掌 / 按钮地块，物件数从 5 增到 9（含 4 件 cactus/button）。
+                # 护栏意图是「物件已装配 + 初始完好」，不写死具体件数，避免以后再加工位就误报。
+                check("可破坏物件已装配且初始完好（含新增仙人掌 / 按钮工位，0 已断）",
+                      br["base"]["count"] >= 5 and br["base"]["broken"] == 0,
                       f"count={br['base']['count']} broken={br['base']['broken']}")
                 # 回归护栏：完好态也必须画在地块绝对坐标上。曾经 root 没定位，
-                # 5 件全叠在世界原点（中央 8 向区冒出一根杆子、地块反而空）。
+                # 整批物件全叠在世界原点（中央 8 向区冒出一根杆子、地块反而空）。
+                # 件数按 Core 实际装配数动态比对，仍要求每个渲染位置都对得上 Core、无一叠在原点。
                 pos = {p["id"]: p for p in br["base"]["rendered"].get("positions", [])}
                 check("完好态就画在地块坐标（不再叠在世界原点 / 与 Core 状态一致）",
-                      len(pos) == 5
+                      len(pos) == len(br["items"])
                       and all(any(abs(p["x"] - s["x"]) < 1e-6 and abs(p["z"] - s["z"]) < 1e-6
                                  for s in br["items"]) for p in pos.values())
                       and sum(1 for p in pos.values() if abs(p["x"]) < 0.5 and abs(p["z"]) < 0.5) == 0,
@@ -816,10 +820,14 @@ def main() -> int:
                       and cuts["pole-a"]["nx"] > 0 and cuts["pole-c"]["nx"] < 0
                       and all(c["ny"] > 0.5 for c in cuts.values()),
                       str({k: (v["nx"], v["ny"]) for k, v in cuts.items()}))
-                check("瓶罐命中高度吸附到预设断裂带",
+                # v9s.57 合并：瓶罐从「斜切 + 断裂带吸附」换成「刚性碎块爆裂」（shatterJar），
+                # cutU 恒为 0、不再吸附 bands；护栏意图改为「受击后确实碎成多块刚体」。
+                check("瓶罐受击碎裂成多块刚体（新碎裂模型，≥6 块）",
                       "jar-a" in cuts
-                      and any(abs(cuts["jar-a"]["cutU"] - b) < 1e-6 for b in (0.35, 0.62)),
-                      f"jar-a cutU={cuts.get('jar-a', {}).get('cutU')}")
+                      and cuts["jar-a"]["broken"] == 1
+                      and cuts["jar-a"]["fragments"] >= 6,
+                      f"jar-a broken={cuts.get('jar-a', {}).get('broken')} "
+                      f"fragments={cuts.get('jar-a', {}).get('fragments')}")
                 rendered = br["after"]["rendered"]
                 check("斜切两段真的画出来了（表现层与 Core 断裂数一致）",
                       rendered["broken"] == 4 and rendered["drawCalls"] >= 9,

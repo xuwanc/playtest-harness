@@ -49,6 +49,8 @@ export function targetingUpdate(world: World, dt: number, intents: Intents): voi
   let bestDist = 0;
 
   for (const s of world.dummies) {
+    // v9s.56：不锁定尸体（否则打完一刀自动朝向目标会一直对着尸体转身）
+    if (s.health.dead) continue;
     const dx = s.position.x - p.x;
     const dz = s.position.z - p.z;
     const dist = Math.hypot(dx, dz);

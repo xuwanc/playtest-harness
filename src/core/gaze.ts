@@ -70,6 +70,8 @@ export function gazeUpdate(world: World, _dt: number, intents: Intents): void {
   let incoming = false;
   let approaching = false;
   for (const d of world.dummies) {
+    // v9s.56：尸体不构成威胁（也不该让玩家「接敌」转身对着它）
+    if (d.health.dead) continue;
     const w = baseWeightOf(d, cfg.threatRange);
     const dx = d.position.x - p.x;
     const dz = d.position.z - p.z;

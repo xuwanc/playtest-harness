@@ -11,6 +11,7 @@ export * from './collision';
 export * from './combat';
 export * from './dash';
 export * from './dummies';
+export * from './health';
 export * from './hits';
 export * from './links';
 export * from './movement';

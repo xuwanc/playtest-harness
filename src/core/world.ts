@@ -82,6 +82,9 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
     gaze: initialGazeState(),
     dummies: createDummies(core.dummies),
     dummyAttackCount: 0,
+    // v9s.56：命中记录（飙血数据源）。空数组序列化稳定，不影响既有快照结构之外的部分。
+    hitMarks: [],
+    hitMarkSeq: 0,
     // v9s.39：草场只在这里生成一次；冻结夹具没有 scene.grass → 空草场，行为零影响。
     grass: createGrassState(core, scene, boxes, scene.grid),
     // v9s.x：不配置可破坏物件时是空数组，既有世界行为逐字节不变。
@@ -138,6 +141,9 @@ export function resetWorld(world: World): void {
   h.dirX = 0;
   h.dirZ = 0;
   world.hitCount = 0;
+  // v9s.56：命中记录清空，但 seq 保留 —— 表现层靠「上次播到哪」去重，
+  // 归零会让复位后的第一下血花被当成「已经播过」而丢掉。
+  world.hitMarks.length = 0;
   resetAbilities(world);
   clearArrows(world);
   resetDash(world);

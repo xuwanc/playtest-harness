@@ -558,7 +558,19 @@
         1.0,
         0.85,
         0.72
-      ]
+      ],
+      "damage": {
+        "light": 12,
+        "heavy": 18,
+        "knock": 26
+      },
+      "damageMul": {
+        "sword-shield": 1.0,
+        "dual-swords": 0.7,
+        "greatsword": 1.4,
+        "staff": 1.0,
+        "bow": 0.9
+      }
     },
     "separation": {
       "iterations": 3,
@@ -830,6 +842,8 @@
       "attackWindup": 0.34,
       "attackActive": 0.18,
       "attackRecovery": 0.4,
+      "health": 0,
+      "respawnSec": 3,
       "fighters": {
         "weapons": ["sword-shield", "dual-swords", "greatsword"],
         "spawn": [],
@@ -840,7 +854,9 @@
         "knockbackScale": 0.6,
         "leashRadius": 7,
         "comboCount": 0,
-        "comboGap": 0
+        "comboGap": 0,
+        "health": 120,
+        "respawnSec": 3.5
       }
     },
     "grass": {
@@ -2067,7 +2083,34 @@
         { "body": "#c85a4a", "limb": "#8d3a30", "head": "#f0c9a0" },
         { "body": "#c9a03c", "limb": "#8a6b22", "head": "#f0d6a0" },
         { "body": "#7d6ec4", "limb": "#4f4488", "head": "#e6d2b0" }
-      ]
+      ],
+      "death": {
+        "fallSec": 0.42,
+        "holdSec": 0.55,
+        "sinkSec": 0.38,
+        "riseSec": 0.42,
+        "fallDeg": 84,
+        "sinkDepth": 1.05
+      }
+    },
+    "blood": {
+      "enabled": true,
+      "color": "#b01c1c",
+      "darkColor": "#6b0d0d",
+      "drops": 13,
+      "dropLife": 0.46,
+      "dropSize": 0.07,
+      "spraySpeed": 2.1,
+      "sprayLift": 2.0,
+      "spread": 0.7,
+      "gravity": 12,
+      "mistLife": 0.15,
+      "mistRadius": 0.22,
+      "mistOpacity": 0.38,
+      "stainCount": 18,
+      "stainLife": 6.5,
+      "stainRadius": 0.2,
+      "stainOpacity": 0.5
     },
     "balance": {
       "enabled": true,

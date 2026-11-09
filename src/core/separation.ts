@@ -73,7 +73,10 @@ export function separationUpdate(world: World): void {
   for (let iter = 0; iter < iterations; iter++) {
     // 假人 ↔ 假人：各承担一半；重合时按 (i,j) 生成不同的确定性方向，避免挤成一堆
     for (let i = 0; i < dummies.length; i++) {
+      // v9s.56：尸体不参与分离（否则玩家从旁边走过会把倒下的陪练一路蹭走）
+      if (dummies[i].health.dead) continue;
       for (let j = i + 1; j < dummies.length; j++) {
+        if (dummies[j].health.dead) continue;
         const ang = (i * 3 + j) * GOLDEN_ANGLE;
         separatePair(
           dummies[i].position, dummies[j].position, dr, dr, 0.5, 0.5, slop,
@@ -83,6 +86,7 @@ export function separationUpdate(world: World): void {
     }
     // 玩家 ↔ 假人：玩家权重 0，全部由假人让开
     for (let k = 0; k < dummies.length; k++) {
+      if (dummies[k].health.dead) continue;
       const ang = (k + 1) * GOLDEN_ANGLE;
       separatePair(
         p, dummies[k].position, pr, dr, 0, 1, slop,

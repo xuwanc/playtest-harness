@@ -1261,6 +1261,19 @@ export type HitsConfig = {
    * 三连收招才不会变成三段慢动作。缺省全 1（旧行为）。
    */
   hitstopComboFalloff?: number[];
+  /**
+   * v9s.56 · 单次命中的伤害（按受击类型分档）。0 / 缺省 = 不结算伤害（旧行为：打不死）。
+   *
+   * 为什么按**受击类型**而不是直接按武器：受击类型已经按「武器 × 连段段数」定档过
+   * （大剑 = knock、第三段 = heavy、其余 = light），伤害跟着同一档走，就不会出现
+   * 「同一段动作两处各判一次档、调到不一致」的经典问题。
+   */
+  damage?: { light: number; heavy: number; knock: number };
+  /**
+   * v9s.56 · 分武器伤害倍率（乘在 `damage` 表上）。缺省 1。
+   * 大剑一记 1.4 倍 = 两三下打死陪练，双刀 0.7 倍要磨十下 —— 重量差从数字上就读得出来。
+   */
+  damageMul?: Partial<Record<WeaponId, number>>;
 };
 
 export type HitstopWarpConfig = {
@@ -1850,6 +1863,15 @@ export type DummyFighterConfig = {
    * 「一刀收住 → 再一刀」，而不是三段无停顿地连划。
    */
   comboGap?: number;
+  /**
+   * v9s.56 · 陪练血量（缺省沿用 `dummies.health`，0 = 打不死）。
+   *
+   * 普通假人是**测试桩**（量距离、测 AI），不该被打死；陪练是对手，需要有血量与重生。
+   * 两者分开配，测试夹具（`fighters: undefined` + `health: 0`）就逐字节保持旧行为。
+   */
+  health?: number;
+  /** v9s.56 · 陪练死亡后的重生延迟（秒），缺省沿用 `dummies.respawnSec` */
+  respawnSec?: number;
 };
 
 export type DummyConfig = {
@@ -1891,6 +1913,59 @@ export type DummyConfig = {
   leashRadius: number;
   /** v9s.38：持械陪练角色（追加在 `count` 之后，id 连续；缺省 = 没有陪练） */
   fighters?: DummyFighterConfig;
+  /**
+   * v9s.56 · 普通假人的血量。**0 = 不结算死亡**（旧行为，打不死）——
+   * 这些假人是测试桩，被打死会让「测距离 / 测 AI」的工位失效。缺省 0。
+   */
+  health?: number;
+  /** v9s.56 · 假人死亡后自动重生延迟（秒），缺省 3 */
+  respawnSec?: number;
+};
+
+/**
+ * v9s.56 · 假人生命值状态。
+ *
+ * 放在 `DummyState` 里（而不是 World 上的平行表）：假人会被地块按钮动态增删 / 重排 id，
+ * 平行表一旦漏同步就是「血条跟错人」。`maxHp = 0` 表示这个单位不参与死亡（测试桩）。
+ */
+export type DummyHealth = {
+  hp: number;
+  maxHp: number;
+  /** 已死亡：AI 冻结、不再结算命中、不再被索敌 / 分离推动 */
+  dead: boolean;
+  /** 死后经过的秒数（表现层倒地曲线用，只增不减） */
+  deadT: number;
+  /** 距重生剩余秒数（0 = 活着） */
+  respawn: number;
+  /** 复活后剩余秒数（> 0 = 刚刷出来，表现层做「从地里升起」与受击保护） */
+  revive: number;
+  /** 本局累计被击杀次数（验收 / 调试读数） */
+  kills: number;
+};
+
+/**
+ * v9s.56 · 一次命中的表现记录（飙血 / 火花消费）。
+ *
+ * 为什么单独记一份而不复用事件队列：`step` 每帧开头清空 `events`，低帧率一帧多步时
+ * 只有最后一步的 `hit` 事件会留下 —— 表现层就会漏掉血花（而漏血花比漏其他事件明显）。
+ * 这里是**短环形**（只留最近 N 条），表现层按 `seq` 补触发，幂等、不重复。
+ */
+export type HitMark = {
+  /** 自增序号：表现层记住 lastSeq，逐条补播 */
+  seq: number;
+  /** 命中点（世界坐标，已抬到受击高度，不是脚底） */
+  x: number;
+  y: number;
+  z: number;
+  /** 击打方向（单位向量，世界 XZ）：血往哪边喷 */
+  dx: number;
+  dz: number;
+  /** 0..1 力度：伤害 / 参考值，越重喷得越开 */
+  power: number;
+  /** 被打的假人 id */
+  id: number;
+  /** 是否致死（表现层额外放一记「倒地」喷溅） */
+  fatal: boolean;
 };
 
 export type DummyAttackPhase = 'idle' | 'windup' | 'active' | 'recovery';
@@ -1954,6 +2029,8 @@ export type DummyState = {
    * 「清除测试单位」只删带标记的，不碰基线。
    */
   spawnedByPlot?: string;
+  /** v9s.56：生命值 / 死亡 / 重生（`maxHp = 0` = 打不死的测试桩） */
+  health: DummyHealth;
 };
 
 export type DummyViewConfig = {
@@ -1966,6 +2043,60 @@ export type DummyViewConfig = {
    * 便于一眼区分「哪个是玩家、哪个是 AI」）。缺省沿用主角配色。
    */
   fighterColors?: Array<{ body: string; limb: string; head: string }>;
+  /** v9s.56：倒地 / 沉入地面 / 升起刷新的时序（陪练死亡表现） */
+  death?: DummyDeathViewConfig;
+};
+
+/**
+ * v9s.56 · 假人死亡的「尸体曲线」。
+ *
+ * 不用淡出（体素材质不透明，改透明度要逐材质开 `transparent` 并重排渲染顺序，
+ * 是 v9s.38 好不容易修掉的那类坑）。改成**倒 → 沉 → 升**：躺下、被地面「吞掉」、
+ * 重生时从地里升起来。方块人从地里长出来，比渐变消失更像这个画风该有的东西。
+ */
+export type DummyDeathViewConfig = {
+  /** 向后倒下的时长（秒） / 保持尸体的时长（秒） */
+  fallSec: number;
+  holdSec: number;
+  /** 沉入地面 / 从地面升起的时长（秒） */
+  sinkSec: number;
+  riseSec: number;
+  /** 倒下角度（度，绕局部 X 轴向后） */
+  fallDeg: number;
+  /** 完全沉入时的下沉深度（米，负值方向） */
+  sinkDepth: number;
+};
+
+/**
+ * v9s.56 · 命中飙血。
+ *
+ * 三种东西同时出现才读得出血：**血珠**（有初速、受重力、会落地）、
+ * **血雾**（命中瞬间那一团，跟着镜头方向摊开）、**地面血迹**（留几秒的环境痕迹）。
+ * 只做血珠会像打碎了一罐红油漆；只做血迹会缺少「这一下打实了」的瞬时冲击。
+ */
+export type BloodViewConfig = {
+  enabled: boolean;
+  /** 血珠 / 血迹的主色与暗色（暗色给地面用，避免地面上一片荧光红） */
+  color: string;
+  darkColor: string;
+  /** 每次命中喷几滴 / 单滴寿命（秒）/ 单滴边长（米） */
+  drops: number;
+  dropLife: number;
+  dropSize: number;
+  /** 初速（沿击打方向）与上抛速度（米/秒）、横向散布比例、重力（m/s²） */
+  spraySpeed: number;
+  sprayLift: number;
+  spread: number;
+  gravity: number;
+  /** 命中瞬间那团血雾：寿命 / 初始半径 / 峰值不透明度 */
+  mistLife: number;
+  mistRadius: number;
+  mistOpacity: number;
+  /** 地面血迹池大小 / 单块寿命 / 半径 / 不透明度 */
+  stainCount: number;
+  stainLife: number;
+  stainRadius: number;
+  stainOpacity: number;
 };
 
 /**
@@ -3143,6 +3274,8 @@ export type ViewConfig = {
   hitstop: HitstopViewConfig;
   /** v9s.37 · 击地冲击（大剑第三击）的尘环 / 震动 */
   groundSlam: GroundSlamViewConfig;
+  /** v9s.56 · 命中飙血（血珠 / 血雾 / 地面血迹） */
+  blood?: BloodViewConfig;
   /** v9s.39 · 体素草块的观感参数（颜色 / 尺寸 / 实例上限 / 碎片） */
   grass: GrassViewConfig;
   /** v9s.33：动态平衡量化 / 自动配重（纯表现，只读骨架，不写 Core） */
@@ -3337,6 +3470,10 @@ export type EventType =
   | 'dummy-hit'
   /** 玩家攻击命中假人，value = 假人 id */
   | 'hit'
+  /** v9s.56：假人被打死，value = 假人 id（倒地 / 计数 / 音效） */
+  | 'dummy-death'
+  /** v9s.56：假人重生，value = 假人 id（刷新光环 / 复位读数） */
+  | 'dummy-revive'
   /** 假人挥砍命中玩家（无伤害，只驱动受击动画），value = 假人 id */
   | 'player-hurt'
   /** 冲刺：翻滚起手，value = dash.id */
@@ -3492,6 +3629,13 @@ export type World = {
   arrowSeq: number;
   /** 测试假人，四种 AI 行为，纯状态数据 */
   dummies: DummyState[];
+  /**
+   * v9s.56：最近的命中记录（短环形，容量由 `HIT_MARK_CAP` 决定）。
+   * 表现层按 `hitMarkSeq` 补触发飙血；Core 自己**不读**这份数据。
+   */
+  hitMarks: HitMark[];
+  /** v9s.56：命中记录自增序号（只增不减，复位不归零 —— 表现层靠它去重） */
+  hitMarkSeq: number;
   /** 假人累计发起的攻击次数（无伤害，仅用于验收观察） */
   dummyAttackCount: number;
   /** v9s.39：体素草块（确定性、可序列化；表现层只读） */

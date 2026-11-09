@@ -1,3 +1,4 @@
+import { damageDummy, pushHitMark } from './health';
 import type { EventType, HitTarget, HurtState, HurtType, MeleeShape, Vec3, World } from './types';
 
 /** 一次命中结算的完整描述（近战与法杖技能共用）。 */
@@ -14,6 +15,11 @@ export type HitSpec = {
   sourceId?: number;
   /** v9s.37：本次命中的卡肉倍数（击地冲击这类「一次性爆发」给得更重）；缺省 1 */
   holdMul?: number;
+  /**
+   * v9s.56：本次命中的伤害点。缺省按 `hits.damage[type] × hits.damageMul[当前武器]` 算。
+   * 显式给值只用于「同一把武器不同招式伤害不同」的场合（目前没有），保留接口。
+   */
+  damage?: number;
 };
 
 const EPS = 1e-6;
@@ -72,6 +78,9 @@ export function applyHit(world: World, target: HitTarget, spec: HitSpec): void {
 
   const s = world.dummies[target.index];
   if (!s) return;
+  // v9s.56：尸体不再结算命中 —— 否则「打尸体」也会命中计数 / 卡肉 / 喷血，
+  // 而且连击会一直挂在已经倒下的人身上。
+  if (s.health.dead) return;
   applyHurt(s.hurt, spec.type, duration, spec.dirX, spec.dirZ);
   if (spec.knockback > EPS) {
     // 击退沿用 v7a 的连续速度冲量：v0 = knockback × decay，总后退距离 ≈ knockback
@@ -81,6 +90,27 @@ export function applyHit(world: World, target: HitTarget, spec: HitSpec): void {
   }
   world.hitCount += 1;
   emit(world, 'hit', s.id, s.position);
+
+  // v9s.56：伤害 / 死亡 / 命中记录。
+  // 伤害点按「受击类型查表 × 当前武器倍率」，四条命中链路（近战 / 击地 / 派生招 / 远程）
+  // 共用同一处，不会出现「箭能射死、刀不能」。
+  const dmg = hitDamage(world, spec);
+  const fatal = damageDummy(world, s, dmg);
+  // v9s.56：只有「有血可流」的单位才记命中（maxHp = 0 的测试桩是被砍的木桩，
+  // 喷血反而读错）。卡肉 / 命中计数 / 受击动画仍照旧 —— 所以不能在这里提前 return。
+  if (s.health.maxHp > EPS) {
+    pushHitMark(world, {
+      x: s.position.x,
+      // 命中点抬到胸腹高度：血从脚底喷出来是最常见的「一眼假」
+      y: s.position.y + world.config.dummies.height * (spec.type === 'knock' ? 0.46 : 0.52),
+      z: s.position.z,
+      dx: spec.dirX,
+      dz: spec.dirZ,
+      power: clamp(0.3 + dmg / 30 + (fatal ? 0.35 : 0), 0.3, 1.5),
+      id: s.id,
+      fatal,
+    });
+  }
 
   // v9s.29 卡肉：命中瞬间按住攻击方的时间轴（见 CombatState.hitstop）。
   // 取「最大值」而不是累加：同一帧多目标命中 / 连段多段命中不会把冻结叠成慢动作。
@@ -147,6 +177,21 @@ function hurtDuration(world: World, type: HurtType): number {
   if (type === 'knock') return c.hurtKnock;
   if (type === 'heavy') return c.hurtHeavy;
   return c.hurtLight;
+}
+
+/**
+ * v9s.56 · 一次命中的伤害点。
+ *
+ * `damage` 表缺省时返回 0（旧配置：无伤害、打不死），所以加这个模块不需要改任何旧配置。
+ */
+function hitDamage(world: World, spec: HitSpec): number {
+  if (typeof spec.damage === 'number') return Math.max(0, spec.damage);
+  const table = world.config.hits.damage;
+  if (!table) return 0;
+  if (spec.type === 'none') return 0;
+  const base = table[spec.type] ?? 0;
+  const mul = world.config.hits.damageMul?.[world.combat.weapon] ?? 1;
+  return Math.max(0, base) * Math.max(0, mul);
 }
 
 /** 线性插值 `[u, angDeg]` 关键点表；u 越界时取端点值。 */
@@ -323,6 +368,8 @@ function playerHits(world: World): void {
     // v9s.31：本次攻击已经结算过的目标跳过 —— 窗口内每帧都会扫，
     // 没有这张表就会把一击掉成十几击。
     if (cb.hitIds.indexOf(s.id) >= 0) continue;
+    // v9s.56：尸体不结算（也就不会把 hitIds 花在它身上，旁边活着的人还能被打到）
+    if (s.health.dead) continue;
     const dx = s.position.x - p.x;
     const dz = s.position.z - p.z;
     const dist = Math.hypot(dx, dz);
@@ -395,6 +442,7 @@ function playerGroundSlam(world: World): void {
   for (let i = 0; i < world.dummies.length; i++) {
     const s = world.dummies[i];
     if (onlyUnhit && cb.hitIds.indexOf(s.id) >= 0) continue;
+    if (s.health.dead) continue;
     const dx = s.position.x - p.x;
     const dz = s.position.z - p.z;
     const dist = Math.hypot(dx, dz);
@@ -463,6 +511,7 @@ export function scanLinkHits(world: World, dt: number): void {
   for (let i = 0; i < world.dummies.length; i++) {
     const s = world.dummies[i];
     if (l.hitIds.indexOf(s.id) >= 0) continue;
+    if (s.health.dead) continue;
 
     const t = seg2 > EPS
       ? clamp(((s.position.x - x0) * segX + (s.position.z - z0) * segZ) / seg2, 0, 1)
@@ -515,6 +564,8 @@ function dummyHits(world: World): void {
     if (e.type !== 'dummy-hit') continue;
     const s = world.dummies[e.value - 1];
     if (!s) continue;
+    // v9s.56：死人不砍人（事件是死前发的话，这一帧已经死了就别结算）
+    if (s.health.dead) continue;
     // v9s.38：持械陪练用「它手里那把武器」的 reach / 击退，普通假人仍用 dummyReach。
     // 这样大剑陪练隔着 2m 也能砍到、双刀必须贴身，混战的距离判断才是真的。
     const reach = s.weapon ? (cfg.reach[s.weapon] ?? cfg.dummyReach) : cfg.dummyReach;
