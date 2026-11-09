@@ -16,7 +16,7 @@ first-fit 拼成连续地面；台阶 / 门洞 / 障碍 / 初始假人 / 草块�
 | `package.json` 版本 | `0.9.69`（内部代号 v9s.48） |
 | 线上徽标 | `v0.9.69`（构建时间随发布变化） |
 | 发布方式 | `npm run build` → `npm run publish:preview`（唯一通道） |
-| 线上链接 | 以 `publish:preview` 打印的 shareLink 为准（本条在发布后写入） |
+| 线上链接 | <https://aef42c265bdddcf97.app.workbuddy.host/?sharecode=2FOZ6AI6QC>（`publish:preview` 打印的 shareLink，徽标 `v0.9.69` 已验证） |
 
 ## 验证基线（改完必须复跑）
 
@@ -32,7 +32,10 @@ first-fit 拼成连续地面；台阶 / 门洞 / 障碍 / 初始假人 / 草块�
 
 ## 正在做
 
-- 无。v9s.48 已合入 main 并发布。
+- 无。v9s.48 已合入 main 并发布，线上徽标 `v0.9.69` 已核验（`plotDebug()` 读到 9 块地 /
+  11 块板 / 2 块填充 / 9 个假人，`diagnostics` 为空）。
+- ⚠️ 线上存在**两个域名**：本文这条 `aef42c26…` 是 v0.9.69；另一条
+  `aac01946…`（上一轮并行 agent 的站点）停在 v0.9.68。以本文这条为准。
 
 ## 下一步
 
