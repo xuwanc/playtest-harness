@@ -444,6 +444,79 @@ def main() -> int:
                       len(walk["seen"]) == 2 and walk["flips"] >= 3 and walk["badPhase"] == 0,
                       str(walk))
 
+                # ---- v9s.43：换向融合（前进 ⇄ 后退，腿不能抽一下）----
+                # 旧行为：摆腿方向是硬符号（localForward >= 0 ? +1 : -1），速度穿过 0 的那一帧
+                # 整条腿位镜像过去 —— 实测单帧腿角跳 1.06~1.26 rad（正常跨步只有 0.53）。
+                # 现在符号在 dirFlipSec 内走过 0，摆幅跟着收放。
+                # 判据按「每逻辑步」归一：软件渲染下一帧会跑多个固定步，直接比逐帧差会误判。
+                page.evaluate(
+                    "() => {"
+                    "  const h = window.__harness, w = h.world, c = w.character;"
+                    "  for (const d of w.dummies) { d.mode = 'idle'; d.position.x = 60; d.position.z = 60; }"
+                    "  w.combat.phase = 'idle'; w.combat.phaseTimer = 0; w.combat.comboIndex = 0;"
+                    "  w.combat.queued = false;"
+                    "  c.position.x = 0; c.position.z = 9; c.position.y = 0;"
+                    "  c.velocity.x = 0; c.velocity.z = 0;"
+                    "  c.bodyYaw = Math.PI; c.facing = Math.PI;"
+                    "  window.__flipProbe = { rows: [], t0: w.time };"
+                    "  const tick = () => {"
+                    "    const g = h.gaitDebug();"
+                    "    const P = window.__flipProbe;"
+                    "    P.rows.push({ t: w.time, d: g.legLPitch - g.legRPitch, dir: g.dirF,"
+                    "      spd: Math.hypot(c.velocity.x, c.velocity.z) });"
+                    "    P.raf = requestAnimationFrame(tick);"
+                    "  };"
+                    "  tick();"
+                    "  const key = (type, k, code) => window.dispatchEvent("
+                    "    new KeyboardEvent(type, { key: k, code, bubbles: true }));"
+                    "  key('keydown', 's', 'KeyS');"
+                    "  window.__flipPhase2 = () => {"
+                    "    key('keyup', 's', 'KeyS');"
+                    "    key('keydown', 'w', 'KeyW');"
+                    "    window.__flipProbe.t1 = w.time;"
+                    "  };"
+                    "  window.__flipEnd = () => {"
+                    "    key('keyup', 'w', 'KeyW');"
+                    "    cancelAnimationFrame(window.__flipProbe.raf);"
+                    "  };"
+                    "}"
+                )
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__flipProbe.t0 + 1.0",
+                    timeout=90000,
+                )
+                page.evaluate("() => window.__flipPhase2()")
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__flipProbe.t1 + 1.0",
+                    timeout=90000,
+                )
+                flip = page.evaluate(
+                    "() => {"
+                    "  window.__flipEnd();"
+                    "  const h = window.__harness, P = window.__flipProbe;"
+                    "  const dt = h.world.config.fixedDt;"
+                    "  let worst = 0, moving = 0;"
+                    "  const dirs = [];"
+                    "  for (let i = 1; i < P.rows.length; i++) {"
+                    "    const a = P.rows[i - 1], b = P.rows[i];"
+                    "    const steps = Math.max(1, Math.round((b.t - a.t) / dt));"
+                    "    const jump = Math.abs(b.d - a.d) / steps;"
+                    "    if (b.spd > 0.3 || a.spd > 0.3) { worst = Math.max(worst, jump); moving += 1; }"
+                    "    dirs.push(b.dir);"
+                    "  }"
+                    "  const mid = dirs.filter((v) => Math.abs(v) > 0.15 && Math.abs(v) < 0.85).length;"
+                    "  return { worst: +worst.toFixed(3), moving, mid,"
+                    "    lo: +Math.min(...dirs).toFixed(2), hi: +Math.max(...dirs).toFixed(2),"
+                    "    sec: h.viewConfig.gait.dirFlipSec, n: P.rows.length };"
+                    "}"
+                )
+                check("换向不抽腿（单步腿角跳变 ≤ 0.62 rad，正常跨步 0.53）",
+                      flip["worst"] <= 0.62, str(flip))
+                # 软件渲染下 1s 游戏时间只有 ~12 个 rAF 样本，中间态可能只被采到 2 帧；
+                # 所以判「出现过中间态 + 两端符号都到过」，不要求逐帧序列完整。
+                check("换向融合真的在跑（dirF 经过中间态，两端符号都出现过）",
+                      flip["mid"] >= 2 and flip["hi"] >= 0.85 and flip["lo"] <= -0.15, str(flip))
+
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
                       f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}",
                       " 命中 progress", f"{hit_prog:.3f}" if hit_prog is not None else "-")

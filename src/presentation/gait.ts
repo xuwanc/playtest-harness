@@ -43,6 +43,11 @@ export type GaitInput = {
    * 传 0 表示拿不到物理步幅（如攻击等效驱动），退回按速度估算摆幅的旧路径。
    */
   stride: number;
+  /** v9s.43：前向驱动符号 −1..1（由 `slewDirSign` 逐帧推进），省略 = 按 localForward 的正负取 ±1。
+   *  见 `dirDrive`：|dirF| < 1 表示「正在换向」，前后摆幅按该值淡出，腿不会一帧镜像过去。 */
+  dirF?: number;
+  /** v9s.43：右向驱动符号 −1..1，同上（侧摆 / 交叉步 / 侧倾共用） */
+  dirR?: number;
   grounded: boolean;
 };
 
@@ -146,6 +151,51 @@ export function backStrafeKeep(
   return 1 - t * t * (3 - 2 * t);
 }
 
+/* -------------------------------------------------------------------------- *
+ * v9s.43 · 换向融合：前后摆的「符号」不能一帧翻过去
+ * -------------------------------------------------------------------------- *
+ * 现象：前进时把摇杆一拉到后，腿会抽一下（线上 ~0.65s 内转 180°，实测单帧腿角跳
+ * 1.20 rad ≈ 69°，而正常跨步单帧只有 0.5 rad）。
+ *
+ * 根因：前后轴摆幅 = `dirF × wF × stride/4 × off(p)`，其中 dirF 是**硬符号**
+ * `localForward >= 0 ? +1 : -1`。速度穿过 0 时 dirF 瞬间取反，等于把整条腿位
+ * 镜像过去 —— 而这一帧 `wF` 并不小（纯前后移动时 wF ≈ 1），摆幅又是按**步幅**
+ * 而不是按速度定的（stride/4 恒为 0.25m），所以换向那一帧脚直接瞬移 ~0.5m 的
+ * 等效摆角。侧轴（dirR）同理：左右一换，侧摆 / 交叉步 / 侧倾整套镜像。
+ *
+ * 修法不是改摆幅曲线（solveGait 本来 C¹），而是让**符号本身连续**：
+ * 每个方向各存一个 −1..1 的驱动量，按 `dirFlipSec` 的速率线性推进到目标符号，
+ * 再用 smoothstep 形状（两端速度为 0）映射成系数乘上去。换向时分帧经过 0，
+ * 摆幅跟着收成 0 再长回来 —— 等价于「两个方向的姿态交叉淡入」，观感是转身时
+ * 腿先并一下再迈出去，而不是瞬移。
+ *
+ * 为什么不按速度淡出：摆幅按步幅定，与速度无关，换向时速度可能只有 0.4 m/s
+ * 却仍是满摆幅；按速度淡出会把「慢走」也削成碎步。只有「符号确实翻了」时才需要淡。
+ */
+
+/** 每帧朝目标符号（±1）推进 step，返回 −1..1 的**线性**值。state 存这个原始值。 */
+export function slewDirSign(
+  current: number,
+  target: number,
+  dt: number,
+  sec: number,
+): number {
+  const t = target >= 0 ? 1 : -1;
+  const s = Math.max(EPS, sec);
+  const step = (2 / s) * Math.max(0, dt);   // −1 → +1 恰好花 sec 秒
+  const cur = clamp(current, -1, 1);
+  const d = t - cur;
+  if (Math.abs(d) <= step) return t;
+  return cur + Math.sign(d) * step;
+}
+
+/** 线性 −1..1 → 两端速度为 0 的驱动系数（0 → 0，±1 → ±1）。 */
+export function dirDrive(x: number): number {
+  const v = clamp(Number.isFinite(x) ? x : 1, -1, 1);
+  const a = Math.abs(v);
+  return Math.sign(v) * a * a * (3 - 2 * a);
+}
+
 export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
   if (!input.grounded || input.speed < EPS) return idle();
 
@@ -185,8 +235,10 @@ export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
   );
   const wS = (ar / sum) * backKeep;
   const wF = (af / sum) + (ar / sum) * (1 - backKeep);
-  const dirF = input.localForward >= 0 ? 1 : -1; // 前进 +1 / 后退 -1
-  const dirR = input.localRight >= 0 ? 1 : -1;   // 右移 +1 / 左移 -1
+  // v9s.43：符号用驱动量（可由骨架层按 slewDirSign 平滑），省略时退回硬符号。
+  // `dirDrive` 只是形状映射：|x|=1 时与旧的 ±1 逐位相同，只有换向途中才衰减摆幅。
+  const dirF = dirDrive(input.dirF ?? (input.localForward >= 0 ? 1 : -1)); // 前进 +1 / 后退 -1
+  const dirR = dirDrive(input.dirR ?? (input.localRight >= 0 ? 1 : -1));   // 右移 +1 / 左移 -1
 
   const halfStride = reach;
 
@@ -211,7 +263,9 @@ export function solveGait(input: GaitInput, cfg: GaitViewConfig): GaitPose {
     const rollZ = legAngle(footX);
 
     // 膝：摆动相抬起；侧移的领先腿多弯一点（跨步更明显）
-    const kneeX = cfg.kneeLift * lift * amp * (0.55 + 0.25 * wF + (lead > 0 ? 0.2 * wS : 0));
+    // v9s.43：领先量改成 `0.1 × (1 + side·dirR)` —— |dirR|=1 时与旧写法（领先 0.2/跟随 0）
+    // 逐位相同，但换向途中连续穿过 0.1，抬膝不会随 lead 的符号在一帧里跳一格。
+    const kneeX = cfg.kneeLift * lift * amp * (0.55 + 0.25 * wF + 0.1 * wS * (1 + side * dirR));
     return { pitchX, rollZ, kneeX };
   }
 

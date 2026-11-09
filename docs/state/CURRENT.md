@@ -1,20 +1,20 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-09 12:45。
+> 最后更新：2026-11-09 13:20。
 
 ## 一句话
 
-v0.9.63 已发布：手感面板加了第三区 —— **步态相位的 sin 曲线**，并按「哪只脚踩地」分色
-（琥珀左 / 紫右 / 灰双踩 / 青腾空）。相位读的是**本帧真正喂给 `solveGait` 的那个**
-（`gaitDebug().phase`），所以连点攻击时曲线照样推进，不会像 Core 的 `gaitPhase` 那样冻成平线。
+v0.9.64 已发布：**换了摆腿方向的「融合」** —— 前进切后退不再一帧把腿位镜像过去
+（实测单帧腿角跳 1.06~1.26 rad → 0.55，与正常跨步 0.53 持平）。做法是让方向符号在
+`dirFlipSec = 0.16s` 内走过 0，摆幅随之收放；左右轴同构，玩家与假人共用。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.63` |
-| 线上徽标 | `v0.9.63`（构建时间随发布变化） |
+| `package.json` 版本 | `0.9.64` |
+| 线上徽标 | `v0.9.64`（构建时间随发布变化） |
 | 发布方式 | `npm run build` → `node /root/.codebuddy/skills/sites/scripts/publish.js --dir dist --language static`（覆盖更新，不换链接） |
 | 线上链接 | 通过项目内部渠道获取（仓库不存凭据） |
 
@@ -23,21 +23,22 @@ v0.9.63 已发布：手感面板加了第三区 —— **步态相位的 sin 曲
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 92 文件 / 904 例全绿 |
+| `npx vitest run` | 93 文件 / 911 例全绿 |
 | `npm run verify:portable` | PASS（Core 25 文件边界未破） |
-| `npm run smoke` | 23/23 PASS |
-| `npm run docs:check` | PASS（51 份文档，单份 ≤300 行） |
+| `npm run smoke` | 25/25 PASS |
+| `npm run docs:check` | PASS |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 
 ## 正在做
 
-- 无。v9s.42 已完成（`docs/journal/2026-11-09-03.md`）。
-- 面板规则写在 [`../systems/animation-notes-3.md`](../systems/animation-notes-3.md) §17：
-  一个周期 = 一步、`sin φ > 0` = 左脚支撑相、**不能读 Core `gaitPhase`**（攻击时冻住）、
-  **不能拿速度判「在不在走」**（攻击时速度也是 0，要看相位自己有没有推进）。
-- 读数接口：`__harness.motionDebug.last()` 给 `{ phase, stance }`，
-  `samples()` 给窗口内逐帧 `{ phase, stance, moving, grounded }`。
+- 无。v9s.43 已完成（`docs/journal/2026-11-09-04.md`）。
+- 规则写在 [`../systems/animation.md`](../systems/animation.md) §1.6 与
+  [`../systems/animation-notes-3.md`](../systems/animation-notes-3.md) §18：
+  **摆幅按步幅定、与速度无关**，所以不能按速度淡出；只有「符号真的翻转」才需要淡；
+  状态用**最终 drive**（含攻击等效驱动）推进，不用 realDrive。
+- 读数接口：`__harness.gaitDebug()` 新增 `dirF` / `dirR`（−1..1，稳态恒为 ±1）；
+  调试面板「程序化步态」新增「换向融合时长 (s)」滑杆，拉 0 = 旧行为 A/B。
 
 ## 下一步（按投入产出排序）
 
@@ -62,4 +63,5 @@ v0.9.63 已发布：手感面板加了第三区 —— **步态相位的 sin 曲
 - 连击让单轮伤害事件 ×3，混战占空比要按「轮」而不是「刀」评估；
 - 收势淡出会把相位「扫回」真实步态（最多 π；静止收招看不出来，边走边收招 0.28 rad/帧）；
 - 面板的「踩地」是**相位判据**不是脚的真实高度（极端姿态下可能不一致）；
+- 换向融合有 0.16s 的「收腿窗」（已知取舍，`dirFlipSec` 可调，拉 0 回到硬符号）；
 - `groundHeightAt` 只按中心点取高。

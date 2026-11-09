@@ -142,3 +142,60 @@ preview 的最后一帧。于是「新加的贴地特效不显示」很容易被
 
 > 验收：`tests/v9s42-motion-phase.test.ts`（`stanceOf` / `wrapPhase` / 攻击段相位推进）、
 > `npm run smoke`「手感面板：站着不动判双踩」「手感面板：走路时相位曲线左右脚交替」。
+
+## 十八、v9s.43：换向为什么不能「一帧翻符号」
+
+用户原话：**「前向移动切后向移动时 腿会抽一下」**。
+
+`solveGait` 本身是 C∞ 的（只有 sin/cos 与一条 C¹ 的 `plantOffset`），所以第一反应是
+「数学没问题」。问题不在曲线，在**乘在曲线前面的那个符号**：
+
+```
+前后摆幅 footZ = dirF × wF × (stride × reachRatio) × off(φ)
+dirF = localForward >= 0 ? +1 : −1        // ← 硬符号
+```
+
+速度穿过 0 时 `dirF` 一帧取反，等于把整条腿位**镜像**过去。`wF` 这时并不小（纯前后移动
+`wF ≈ 1`），而摆幅是按**步幅**定的（`stride/4`，恒 ≈0.36m），与速度无关 —— 于是
+反向那一帧（实测 0.43 m/s）脚等效瞬移 0.5m，读数上就是单帧腿角跳 1.2 rad。
+
+三个数字先量出来再改（`tests/v9s43-reverse-blend.test.ts` 里保留了对照）：
+
+| | 注视锁定（原地倒走） | 不锁朝向（边转身边滑） | 左右横移 |
+|---|---|---|---|
+| 旧 | 1.06 rad | 1.26 rad | 1.21 rad |
+| 新 | 0.55 | 0.55 | 0.55 |
+| 正常跨步单帧 | 0.53 | 0.53 | 0.53 |
+
+也就是说：**换向那一帧现在不比正常走一步更激烈**，再压下去意义不大（自然动作成了主导项）。
+
+做法（`gait.ts`）：
+
+```ts
+// 骨架层每帧推一次符号；state 是 −1..1 的**线性**值
+dirF = slewDirSign(dirF, drive.localForward >= 0 ? 1 : -1, dt, gaitCfg.dirFlipSec);
+// solveGait 里再映射成两端速度为 0 的系数
+const dirF = dirDrive(input.dirF ?? (localForward >= 0 ? 1 : -1));
+```
+
+- `slewDirSign` 匀速走 `|Δ|=2/sec` 的步长（`−1 → +1` 正好 `dirFlipSec` 秒）。匀速是刻意的：
+  峰値单帧变化最小；smoothstep 会让峰值变成 1.5 倍。
+- `dirDrive` 是 `sign(x)·smoothstep(|x|)`：`|x| = 1` 时逐位等于旧的 ±1（稳态零差异），
+  0 附近衰减更快 → 腿在换向中点真正并拢，不会「一半镜像」。
+- 左右轴 `dirR` 同一条通道。顺带把抬膝的领先量从 `lead > 0 ? 0.2 : 0` 改成
+  `0.1 × (1 + side·dirR)` —— 旧写法在 `dirR` 过 0 时会让两条腿的抬膝差一帧跳一格。
+
+### 三个坑
+
+1. **不要按速度淡出**。看着「反正换向时速度很低」就想 `amp *= speed`，会把慢走削成碎步
+   （v9o 踩过：低速巡航被误判成停步，腿冻住、身体平移 = 滑行）。摆幅归步幅管，只有
+   **符号翻转**才需要淡。
+2. **stale 状态要用「最终 drive」而不是 realDrive 推进**。攻击期间 `drive` 是
+   `attackGaitDrive` 的等效驱动（符号可能和真实速度不同），用 realDrive 推进会让收招
+   淡出段的两套姿态互相打架。顺序必须是：`realDrive → attackGaitDrive → drive → 推符号`。
+3. **停步收相期间也要传同一组符号**。`solveStopGait` 用的是冻结的 `stopFwd/stopRight`，
+   正常情况下符号与它同向；若换向恰好发生在收相窗口里，`dirF` 还在半途，摆幅会跟着
+   收相进度一起衰减 —— 这比「切回硬符号」更安全（切换才是一帧跳变）。
+
+> 图：`shots/v9s43/01-reverse-blend.png`（左：换向前后两腿夹角曲线；右：峰值对比）。
+> 数据：同目录 `v9s43-before.csv` / `v9s43-after.csv`（`dirFlipSec = 0` vs `0.16`，同一段输入）。

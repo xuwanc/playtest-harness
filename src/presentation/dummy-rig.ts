@@ -17,7 +17,7 @@ import type {
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
   backHipYawTarget,
-  stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir, stopYawFade,
+  stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir, stopYawFade, slewDirSign,
 } from './gait';
 import type { GaitInput } from './gait';
 import { solveHurtPose } from './hurt-pose';
@@ -234,6 +234,11 @@ export function createDummyRig(
   let lastGateResume = false;
   let lastSpeed = 0;
   let lastPrevSpeed = 0;
+  /** v9s.43：前后 / 左右摆腿的驱动符号（−1..1，线性）。与主角同构：
+   *  KEEP DIST 从「退」切到「进」时硬翻符号会让整条腿位镜像（会抽一下），
+   *  这里按 gaitCfg.dirFlipSec 逐帧走过 0，摆幅跟着收放。 */
+  let dirDriveF = 1;
+  let dirDriveR = 1;
 
   return {
     group: root,
@@ -434,12 +439,26 @@ export function createDummyRig(
       lastSpeed = speed;
       lastPrevSpeed = oldPrevSpeed;
 
+      // ---- v9s.43 · 换向融合（与主角同构）----
+      // 假人在 KEEP DIST / FOLLOW 里频繁「够近了退、拉开了进」，硬符号换向时
+      // 整条腿位会一帧镜像过去 —— 站在近处的陪练最容易被看到抽腿。
+      const flipSec = Math.max(0, gaitCfg.dirFlipSec ?? 0);
+      if (flipSec > 0) {
+        dirDriveF = slewDirSign(dirDriveF, localForward >= 0 ? 1 : -1, frameDt, flipSec);
+        dirDriveR = slewDirSign(dirDriveR, localRight >= 0 ? 1 : -1, frameDt, flipSec);
+      } else {
+        dirDriveF = localForward >= 0 ? 1 : -1;
+        dirDriveR = localRight >= 0 ? 1 : -1;
+      }
+
       const gaitInput: GaitInput = inStop ? {
         phase: stopPhase0,
         speed: stopSpeed0,
         moveSpeed: referenceSpeed,
         localForward: stopFwd,
         localRight: stopRight,
+        dirF: dirDriveF,
+        dirR: dirDriveR,
         legLength: v.legLength,
         stride: stopStride0,
         grounded: true,
@@ -449,6 +468,8 @@ export function createDummyRig(
         moveSpeed: referenceSpeed,
         localForward,
         localRight,
+        dirF: dirDriveF,
+        dirR: dirDriveR,
         legLength: v.legLength,
         stride: s.stride,
         grounded: true,

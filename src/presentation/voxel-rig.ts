@@ -29,7 +29,7 @@ import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
   backHipYawTarget,
   stopBlendGate, chestYawFromHip, solveStopInertia, bodyLocalDir,
-  stopYawFade, solveTurnStep,
+  stopYawFade, solveTurnStep, slewDirSign,
 } from './gait';
 import type { GaitInput } from './gait';
 import {
@@ -182,6 +182,9 @@ export type VoxelRig = {
      * 相位冻住，而这一段腿其实由 `attackGaitDrive` 的等效驱动在走。
      */
     phase: number;
+    /** v9s.43：本帧的换向驱动符号（−1..1）。稳态恒为 ±1；换向途中经过 0，
+     *  前后摆幅按 |该值| 淡出（0.16s 走完）。验收「换向不抽腿」直接读它。 */
+    dirF: number; dirR: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
    *  供验收「腿摆动方向」：投影基准必须与腿所在坐标系一致，否则非正前方时方向被歪。 */
@@ -773,6 +776,14 @@ export function createVoxelRig(
   let balanceBodyZ = NaN;
   /** 本帧喂给 solveGait 的四个等效驱动量（诊断用） */
   let lastDrive: GaitDrive = { speed: 0, phase: 0, localForward: 0, localRight: 0 };
+  /**
+   * v9s.43：前后 / 左右摆腿的**驱动符号**（−1..1，线性，未做形状映射）。
+   * 硬符号在速度穿过 0 时会一帧取反 = 整条腿位镜像（实测单帧腿角跳 1.2 rad）；
+   * 这里按 `gaitCfg.dirFlipSec` 逐帧推进，交给 `solveGait` 用 smoothstep 收放摆幅。
+   * 初值取 +1：出生时站在待机姿态，第一帧即使方向相反也只是多淡 0.16s，无跳变。
+   */
+  let dirDriveF = 1;
+  let dirDriveR = 1;
   /** v9n：本帧实际写入双腿的姿态（诊断用） */
   let lastLegs = { lp: 0, lr: 0, rp: 0, rr: 0 };
   /** 不传 coreTime 时（单测）使用的本地时间累加器 */
@@ -2115,6 +2126,19 @@ export function createVoxelRig(
       // real.phase 上靠，记进去会把下一段的起点拽回去）。
       if (attacking) attackPhasePrev = drive.phase;
 
+      // ---- v9s.43 · 换向融合 ----
+      // 用**最终 drive**（含攻击等效驱动）的符号推进：`solveGait` 的前后摆幅 = dirF × wF ×
+      // 步幅/4，dirF 硬翻会让整条腿在一帧里镜像过去。这里让符号在 dirFlipSec 内走过 0，
+      // 摆幅随之收放（等价于两个方向的姿态交叉淡入），换向时腿先并一下再迈出去。
+      const flipSec = Math.max(0, gaitCfg.dirFlipSec ?? 0);
+      if (flipSec > 0) {
+        dirDriveF = slewDirSign(dirDriveF, drive.localForward >= 0 ? 1 : -1, dt, flipSec);
+        dirDriveR = slewDirSign(dirDriveR, drive.localRight >= 0 ? 1 : -1, dt, flipSec);
+      } else {
+        dirDriveF = drive.localForward >= 0 ? 1 : -1;
+        dirDriveR = drive.localRight >= 0 ? 1 : -1;
+      }
+
       // ---- v9n 停步收相 ----
       // Core 的 gaitPhase 只在有位移时推进；松手后位移趋零 → 相位冻结，而 solveGait
       // 只要 speed>=EPS 就仍按该相位输出，角色于是「卡在最后一个跨步 pose」一小段时间。
@@ -2171,6 +2195,9 @@ export function createVoxelRig(
         moveSpeed,
         localForward: stopFwd,
         localRight: stopRight,
+        // v9s.43：收相是「停步那一刻方向的快照」，驱动符与冻住的 stopFwd 同向
+        dirF: dirDriveF,
+        dirR: dirDriveR,
         legLength: v.legLength,
         stride: stopStride0,
         grounded: true,
@@ -2180,6 +2207,8 @@ export function createVoxelRig(
         moveSpeed,
         localForward: drive.localForward,
         localRight: drive.localRight,
+        dirF: dirDriveF,
+        dirR: dirDriveR,
         legLength: v.legLength,
         // v9p：攻击时喂「放大的等效步幅」（strideScale），走物理步幅路径让跨步更大；
         // 拉 0 时 drive.stride=0，精确回到 v8d 的「摆幅随速度」回退路径。
@@ -2224,6 +2253,9 @@ export function createVoxelRig(
           moveSpeed,
           localForward: realDrive.localForward,
           localRight: realDrive.localRight,
+          // v9s.43：与主步态共用同一组驱动符，接管混合时不会因符号不同而互相对冲
+          dirF: dirDriveF,
+          dirR: dirDriveR,
           legLength: v.legLength,
           stride: realDrive.stride ?? 0,
           grounded: c.grounded,
@@ -2752,6 +2784,7 @@ export function createVoxelRig(
         legLPitch: lastLegs.lp, legLRoll: lastLegs.lr,
         legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,
         phase: lastDrive.phase,
+        dirF: dirDriveF, dirR: dirDriveR,
       };
     },
     gaitYaw(): number {

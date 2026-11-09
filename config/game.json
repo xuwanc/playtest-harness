@@ -1208,7 +1208,8 @@
       "stopPeakRatio": 0.48,
       "knockGaitScale": 1,
       "backStrafeStartDeg": 100,
-      "backStrafeFullDeg": 132
+      "backStrafeFullDeg": 132,
+      "dirFlipSec": 0.16
     },
     "animation": {
       "attack": {

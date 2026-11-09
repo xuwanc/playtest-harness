@@ -31,6 +31,7 @@
 | 手感面板相位是一条平线 | `voxel-rig.gaitDebug().phase` | 别读 Core `gaitPhase`（攻击时冻住） | 同上 §17 坑 1 | `__harness.gaitDebug().phase` vs `world.character.gaitPhase` |
 | 连击每一刀都迈同一条腿 / 换段时脚被拽回去 | `presentation/program-anim.ts`、`voxel-rig.ts` | `attackGaitDrive`、`attackPhaseBase`、`attackStepIndex` | [systems/animation.md](systems/animation.md) §1.4 | `tests/v9s41-attack-step-legs.test.ts`、`npm run smoke`「连击跨步左右换腿」 |
 | 连击换段时身体往回弹一下 | `voxel-rig.ts` | `applyStep`、`stepZ/stepX/stepDip` | 同上 §1.4 末段 | `tests/v9s41-attack-step-legs.test.ts`「换段不推人」 |
+| 前进切后退（或左右换向）时腿抽一下 | `presentation/gait.ts` | `slewDirSign`、`dirDrive`、`GaitInput.dirF` | [systems/animation-notes-3.md](systems/animation-notes-3.md) §18 | `tests/v9s43-reverse-blend.test.ts`、`npm run smoke`「换向不抽腿」 |
 | 截图放哪 / 能不能入库 | `shots/`（`.gitignore` 已挡） | — | [assets/conventions.md](assets/conventions.md) | `git status` 里不该出现 png |
 | 刀光 / 斩击弧不出现 | `presentation/three-scene.ts` | `weapon-trail.ts`、`FX_ORDER.trail / slash` | [systems/presentation-fx.md](systems/presentation-fx.md) | `__harness.fxDebug()` |
 | 调试面板某项不知道去哪了 | `presentation/debug-panel.ts` | 7 个 `top()` 一级分类 | 本页 §3.4 | 截图 `shots/v9s38/07,08` |
@@ -147,7 +148,7 @@ telemetry()   最近 20 秒输入 / 位移 / 事件诊断
 | [`systems/input-controls.md`](systems/input-controls.md) | 摇杆、按钮、手势、按键表 |
 | [`systems/verification.md`](systems/verification.md) | 自动 / 量化 / 移植验收 |
 | [`systems/known-limits.md`](systems/known-limits.md) | 已知限制（现状，不是待办） |
-| [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 89 步手动验收 |
+| [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 102 步手动验收 |
 | [`state/CURRENT.md`](state/CURRENT.md) | 当前状态 + 下一步（覆盖写） |
 | [`risk-review.md`](risk-review.md) | **当前**活跃风险 + 处置优先级 |
 | [`risk-history.md`](risk-history.md) | 已关闭风险的归档（按版本） |
@@ -159,4 +160,4 @@ telemetry()   最近 20 秒输入 / 位移 / 事件诊断
 | [`decisions/ADR-005`](decisions/ADR-005-ground-height.md) | 贴地高度查询放 Core |
 | [`decisions/ADR-006`](decisions/ADR-006-fixed-step-events.md) | 固定步长 + 显式事件队列 |
 | [`decisions/ADR-007`](decisions/ADR-007-knockback-default.md) | 默认配置反映真实手感 |
-| [`journal/`](journal/) | 按日期的迭代记录（23 份，2026-11-05 起；`-00` 是功能总表，`-06` 是 v9s.38，`-07` 是文档重构，`-08` 是大文件职责梳理，`-09` 是陪练连击，`-10` 是连击换腿，`-11` 是相位可视化） |
+| [`journal/`](journal/) | 按日期的迭代记录（25 份，2026-11-05 起；`-00` 是功能总表，`-06` 是 v9s.38，`-07` 是文档重构，`-08` 是大文件职责梳理，`-09` 是陪练连击，`-10` 是连击换腿，`-11` 是相位可视化，`-12` 是换向融合） |
