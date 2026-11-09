@@ -30,7 +30,7 @@
 
 ## 二、开工标准流程（读通 / 写走 MCP 网关）
 
-读用标准 git；**能不能 push 先测**（`git push --dry-run origin HEAD:refs/heads/__probe`）。
+读用标准 git；**能不能 push 先测**（`GIT_TERMINAL_PROMPT=0 git push --dry-run origin HEAD:refs/heads/__probe`；不加这个变量会挂住等输入）。
 2026-11-09 本沙箱写没有凭证，此时走已授权的 GitHub MCP 网关（细节见规范 §1）：
 
 ```bash

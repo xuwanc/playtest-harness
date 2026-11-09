@@ -27,7 +27,8 @@ journal 也各有一份 `2026-11-09-02.md`（add/add 冲突），只能事后补
 
 ```bash
 git ls-remote --heads origin >/dev/null && echo 读 OK
-git push --dry-run origin HEAD:refs/heads/__probe 2>&1 | tail -1   # 能写会打印 "Everything up-to-date"
+GIT_TERMINAL_PROMPT=0 git push --dry-run origin HEAD:refs/heads/__probe 2>&1 | tail -1
+# 能写 → "Everything up-to-date"；不能写 → 立刻报 could not read Username（不加 GIT_TERMINAL_PROMPT=0 会挂住等输入）
 ```
 
 2026-11-09 实测：`github.com:443` **读**可用（`fetch` / `clone` / `ls-remote`），
