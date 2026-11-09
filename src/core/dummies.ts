@@ -104,7 +104,7 @@ export function createDummies(cfg: DummyConfig): DummyState[] {
   for (let i = 0; i < cfg.count; i++) {
     const home = cfg.spawn[i] ?? { x: 0, z: 0 };
     const mode = cfg.initialModes[i] ?? 'idle';
-    list.push(makeDummy(i + 1, mode, home.x, home.z, null));
+    list.push(createDummyState(i + 1, mode, home.x, home.z, null));
   }
   // v9s.38：持械陪练追加在后面（id 连续）。它们不是另一套实体 —— 就是带武器的假人，
   // 所以点击轮转 / 威胁环 / 受击 / 击退 / 插值全部沿用同一份机制。
@@ -115,13 +115,13 @@ export function createDummies(cfg: DummyConfig): DummyState[] {
       const mode = f.initialModes?.[i] ?? 'spar';
       // 错开首次出手：三个陪练同时挥刀会读成「被集火」，也遮住了各自的动作
       const cd = f.attackInterval * (0.25 + 0.22 * i);
-      list.push(makeDummy(list.length + 1, mode, home.x, home.z, f.weapons[i], cd));
+      list.push(createDummyState(list.length + 1, mode, home.x, home.z, f.weapons[i], cd));
     }
   }
   return list;
 }
 
-function makeDummy(
+export function createDummyState(
   id: number, mode: DummyMode, x: number, z: number, weapon: WeaponId | null,
   attackCooldown = 0,
 ): DummyState {

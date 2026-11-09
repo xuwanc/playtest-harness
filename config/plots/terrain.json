@@ -1,0 +1,22 @@
+{
+  "id": "terrain",
+  "index": 4,
+  "name": "地形 / 门洞",
+  "hint": "宽门 2.4m / 窄门 0.5m · 0.2m 台阶可走，0.6/0.9/1.2m 要跳",
+  "shape": "square",
+  "radius": 5.2,
+  "color": "#7fb8d8",
+  "owner": "v9s.15 历史固定工位",
+  "anchor": {
+    "x": 8.9,
+    "z": -7.4
+  },
+  "spawn": {
+    "dx": 0,
+    "dz": 4.6
+  },
+  "label": {
+    "dx": 0,
+    "dz": -4.5
+  }
+}

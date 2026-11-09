@@ -1,11 +1,30 @@
-import { readFileSync } from 'node:fs';
-import { EMPTY_INTENTS, createWorld, step } from '../src/core';
-import type { AppConfig, GameEvent, Intents, World } from '../src/core';
+import { readdirSync, readFileSync } from 'node:fs';
+import { assemblePlots, DEFAULT_PLOT_LAYOUT, EMPTY_INTENTS, createWorld, step } from '../src/core';
+import type { AppConfig, GameEvent, Intents, PlotDef, World } from '../src/core';
 
 /** 用 fs 直接读配置，证明 Core 不依赖 Vite 的 JSON 插件或任何构建工具。 */
 const raw = JSON.parse(
   readFileSync(new URL('../config/game.json', import.meta.url), 'utf8'),
 ) as AppConfig;
+
+/**
+ * v9s.43 · 与组装层 `src/config.ts` 用**同一套拼合器**加载独立地块文件。
+ *
+ * `config/game.json` 里已不再有 `scene.stations` / `scene.grass.plots`，
+ * 这两处由 `assemblePlots()` 从 `config/plots/*.json` 动态拼合后注入。
+ * 测试夹具必须走同一条路径，否则 `v9s15-lab.test.ts` / `grass.test.ts` 看到的
+ * 坐标会和线上不一致。这里刻意用 Node fs 而不是 `import.meta.glob`，
+ * 也顺带证明拼合器是纯函数、不需要任何构建工具就能跑。
+ */
+const plotDir = new URL('../config/plots/', import.meta.url);
+const plotDefs: PlotDef[] = readdirSync(plotDir)
+  .filter((f) => f.endsWith('.json'))
+  .sort()
+  .map((f) => JSON.parse(readFileSync(new URL(f, plotDir), 'utf8')) as PlotDef);
+
+export const PLOT_ASSEMBLY = assemblePlots(plotDefs, DEFAULT_PLOT_LAYOUT);
+raw.scene.stations = PLOT_ASSEMBLY.stations;
+if (raw.scene.grass) raw.scene.grass.plots = PLOT_ASSEMBLY.grassPlots;
 
 export const CONFIG: AppConfig = raw;
 

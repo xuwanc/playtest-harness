@@ -6,6 +6,7 @@ import { dashUpdate } from './dash';
 import { decayHurt, hitsUpdate } from './hits';
 import { decayLinks, linksUpdate } from './links';
 import { dummiesUpdate } from './dummies';
+import { grassUpdate } from './grass';
 import { movementUpdate } from './movement';
 import { orientationUpdate } from './orientation';
 import { crowdResistanceUpdate, separationUpdate } from './separation';
@@ -37,6 +38,7 @@ import { resetWorld } from './world';
  *   9 abilities    法杖技能：引导飞弹 / 电环推进 + 命中结算（读本帧假人新位置）
  *  10 hits         消费 attack-active / dummy-hit + 派生招扫掠命中，写受击状态与击退
  *  11 separation   角色间分离（只推假人）+ 主动挤人的速度阻力（只改玩家速度，不改位置）
+ *  11.5 grass      草块压弯 / 恢复 / 割断：放在 hits 之后，读本帧最终角色位置与刀风形状
  *  12 camera       威胁权重 → 构图意图（纯数据，表现层做指数平滑后消费）
  *
  * 与假人相关的模块统一以 modules.dummies 为总闸：关闭后假人（含受击/分离）完全冻结。
@@ -91,6 +93,10 @@ export function step(world: World, dt: number, intents: Intents): World {
       crowdResistanceUpdate(world);
     }
   }
+
+  // v9s.39：草块放在 hits 之后 —— 压弯读本帧新位置，割断复用本帧刀风形状。
+  // 独立模块开关；关闭时 grassUpdate 内部直接返回，草状态冻结。
+  grassUpdate(world, dt);
 
   // 相机意图放最后：读的是本帧所有模块结束后的最终玩家 / 假人位置。
   // 关闭模块时输出中性意图，让表现层平滑回到基础 2.5D 构图。

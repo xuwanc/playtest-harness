@@ -1,0 +1,22 @@
+{
+  "id": "rings",
+  "index": 2,
+  "name": "环状态色阶",
+  "hint": "同距三假人：中立蓝 / 戒备黄 / 敌对红 · 点选看 3/4 环",
+  "shape": "circle",
+  "radius": 3.4,
+  "color": "#ffc85a",
+  "owner": "v9s.15 历史固定工位",
+  "anchor": {
+    "x": -9.5,
+    "z": -8.2
+  },
+  "spawn": {
+    "dx": 0,
+    "dz": 3.0
+  },
+  "label": {
+    "dx": 0,
+    "dz": -2.7
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "windup",
+  "index": 3,
+  "name": "起手预警",
+  "hint": "走进 1.6m：脚下红弧填满 = 命中帧",
+  "shape": "circle",
+  "radius": 3.2,
+  "color": "#ff5a4a",
+  "owner": "v9s.15 历史固定工位",
+  "anchor": {
+    "x": 0,
+    "z": -10
+  },
+  "spawn": {
+    "dx": 0,
+    "dz": 3.0
+  },
+  "label": {
+    "dx": 0,
+    "dz": -2.6
+  }
+}

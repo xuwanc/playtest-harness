@@ -25,16 +25,30 @@ function soloDummy(w: World, mode: World['dummies'][number]['mode'], homeX: numb
 describe('v9s.15 · 测试场工位布局', () => {
   const stations = CONFIG.scene.stations ?? [];
 
-  it('7 个工位，序号 1..7 唯一，颜色 / 名称 / 说明齐全', () => {
-    expect(stations).toHaveLength(7);
-    expect(stations.map((s) => s.index).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
-    expect(new Set(stations.map((s) => s.id)).size).toBe(7);
+  it('历史 7 个 pinned 工位零回归，index 1..7 唯一；新地块 index 从 8 起', () => {
+    // v9s.43：scene.stations 由 assemblePlots() 从 config/plots/*.json 动态拼合，
+    // agent 可继续加地块，因此这里不写死总数，只保证历史 7 个的坐标逐字节不变。
+    expect(stations.length).toBeGreaterThanOrEqual(7);
+    const pinned = stations.filter((s) => s.index >= 1 && s.index <= 7);
+    expect(pinned).toHaveLength(7);
+    expect(pinned.map((s) => s.index).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(new Set(pinned.map((s) => s.id)).size).toBe(7);
+    expect(new Set(stations.map((s) => s.index)).size).toBe(stations.length);
     for (const s of stations) {
       expect(s.name.length).toBeGreaterThan(0);
       expect(s.hint.length).toBeGreaterThan(0);
       expect(s.radius).toBeGreaterThan(0);
       expect(s.color).toMatch(/^#[0-9a-f]{6}$/i);
     }
+    // 历史 7 个工位的绝对坐标（拼合器不得改动）
+    expect(stationById(stations, 'hub')?.x).toBe(0);
+    expect(stationById(stations, 'gait')?.spawnZ).toBe(2.6);
+    expect(stationById(stations, 'dash')?.labelX).toBe(7.0);
+    // 动态拼合出来的示范地块：index 顺延，落点 = 拼合后的中心
+    const auto = stations.find((s) => s.index > 7);
+    expect(auto).toBeDefined();
+    expect(auto!.spawnX).toBe(0);
+    expect(auto!.spawnZ).toBe(14);
   });
 
   it('每个传送落点都在世界边界内、且在工位作用域内', () => {
@@ -187,14 +201,21 @@ describe('v9s.15 · 工位查找（纯函数）', () => {
   it('stationAt 取最近且在半径内的工位；空处返回 null', () => {
     expect(stationAt(stations, 0, 0)?.id).toBe('hub');
     expect(stationAt(stations, -9.5, 2.6)?.id).toBe('gait');
-    expect(stationAt(stations, 2, 6)).toBeNull();
+    // v9s.43：历史 7 工位之外才算空处；将来自动地块若分到这里也不算回归。
+    const empty = stationAt(stations, 2, 6);
+    expect(empty === null || empty.index > 7).toBe(true);
+    expect(stationAt(stations, 15.4, 15.4)).toBeNull();
   });
 
   it('stationById / cycleStation 按序号循环，两端都能绕回', () => {
     expect(stationById(stations, 'dash')?.index).toBe(6);
-    expect(cycleStation(stations, 'gait', 1)?.id).toBe('hub');
-    expect(cycleStation(stations, 'hub', -1)?.id).toBe('gait');
-    expect(cycleStation(stations, null, 1)?.id).toBe('hub');
-    expect(cycleStation(stations, null, -1)?.id).toBe('gait');
+    // 循环语义对「给定列表」成立；新增地块会改变全场首尾，故用历史 7 个验证绕回。
+    const pinned = stations.filter((s) => s.index >= 1 && s.index <= 7);
+    expect(cycleStation(pinned, 'gait', 1)?.id).toBe('hub');
+    expect(cycleStation(pinned, 'hub', -1)?.id).toBe('gait');
+    expect(cycleStation(pinned, null, 1)?.id).toBe('hub');
+    expect(cycleStation(pinned, null, -1)?.id).toBe('gait');
+    // 全场景循环：从 hub 往回绕到的是动态拼合新增的地块
+    expect(cycleStation(stations, 'hub', -1)?.index).toBeGreaterThan(7);
   });
 });

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { defineConfig } from 'vitest/config';
 
 /**
@@ -28,6 +29,16 @@ const port = Number(process.env.PORT) || 5173;
 export default defineConfig({
   // 相对路径资源：发布到任意子路径 / 反代下都能正确加载
   base: './',
+  // 单一主测试场景：只有 index.html 一个入口。
+  // 历史上有过第二套独立演示页 grass-demo.html，已按「只保留主测试场景」规则删除；
+  // 新功能的测试环境统一在主场景里加地块 / 工位（见根目录 AGENTS.md）。
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(process.cwd(), 'index.html'),
+      },
+    },
+  },
   define: {
     __APP_VERSION__: JSON.stringify(`v${pkg.version}`),
     __BUILD_TIME__: JSON.stringify(buildTime),

@@ -1,4 +1,4 @@
-import type { EventType, HitTarget, HurtState, HurtType, Vec3, World } from './types';
+import type { EventType, HitTarget, HurtState, HurtType, MeleeShape, Vec3, World } from './types';
 
 /** 一次命中结算的完整描述（近战与法杖技能共用）。 */
 export type HitSpec = {
@@ -170,6 +170,101 @@ function wrapDeg(a: number): number {
   while (x > 180) x -= 360;
   while (x < -180) x += 360;
   return x;
+}
+
+/**
+ * v9s.39 · 本帧近战刀风的水平形状（纯查询，不写 World）。
+ *
+ * 草块割断、尘土、音效这类「周边系统」不该各自再算一遍扇形：口径漂移后会出现
+ * 「打得到人却割不到草」或反之。这里把 playerHits 用的那组量（命中窗口 u、
+ * 武器 reach、扇区半角、刃身扫掠门、击地圆）一次性算成 plain data 对外暴露，
+ * 计算式逐条与 playerHits / playerGroundSlam 保持一致，并由 tests/grass.test.ts
+ * 的一致性用例守护。
+ *
+ * 刻意**不改** playerHits 主体：876 例里有大量卡肉时机 / 扫掠门的精确断言，
+ * 周边功能不应该动主干命中链路。
+ */
+export function currentMeleeShape(world: World): MeleeShape {
+  const cb = world.combat;
+  const p = world.character.position;
+  const shape: MeleeShape = {
+    active: false,
+    x: p.x, z: p.z,
+    facing: cb.attackFacing,
+    fx: Math.sin(cb.attackFacing),
+    fz: Math.cos(cb.attackFacing),
+    reach: 0,
+    cosArc: 1,
+    sweepActive: false,
+    sweepLo: 0,
+    sweepHi: 0,
+    slamRadius: 0,
+    slamX: p.x,
+    slamZ: p.z,
+  };
+  // 与 hitsUpdate 的闸门一致：只有 active 段才存在刀风；弓的「攻击」只是放箭。
+  if (cb.phase !== 'active' || cb.weapon === 'bow') return shape;
+
+  const cfg = world.config.hits;
+  const profile = world.config.combat.weapons[cb.weapon];
+  const win = profile?.hitWindow;
+  const start = win ? Math.min(1, Math.max(0, win.start)) : 0;
+  const end = win ? Math.min(1, Math.max(start, win.end)) : 1;
+  const activeDur = cb.timings.active;
+  const u = activeDur > EPS ? Math.min(1, Math.max(0, cb.phaseTimer / activeDur)) : 1;
+  if (u < start - EPS || u > end + EPS) return shape;
+
+  shape.active = true;
+  shape.reach = cfg.reach[cb.weapon] ?? 0;
+  shape.cosArc = Math.cos(Math.min(90, Math.max(0, cfg.arcDeg)) * DEG);
+
+  // 刃身扫掠门：与 playerHits 同一组关键点 / 容差，突刺段未到位时整段无刀风。
+  const sweep = profile?.hitSweep;
+  const seg = sweep?.byCombo?.[String(cb.comboIndex)] ?? sweep?.byCombo?.['1'];
+  const sweepTol = sweep?.tolDeg ?? 10;
+  if (seg) {
+    if (typeof seg.stabU === 'number') {
+      if (u < seg.stabU) { shape.active = false; return shape; }
+    } else if (seg.pts && seg.pts.length >= 2) {
+      const a0 = angleAtPts(seg.pts, 0);
+      const a1 = angleAtPts(seg.pts, u);
+      shape.sweepActive = true;
+      shape.sweepLo = Math.min(a0, a1) - sweepTol;
+      shape.sweepHi = Math.max(a0, a1) + sweepTol;
+    }
+  }
+
+  // 击地圆：以 playerGroundSlam 实际触发的那一帧为准（slamAttackId 对齐 attackId）。
+  const slam = profile?.groundSlam;
+  if (slam && u >= slam.slamU - EPS && cb.slamAttackId === cb.attackId) {
+    shape.slamRadius = Math.max(0, slam.radius);
+    shape.slamX = p.x + shape.fx * Math.min(shape.slamRadius * 0.25, 0.5);
+    shape.slamZ = p.z + shape.fz * Math.min(shape.slamRadius * 0.25, 0.5);
+  }
+  return shape;
+}
+
+/** 某个世界 XZ 点是否落在本帧刀身扇区内（extra = 目标半径放宽量）。 */
+export function inMeleeShape(shape: MeleeShape, x: number, z: number, extra: number): boolean {
+  if (!shape.active) return false;
+  const dx = x - shape.x;
+  const dz = z - shape.z;
+  const dist = Math.sqrt(dx * dx + dz * dz);
+  if (dist > shape.reach + extra) return false;
+  if (dist > EPS && (dx * shape.fx + dz * shape.fz) / dist < shape.cosArc) return false;
+  if (shape.sweepActive) {
+    const theta = wrapDeg(Math.atan2(dx, dz) / DEG - shape.facing / DEG);
+    if (theta < shape.sweepLo || theta > shape.sweepHi) return false;
+  }
+  return true;
+}
+
+/** 某个世界 XZ 点是否落在本帧击地圆内。 */
+export function inSlamShape(shape: MeleeShape, x: number, z: number, extra: number): boolean {
+  if (shape.slamRadius <= 0) return false;
+  const dx = x - shape.slamX;
+  const dz = z - shape.slamZ;
+  return dx * dx + dz * dz <= (shape.slamRadius + extra) * (shape.slamRadius + extra);
 }
 
 /** 玩家攻击在命中窗口内的扫描：扇区 + 武器距离 + 受击类型 + 击退。 */

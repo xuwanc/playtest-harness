@@ -871,6 +871,31 @@
         "comboCount": 0,
         "comboGap": 0
       }
+    },
+    "grass": {
+      "enabled": true,
+      "footprintCells": 2,
+      "minHeightCells": 1,
+      "maxHeightCells": 2,
+      "bendRadius": 0.85,
+      "maxBendRad": 0.95,
+      "bendRate": 18,
+      "recoverRate": 3.2,
+      "stumpRatio": 0.34,
+      "regrow": true,
+      "regrowSec": 6,
+      "bucketCells": 4,
+      "wind": {
+        "enabled": true,
+        "dirDeg": 28,
+        "speed": 1.35,
+        "amplitude": 0.19,
+        "wavelength": 4.2,
+        "secondWave": { "wavelength": 1.7, "amplitude": 0.055, "speedScale": 1.55 },
+        "gust": { "periodSec": 7.5, "depth": 0.35 },
+        "jitter": 0.16,
+        "shadeAmount": 0.26
+      }
     }
   },
   "scene": {
@@ -991,113 +1016,16 @@
       "minZ": -16,
       "maxZ": 16
     },
-    "stations": [
-      {
-        "id": "hub",
-        "index": 1,
-        "name": "中央 8 向",
-        "hint": "推杆走 8 个方向 · 松手看停步收相 / 转身踏步",
-        "shape": "circle",
-        "x": 0,
-        "z": 0,
-        "radius": 3.6,
-        "spawnX": 0,
-        "spawnZ": 0,
-        "labelX": 0,
-        "labelZ": -3.1,
-        "color": "#8fe7ff"
-      },
-      {
-        "id": "rings",
-        "index": 2,
-        "name": "环状态色阶",
-        "hint": "同距三假人：中立蓝 / 戒备黄 / 敌对红 · 点选看 3/4 环",
-        "shape": "circle",
-        "x": -9.5,
-        "z": -8.2,
-        "radius": 3.4,
-        "spawnX": -9.5,
-        "spawnZ": -5.2,
-        "labelX": -9.5,
-        "labelZ": -10.9,
-        "color": "#ffc85a"
-      },
-      {
-        "id": "windup",
-        "index": 3,
-        "name": "起手预警",
-        "hint": "走进 1.6m：脚下红弧填满 = 命中帧",
-        "shape": "circle",
-        "x": 0,
-        "z": -10,
-        "radius": 3.2,
-        "spawnX": 0,
-        "spawnZ": -7,
-        "labelX": 0,
-        "labelZ": -12.6,
-        "color": "#ff5a4a"
-      },
-      {
-        "id": "terrain",
-        "index": 4,
-        "name": "地形 / 门洞",
-        "hint": "宽门 2.4m / 窄门 0.5m · 0.2m 台阶可走，0.6/0.9/1.2m 要跳",
-        "shape": "square",
-        "x": 8.9,
-        "z": -7.4,
-        "radius": 5.2,
-        "spawnX": 8.9,
-        "spawnZ": -2.8,
-        "labelX": 8.9,
-        "labelZ": -11.9,
-        "color": "#7fb8d8"
-      },
-      {
-        "id": "meter",
-        "index": 5,
-        "name": "进度弧",
-        "hint": "弓长按 = 黄弧 · 法杖技2 = 紫弧 · 冲刺后 = 青弧冷却",
-        "shape": "circle",
-        "x": -9.5,
-        "z": 8.6,
-        "radius": 3.2,
-        "spawnX": -9.5,
-        "spawnZ": 11.4,
-        "labelX": -9.5,
-        "labelZ": 9.9,
-        "color": "#b48cff"
-      },
-      {
-        "id": "dash",
-        "index": 6,
-        "name": "冲刺标尺",
-        "hint": "沿刻度跑：翻滚 3.2m / 闪现 5m，看落点差多少",
-        "shape": "square",
-        "x": 9.8,
-        "z": 8.2,
-        "radius": 5.2,
-        "spawnX": 9.8,
-        "spawnZ": 12.8,
-        "labelX": 7.0,
-        "labelZ": 4.2,
-        "color": "#bfe8ff"
-      },
-      {
-        "id": "gait",
-        "index": 7,
-        "name": "侧后方步态",
-        "hint": "面向假人贴到 1.2m，沿引线按 90 / 135 / 180 走",
-        "shape": "circle",
-        "x": -9.5,
-        "z": 0,
-        "radius": 3.2,
-        "spawnX": -9.5,
-        "spawnZ": 2.6,
-        "labelX": -9.5,
-        "labelZ": -2.5,
-        "color": "#6fc9a0"
-      }
-    ]
+    "grass": {
+      "minCellX": -12,
+      "maxCellX": 12,
+      "minCellZ": 4,
+      "maxCellZ": 24,
+      "density": 0.72,
+      "bladesPerPatch": [3, 6],
+      "avoidMargin": 0.45,
+      "seed": 20261108
+    }
   },
   "view": {
     "camera": {
@@ -2084,6 +2012,15 @@
       "delay": 0.09,
       "outerScale": 1.25,
       "shake": 0.95
+    },
+    "grass": {
+      "enabled": true,
+      "bladeWidth": 0.13,
+      "segmentHeight": 0.5,
+      "palette": ["#3f7d4f", "#569a5c", "#6fb56a", "#8ccb78", "#a9dc86"],
+      "stumpColor": "#6b7a48",
+      "maxInstances": 6000,
+      "debris": { "max": 220, "life": 0.85, "color": "#a9dc86" }
     }
   }
 }

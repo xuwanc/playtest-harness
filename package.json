@@ -1,7 +1,7 @@
 {
   "name": "playtest-harness",
   "private": true,
-  "version": "0.9.61",
+  "version": "0.9.63",
   "type": "module",
   "description": "可移植核心的 3D 玩法实验台：碰撞白盒场景 + 体素角色 + 2.5D 平滑跟随相机 + 隐形摇杆",
   "scripts": {
@@ -19,6 +19,7 @@
     "clip:lab:check": "python3 tools/clip-lab/clip_lab.py check",
     "clip:lab:selftest": "python3 tools/clip-lab/clip_lab.py selftest",
     "smoke": "python3 tools/smoke.py",
+    "publish:preview": "node tools/publish-preview.mjs",
     "sweep": "python3 tools/sweep_sample.py",
     "docs:check": "node scripts/check-docs.mjs"
   },

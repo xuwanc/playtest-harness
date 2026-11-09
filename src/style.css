@@ -123,6 +123,24 @@ html, body {
   background: rgba(55, 130, 110, 0.65);
 }
 
+/* v9s.42：风吹麦浪开关胶囊。默认开启时用麦苗绿 + 实心底，和旁边灰色折叠胶囊明显区分，
+   手机上一眼能找到；关闭态回落成灰底，避免误读成「没这个按钮」。 */
+.wind-pill {
+  border-color: rgba(150, 220, 130, 0.62);
+  color: #e6f8d8;
+  background: rgba(46, 92, 44, 0.72);
+  font-weight: 600;
+}
+.wind-pill:active {
+  background: rgba(70, 130, 60, 0.8);
+}
+.wind-pill.is-off {
+  border-color: rgba(120, 160, 200, 0.3);
+  color: rgba(190, 212, 232, 0.7);
+  background: rgba(10, 14, 20, 0.6);
+  font-weight: 400;
+}
+
 /* ---- v9s.15：测试工位面板（点名字传送） ---- */
 #lab-panel {
   width: min(272px, 80vw);
@@ -207,6 +225,7 @@ html, body {
 .lab-foot {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap; /* v9s.43：召回 / 清除测试单位 / 镜头归位 三枚，窄屏允许换行 */
   margin-top: 7px;
 }
 
@@ -225,6 +244,43 @@ html, body {
 
 .lab-btn:active {
   background: rgba(70, 130, 180, 0.62);
+}
+
+/* ---- v9s.43：地块测试分区 ----
+   每个带 testSpawn 的地块就地生成假人 / 陪练。行用 div（不嵌套 button），
+   生成按钮用青绿色，和「点名字传送」的工位行区分开；窄屏也不挤。 */
+.lab-head.lab-subhead {
+  margin-top: 9px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(120, 160, 200, 0.18);
+}
+
+.lab-row.lab-test-row {
+  justify-content: space-between;
+  cursor: default;
+  background: rgba(22, 44, 44, 0.62);
+  border-color: rgba(127, 216, 192, 0.3);
+}
+
+.lab-row.lab-test-row .lab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lab-btn.lab-test {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-color: rgba(127, 216, 192, 0.55);
+  background: rgba(38, 92, 84, 0.78);
+  color: #d9fff2;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.lab-btn.lab-test:active {
+  background: rgba(70, 150, 132, 0.92);
 }
 
 /* 入场提示条：进工位时浮出 5s，告诉这里测什么；不吃指针、不挡操作 */

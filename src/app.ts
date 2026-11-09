@@ -5,9 +5,12 @@ import { createInput } from './adapters/input';
 import type { InputFrame } from './adapters/input';
 import { clampZoom } from './adapters/pinch';
 import { createRecorder } from './adapters/telemetry';
-import { EMPTY_INTENTS, WEAPON_ORDER, createWorld } from './core';
+import {
+  EMPTY_INTENTS, WEAPON_ORDER, clearPlotTestUnits, createWorld,
+  plotTestUnitCount, spawnPlotTestUnits,
+} from './core';
 import type { Intents, WeaponId } from './core';
-import { CORE_CONFIG, SCENE_CONFIG, VIEW_CONFIG } from './config';
+import { CORE_CONFIG, SCENE_CONFIG, VIEW_CONFIG, PLOTS, PLOT_ASSEMBLY } from './config';
 import { createDebugPanel } from './presentation/debug-panel';
 import type { DebugState } from './presentation/debug-panel';
 import { createLabPanel } from './presentation/lab-panel';
@@ -168,11 +171,27 @@ export function startApp(): void {
 
   // v9s.15：测试工位 —— 点名字直接传送到该工位的落点，相机瞬移不滑行；
   // 桌面端 [ / ] 循环、\ 召回假人。传送只清玩家侧瞬时状态，不重开一局。
+  // v9s.43：工位 / 地块来自 assemblePlots() 的动态拼合结果；带 testSpawn 的地块
+  // 额外有一枚测试按钮，点了先传送到拼合后的落点、再就地生成假人 / 陪练。
   const lab = createLabPanel({
-    stations: SCENE_CONFIG.stations ?? [],
+    stations: PLOT_ASSEMBLY.stations,
+    plots: PLOTS,
     world,
     view,
     onResetZoom: resetZoom,
+    // 先清掉全部测试单位（保证 id / 渲染对象数组前缀稳定），再在当前地块生成。
+    // 这是运行时调试操作，不进 Intents / step，因此不影响确定性回放 / golden。
+    onPlotTest: (plot) => {
+      clearPlotTestUnits(world);
+      const n = spawnPlotTestUnits(world, plot);
+      showToast(`已在「${plot.name}」生成 ${n} 人 · 点「清除测试单位」回基线`);
+      return n;
+    },
+    onClearTestUnits: () => {
+      const n = clearPlotTestUnits(world);
+      showToast(n > 0 ? `已清除 ${n} 个测试单位` : '当前没有测试单位');
+      return n;
+    },
   });
 
   // v9r：把两个后创建的面板控制钩子交给胶囊行，显隐 / 文案只有这一份状态源
@@ -223,9 +242,35 @@ export function startApp(): void {
   };
   syncBodyLabel();
   bodyBtn?.addEventListener('click', cycleBody);
+
+  // v9s.42：风吹麦浪开关，默认开。此前只有独立演示页有按钮，主场景真机测试时
+  // 用户「找不到开启按钮」——这里补一枚顶部胶囊 + W 键，与体型切换同一套交互。
+  // 风开关是表现层参数：直接改 world.config.grass.wind.enabled，grass-layer 每帧
+  // 从同一处读 uWindOn uniform，切换即时生效；不进 Core 的 intents / 快照，
+  // 因此确定性回放不受影响（关闭时 windAdvance 也不再推进时间，重开会接着走）。
+  const windBtn = document.getElementById('wind-toggle');
+  const windCfg = () => world.config.grass?.wind;
+  const syncWindLabel = (): void => {
+    if (!windBtn) return;
+    const on = !!windCfg()?.enabled;
+    windBtn.textContent = `风：${on ? '开' : '关'}`;
+    windBtn.classList.toggle('is-off', !on);
+    windBtn.setAttribute('aria-label', `${on ? '关闭' : '开启'}风吹麦浪（当前${on ? '开启' : '关闭'}，快捷键 G）`);
+  };
+  const toggleWind = (): void => {
+    const wc = windCfg();
+    if (!wc) { showToast('本场景未启用草块'); return; }
+    wc.enabled = !wc.enabled;
+    syncWindLabel();
+    showToast(`风吹麦浪：${wc.enabled ? '开' : '关'}（G 切换）`);
+  };
+  syncWindLabel();
+  windBtn?.addEventListener('click', toggleWind);
   window.addEventListener('keydown', (e) => {
-    if (e.repeat || e.code !== 'KeyB') return;
-    cycleBody();
+    if (e.repeat) return;
+    if (e.code === 'KeyB') cycleBody();
+    // W/A/S/D 是移动键，V 是手感面板，B 是体型；风开关只能用没被占用的 G。
+    else if (e.code === 'KeyG') toggleWind();
   });
 
   (window as unknown as { __harness?: unknown }).__harness = {
@@ -266,6 +311,24 @@ export function startApp(): void {
     slamDebug: () => view.slamDebug(),
     /** v9s.38：特效层级读数（地块是否不透明 / 关键层的 renderOrder） */
     fxDebug: () => view.fxDebug(),
+    /** v9s.39：草块渲染读数（实例数 / draw call / dirty / 压弯 / 割断 / 碎片） */
+    grassDebug: () => view.grassDebug(),
+    /**
+     * v9s.42：风场读数 / 热切换（验收「默认开 + 按钮可关」）。
+     * configured = 配置里的开关（点按钮立即变）；rendered = 草层上一帧实际写进
+     * uniform 的值（会滞后一帧，两者分开报，避免把渲染节拍误读成开关没生效）。
+     */
+    windDebug: () => {
+      const w = view.grassDebug().wind;
+      return { configured: !!windCfg()?.enabled, rendered: w.enabled, time: w.time, gust: w.gust };
+    },
+    setWind: (on: boolean) => {
+      const wc = windCfg();
+      if (!wc) return false;
+      wc.enabled = !!on;
+      syncWindLabel();
+      return wc.enabled;
+    },
     /** v9s.34：A/B 开关（验收「插值开 / 关」的画面差别，不用改 config 重启） */
     setRenderInterp: (on: boolean) => {
       renderInterp = !!on;
@@ -329,12 +392,43 @@ export function startApp(): void {
     // v9s.24：腕部滞后读数（武器相对手的自由度）
     weaponDebug: () => view.weaponDebug(),
     gripDebug: () => view.gripDebug(),
+    /**
+     * v9s.43：动态地块拼合读数 —— 每个地块的 id / 位置来源 / 槽位 / 拼合后中心，
+     * 以及当前测试单位数。验收「工位传送跟着实际拼合位置走」直接读这个。
+     */
+    plotDebug: () => ({
+      version: __APP_VERSION__,
+      count: PLOT_ASSEMBLY.plots.length,
+      diagnostics: PLOT_ASSEMBLY.diagnostics,
+      testUnits: plotTestUnitCount(world),
+      dummies: world.dummies.length,
+      // 表现层已建好的渲染对象数：应与 dummies 严格相等，否则「生成了但没画出来」。
+      rendered: view.dummyRenderCount(),
+      plots: PLOT_ASSEMBLY.plots.map((p) => ({
+        id: p.id,
+        index: p.index,
+        placement: p.placement,
+        slot: p.slot,
+        centerX: p.centerX,
+        centerZ: p.centerZ,
+        spawnX: p.station.spawnX,
+        spawnZ: p.station.spawnZ,
+        hasTest: !!p.testSpawn,
+      })),
+    }),
+    /** v9s.43：在指定地块就地生成测试单位（先传送到拼合落点），返回生成数量。 */
+    spawnAt: (id: string | number) => lab.spawnAt(id),
+    /** v9s.43：清除所有由测试按钮生成的单位，返回移除数量。 */
+    clearSpawned: () => lab.clearSpawned(),
     // v9s.15：测试工位 —— 自动化验收可直接 goto 逐个工位截图 / 取状态
     lab: {
-      stations: SCENE_CONFIG.stations ?? [],
+      stations: PLOT_ASSEMBLY.stations,
+      plots: PLOTS,
       goto: (id: string | number) => lab.goto(id),
       current: () => lab.current(),
       recall: () => lab.recall(),
+      spawnAt: (id: string | number) => lab.spawnAt(id),
+      clearSpawned: () => lab.clearSpawned(),
     },
   };
 

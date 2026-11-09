@@ -1,0 +1,22 @@
+{
+  "id": "meter",
+  "index": 5,
+  "name": "进度弧",
+  "hint": "弓长按 = 黄弧 · 法杖技2 = 紫弧 · 冲刺后 = 青弧冷却",
+  "shape": "circle",
+  "radius": 3.2,
+  "color": "#b48cff",
+  "owner": "v9s.15 历史固定工位",
+  "anchor": {
+    "x": -9.5,
+    "z": 8.6
+  },
+  "spawn": {
+    "dx": 0,
+    "dz": 2.8
+  },
+  "label": {
+    "dx": 0,
+    "dz": 1.3
+  }
+}

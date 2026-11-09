@@ -1,0 +1,31 @@
+{
+  "id": "hub",
+  "index": 1,
+  "name": "中央 8 向",
+  "hint": "推杆走 8 个方向 · 松手看停步收相 / 转身踏步",
+  "shape": "circle",
+  "radius": 3.6,
+  "color": "#8fe7ff",
+  "owner": "v9s.15 历史固定工位",
+  "anchor": {
+    "x": 0,
+    "z": 0
+  },
+  "spawn": {
+    "dx": 0,
+    "dz": 0
+  },
+  "label": {
+    "dx": 0,
+    "dz": -3.1
+  },
+  "grass": {
+    "minCellX": -4,
+    "maxCellX": 4,
+    "minCellZ": 0,
+    "maxCellZ": 6,
+    "density": 1,
+    "clearMarginCells": 2,
+    "absolute": true
+  }
+}

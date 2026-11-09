@@ -115,8 +115,347 @@ export type SceneConfig = {
   doorways: DoorwaySpec[];
   obstacles: ObstacleSpec[];
   grid: GridMeta;
-  /** v9s.15：测试工位（表现层标识 + 传送），Core 不消费 */
+  /** v9s.15：测试工位（表现层标识 + 传送），Core 不消费。
+   *  v9s.43 起由 `assemblePlots()` 从 `config/plots/*.json` 拼合生成，不再手写绝对坐标。 */
   stations?: StationSpec[];
+  /** v9s.39：体素草块的生成区域（纯场景元数据，不参与碰撞） */
+  grass?: GrassSceneSpec;
+};
+
+/* ---------------- v9s.43 · 动态地块拼合契约 ----------------
+ * 背景：多个 agent 同时往 `scene.stations` 数组里「加一块地」，既会改同一个文件
+ * 产生 git 冲突，又容易抢同一个绝对坐标导致两块地重叠。
+ *
+ * 解法：每个地块一个独立 JSON 文件（`config/plots/<id>.json`），文件里**不写世界坐标**，
+ * 只写相对布局意图；`assemblePlots()` 按 id 字典序排序后统一分配不重叠的槽位，
+ * 再把「地块中心 + 相对偏移」解算成 `StationSpec` / `GrassPlotSpec` 的绝对坐标。
+ * 因此拼合结果与文件加载顺序、agent 提交先后完全无关 —— 这就是消除冲突的根本。
+ * ------------------------------------------------------------------ */
+
+/** 单个地块的声明（对应 `config/plots/*.json` 一个文件）。 */
+export type PlotDef = {
+  /** 稳定唯一 id，决定拼合顺序（字典序）。带数字前缀便于控制顺序，如 `10-hub`。 */
+  id: string;
+  /** 工位序号（1 起），省略则由拼合器按排序自动编号 */
+  index?: number;
+  name: string;
+  hint: string;
+  shape?: StationShape;
+  radius?: number;
+  color?: string;
+  /** 仅历史固定工位使用：显式世界中心。新地块一律省略，由拼合器自动分配。 */
+  anchor?: { x: number; z: number };
+  /** 传送落点相对地块中心的偏移（米） */
+  spawn?: { dx: number; dz: number };
+  /** 地面标牌相对地块中心的偏移（米） */
+  label?: { dx: number; dz: number };
+  /** 可选：该地块自带的草块区域，格坐标相对地块中心 */
+  grass?: {
+    minCellX: number; maxCellX: number;
+    minCellZ: number; maxCellZ: number;
+    density?: number; clearMarginCells?: number;
+    /** 绝对格坐标（历史草块兼容，跳过中心偏移换算） */
+    absolute?: boolean;
+  };
+  /** 可选：地块上的「测试按钮」配方，点击就地生成假人 / 陪练 */
+  testSpawn?: PlotTestSpawn;
+  /** 归属说明（哪个 agent / 哪个功能加的），只用于文档与诊断 */
+  owner?: string;
+};
+
+/** 地块测试按钮的配方。全部确定性环形排布，不用随机。 */
+export type PlotTestSpawn = {
+  /** 按钮文案，省略则用 `生成 N 人` */
+  label?: string;
+  /** 生成几个普通假人 */
+  dummies?: number;
+  /** 普通假人的行为模式轮转 */
+  modes?: DummyMode[];
+  /** 生成几个持械陪练 */
+  fighters?: number;
+  /** 陪练武器轮转（省略则用配置里的 fighters.weapons） */
+  weapons?: WeaponId[];
+  /** 环形排布半径（米） */
+  ringRadius?: number;
+  /** 环形起始角（度），默认 -90（正对相机一侧） */
+  startDeg?: number;
+};
+
+/** 自动槽位的布局参数（纯数据，组装层注入；省略时用 DEFAULT_PLOT_LAYOUT）。 */
+export type PlotLayout = {
+  /** 格边长（米），用于格坐标 ↔ 世界坐标换算 */
+  cellSize: number;
+  /** 自动槽位网格起点 */
+  originX: number;
+  originZ: number;
+  /** 槽位步长 */
+  stepX: number;
+  stepZ: number;
+  /** 每行槽位数 */
+  columns: number;
+  /** 地块之间的最小间隙（米） */
+  gap: number;
+  /** 默认传送落点 / 标牌相对偏移 */
+  spawnDz: number;
+  labelDz: number;
+  defaultRadius: number;
+  defaultShape: StationShape;
+  defaultColor: string;
+  /**
+   * 自动槽位中心允许的世界范围（纯数据，组装层注入）。
+   * 超出范围的槽位直接跳过，避免地块被自动分配到地图外 / 边界外。
+   * 省略时不限制，仍由 `MAX_SLOTS` 兜底防死循环。
+   */
+  bounds?: { minX: number; maxX: number; minZ: number; maxZ: number };
+};
+
+/** 一个地块拼合后的结果。 */
+export type AssembledPlot = {
+  id: string;
+  index: number;
+  name: string;
+  hint: string;
+  owner: string;
+  /** 拼合后的实际世界中心（工位传送就以此为准） */
+  centerX: number;
+  centerZ: number;
+  /** 位置来源：pinned = 显式 anchor；auto = 拼合器自动分配的槽位序号 */
+  placement: 'pinned' | 'auto';
+  slot: number;
+  shape: StationShape;
+  radius: number;
+  color: string;
+  /** 由 center + 相对偏移解算出的工位（可直接喂 lab-panel / lab-scene） */
+  station: StationSpec;
+  /** 该地块产出的草块（绝对格坐标），没有则空数组 */
+  grassPlots: GrassPlotSpec[];
+  testSpawn?: PlotTestSpawn;
+};
+
+export type PlotDiagnostics = {
+  /** 重复 id（后者被跳过，避免静默覆盖） */
+  duplicates: string[];
+  /** 因与已占用区域重叠而顺延过槽位的地块 */
+  relocated: string[];
+  /** 在布局网格里找不到可用槽位的地块 */
+  unplaced: string[];
+};
+
+export type PlotAssembly = {
+  plots: AssembledPlot[];
+  stations: StationSpec[];
+  grassPlots: GrassPlotSpec[];
+  diagnostics: PlotDiagnostics;
+};
+
+/* ---------------- v9s.39 · 体素草块契约 ----------------
+ *
+ * 需求：2×2 格占地、参次不齐、1~2 格高、用 box 做的草；角色走过去自然压开，
+ * 攻击可以割断。设计取舍：
+ *  - 草是「场景元数据 + 世界状态」，不是碰撞体 —— 照 stations 的先例，
+ *    不进 `World.boxes`，因此改布局不会牵动物理，也不会挡住寻路。
+ *  - 全部状态在 `World.grass` 里（plain data、可 JSON 序列化、确定性），
+ *    表现层只读 → 满足 ADR-002 / check-boundary，Unity / Godot 可对照重写。
+ *  - 生成随机源独立于 `world.rngState`：草是静态布景，不该推进全局随机序列，
+ *    否则会连带改变假人游走等所有依赖 nextRandom 的行为（破坏既有手感用例）。
+ *  - 口径固定：footprint = 2×2 **格**（cellSize=0.5 → 1m×1m），不是 2×2 米。
+ */
+
+/**
+ * v9s.40 · 空地上的独立测试草块。
+ * 常规草场按 density 概率铺放；plot 是「确定要有一块」的区域，强制铺满，
+ * 并用 clearMarginCells 在四周挖出一圈空地，方便真人操控角色走过去压开 / 割断。
+ * 格坐标建议与主草场同奇偶，保证 patch 格网对齐。
+ */
+/**
+ * v9s.41 · 风场（麦浪）参数。
+ *
+ * 公式的**唯一来源在 Core**：`windPhase` / `windSample` / `windShaderParams` 由这些数值派生，
+ * 表现层只把结果搬进 shader uniform / instanced attribute，不自己定义风的规则。
+ * 因此 Unity / Godot 重写表现层时，照 `windSample` 就能得到同一片浪。
+ */
+export type GrassWindConfig = {
+  enabled: boolean;
+  /** 风向（度）：0 = +x，90 = +z。风沿此方向吹，波也沿此方向传播。 */
+  dirDeg: number;
+  /** 波传播速度（m/s） */
+  speed: number;
+  /** 主浪草顶摆幅（米） */
+  amplitude: number;
+  /** 主浪波长（米）；越小浪带越密 */
+  wavelength: number;
+  /** 次浪：更短更快的一条波，避免整片草机械地同步摆动 */
+  secondWave: { wavelength: number; amplitude: number; speedScale: number };
+  /** 阵风：低频强度调制（周期秒 / 深度 0..1） */
+  gust: { periodSec: number; depth: number };
+  /** 每根草的相位抖动系数（0 = 完全同步，1 = 最多错开一整周期） */
+  jitter: number;
+  /** 浪的明暗带强度 0..1（0 = 关闭色带） */
+  shadeAmount: number;
+};
+
+/** 风场运行时状态：plain data、可 JSON 快照、固定步长推进。 */
+export type WindState = {
+  /** 风场累计时间（秒）；暂停 / 冻结即停，复位归零 */
+  time: number;
+  /** 当前阵风系数（1-depth .. 1），由 time 确定性派生 */
+  gust: number;
+};
+
+export type GrassPlotSpec = {
+  minCellX: number;
+  maxCellX: number;
+  minCellZ: number;
+  maxCellZ: number;
+  /** 入选概率，省略即 1（铺满） */
+  density?: number;
+  /** 四周留空的格数（外扩半径，格） */
+  clearMarginCells?: number;
+};
+
+/** 草的生成区域与铺放参数。只在 createWorld 时消费一次，之后状态自包含。 */
+export type GrassSceneSpec = {
+  /** 生成区域（格坐标，闭区间；世界坐标 = 格坐标 × grid.cellSize） */
+  minCellX: number;
+  maxCellX: number;
+  minCellZ: number;
+  maxCellZ: number;
+  /** 每个 footprint 候选位的入选概率 0..1 */
+  density: number;
+  /** 每块的草根数范围 [min,max] */
+  bladesPerPatch: [number, number];
+  /** 避让白盒（台阶 / 墙 / 障碍）的外扩距离（米） */
+  avoidMargin: number;
+  /** 独立生成种子（不写 world.rngState） */
+  seed: number;
+  /** 可选：空地上的独立草块（常规遍历会跳过这些格，避免重复生成） */
+  plots?: GrassPlotSpec[];
+};
+
+/** Core 侧草块逻辑参数（确定性，随 CoreConfig 一起快照）。 */
+export type GrassConfig = {
+  /** 总开关；关闭后草状态冻结、不产生割断事件 */
+  enabled: boolean;
+  /** footprint 边长（格），默认 2 → 2×2 格 */
+  footprintCells: number;
+  /** 草高范围（格）1..2 → 0.5..1.0 m */
+  minHeightCells: number;
+  maxHeightCells: number;
+  /** 压弯影响半径（米，不含角色半径） */
+  bendRadius: number;
+  /** 最大压弯角（弧度） */
+  maxBendRad: number;
+  /** 压倒的跟随速率（1/s） */
+  bendRate: number;
+  /** 离开后弹性恢复速率（1/s） */
+  recoverRate: number;
+  /** 割断后留下的断茬高度比例 0..1 */
+  stumpRatio: number;
+  /** 是否随时间长回原样；false = 断茬永久保留 */
+  regrow: boolean;
+  /** 再生时长（秒），regrow=true 时生效 */
+  regrowSec: number;
+  /** 网格桶边长（格），局部查询用 */
+  bucketCells: number;
+  /** v9s.41 · 风场；缺省 = 无风（冻结夹具 / 旧配置行为不变） */
+  wind?: GrassWindConfig;
+};
+
+/** 表现层观感参数（不进 Core 状态 / 快照）。 */
+export type GrassViewConfig = {
+  enabled: boolean;
+  /** 草茎 box 的边长（米） */
+  bladeWidth: number;
+  /** 单段高度（米）= 一格；一根草 = 下段 + 上段，实现 1~2 格参次 */
+  segmentHeight: number;
+  /** 色阶（低 → 高），十六进制字符串 */
+  palette: string[];
+  /** 断茬颜色 */
+  stumpColor: string;
+  /** 实例数安全阀（超过则截断，防止配置写崩拖死 GPU） */
+  maxInstances: number;
+  /** 割断碎片：对象池上限 / 存活秒数 / 颜色 */
+  debris: { max: number; life: number; color: string };
+};
+
+/** 一根草（两段 box：下段恒在，上段决定 1~2 格高）。全部为 plain number。 */
+export type GrassBlade = {
+  id: number;
+  /** 根部世界坐标 */
+  x: number;
+  y: number;
+  z: number;
+  /** 初始水平朝向（弧度） */
+  yaw: number;
+  /** 原高（米） */
+  height: number;
+  /** box 边长（米） */
+  width: number;
+  /** 色阶 0..1 */
+  tone: number;
+  /** 初始轻微倾角（弧度），让静止时也不齐刷刷 */
+  lean: number;
+  /** 当前压弯角（弧度，0..maxBendRad） */
+  bend: number;
+  /** 压弯方向（世界 XZ 单位向量） */
+  bendX: number;
+  bendZ: number;
+  /** 本帧目标压弯角 */
+  targetBend: number;
+  /** 脱离接触后的恢复计时（秒） */
+  recover: number;
+  /** 0 = 完好；>0 = 割断后剩余再生秒；-1 = 永久断茬 */
+  cut: number;
+  /** 割断时的 world.time */
+  cutAt: number;
+};
+
+/** 一块草（2×2 格 footprint），blades 索引区间 [bladeFrom, bladeTo)。 */
+export type GrassPatch = {
+  id: number;
+  cellX: number;
+  cellZ: number;
+  bladeFrom: number;
+  bladeTo: number;
+};
+
+/** 草的运行时状态：随 World 一起 JSON 序列化、快照、回放。 */
+export type GrassState = {
+  /** 生成参数快照（复位 / 跨端重建时用） */
+  spec: GrassSceneSpec;
+  cellSize: number;
+  bucketCells: number;
+  blades: GrassBlade[];
+  patches: GrassPatch[];
+  /** 网格桶：'bx,bz' → blade 索引数组，压弯 / 割断只查相邻桶 */
+  buckets: Record<string, number[]>;
+  /** 累计割断根数（只增，复位归零） */
+  cutCount: number;
+  /** 最近一次割断的 world.time */
+  lastCutAt: number;
+  /** v9s.41 · 风场运行时状态（时间 + 阵风系数），确定性、可快照 */
+  wind: WindState;
+};
+
+/** 本帧近战刀风的水平形状：由 hits.currentMeleeShape() 计算，供草块割断等周边系统复用。 */
+export type MeleeShape = {
+  /** 本帧是否处于有效命中窗口 */
+  active: boolean;
+  x: number;
+  z: number;
+  facing: number;
+  fx: number;
+  fz: number;
+  reach: number;
+  cosArc: number;
+  /** 刃身扫掠门（v9s.36）：为真时目标方位角必须落在 [sweepLo, sweepHi] */
+  sweepActive: boolean;
+  sweepLo: number;
+  sweepHi: number;
+  /** 击地圆（v9s.37）：<=0 表示本帧无击地 */
+  slamRadius: number;
+  slamX: number;
+  slamZ: number;
 };
 
 /* ---------------- 武器 / 战斗契约 ---------------- */
@@ -1327,6 +1666,12 @@ export type DummyState = {
    * 普通假人为 null —— 它们仍走 `dummy-rig` 的简化挥砍。
    */
   combat: CombatState | null;
+  /**
+   * v9s.43：地块测试按钮生成的临时单位标记（值为地块 id）。
+   * 配置里的基线假人 / 陪练没有这个字段，因此 World 初始序列化逐字节不变；
+   * 「清除测试单位」只删带标记的，不碰基线。
+   */
+  spawnedByPlot?: string;
 };
 
 export type DummyViewConfig = {
@@ -1478,6 +1823,8 @@ export type CoreConfig = {
   /** v9s.3：注视 / 威胁评估（普通注视只动头、威胁注视身体朝威胁中心） */
   gaze: GazeConfig;
   dummies: DummyConfig;
+  /** v9s.39：体素草块（压弯 / 恢复 / 割断）的确定性参数 */
+  grass: GrassConfig;
 };
 
 export type CameraConfig = {
@@ -2409,6 +2756,8 @@ export type ViewConfig = {
   hitstop: HitstopViewConfig;
   /** v9s.37 · 击地冲击（大剑第三击）的尘环 / 震动 */
   groundSlam: GroundSlamViewConfig;
+  /** v9s.39 · 体素草块的观感参数（颜色 / 尺寸 / 实例上限 / 碎片） */
+  grass: GrassViewConfig;
   /** v9s.33：动态平衡量化 / 自动配重（纯表现，只读骨架，不写 Core） */
   balance?: BalanceViewConfig;
   /**
@@ -2619,6 +2968,8 @@ export type EventType =
    * 表现层据此生成地面尘环 / 强震；与 `hitstop` 一样是「一次性」事件。
    */
   | 'ground-slam'
+  /** v9s.39：一次挥击割断了草，`value` = 本次割断根数，x/z = 刀风中心 */
+  | 'grass-cut'
   /**
    * v9s.31：关键帧事件（AnimNotify）。`name` 是事件名，`value` 是附带数值。
    *
@@ -2697,6 +3048,8 @@ export type ModuleFlags = {
   /** v9s.3：注视 / 威胁评估模块独立开关，关闭后完全冻结（便于 A/B 对照） */
   gaze: boolean;
   dummies: boolean;
+  /** v9s.39：草块模块独立开关（关闭后状态冻结、不压弯、不割断） */
+  grass: boolean;
 };
 
 export type World = {
@@ -2745,6 +3098,8 @@ export type World = {
   dummies: DummyState[];
   /** 假人累计发起的攻击次数（无伤害，仅用于验收观察） */
   dummyAttackCount: number;
+  /** v9s.39：体素草块（确定性、可序列化；表现层只读） */
+  grass: GrassState;
   events: GameEvent[];
   modules: ModuleFlags;
 };

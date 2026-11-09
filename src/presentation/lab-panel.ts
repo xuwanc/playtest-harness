@@ -1,5 +1,5 @@
 import { resetDummies, warpTo } from '../core';
-import type { StationSpec, World } from '../core';
+import type { AssembledPlot, StationSpec, World } from '../core';
 import type { SceneView } from './three-scene';
 import { cycleStation, stationAt, stationById } from './lab-stations';
 
@@ -12,17 +12,27 @@ export type LabPanel = {
   tick(): void;
   /** 召回全部假人（回 home、恢复初始行为、清攻击状态） */
   recall(): void;
+  /** v9s.43：在指定地块就地生成测试单位（先传送到拼合后的落点），返回生成数量 */
+  spawnAt(idOrIndex: string | number): number;
+  /** v9s.43：清除所有由测试按钮生成的单位，返回移除数量 */
+  clearSpawned(): number;
   element: HTMLElement | null;
 };
 
 type LabPanelOptions = {
   stations: StationSpec[];
+  /** v9s.43：拼合后的地块列表；带 testSpawn 的会出现在「地块测试」分区 */
+  plots?: AssembledPlot[];
   world: World;
   view: SceneView;
   /** 容器，默认 #lab-panel */
   container?: HTMLElement | null;
   /** 镜头缩放归 1（与调试面板同一个实现） */
   onResetZoom?: () => void;
+  /** v9s.43：点击地块测试按钮时由组装层生成假人 / 陪练，返回生成数量 */
+  onPlotTest?: (plot: AssembledPlot) => number;
+  /** v9s.43：点击「清除测试单位」时由组装层清理，返回移除数量 */
+  onClearTestUnits?: () => number;
 };
 
 /**
@@ -34,9 +44,14 @@ type LabPanelOptions = {
  *
  * 传送是**调试操作**，与「复位」同级：清玩家侧瞬时状态（攻击 / 冲刺 / 受击 / 锁定），
  * 不动假人与世界时间，因此可以在一局里连续换场地测试。
+ *
+ * v9s.43：工位来自 `assemblePlots()` 的动态拼合结果，`spawnX/spawnZ` 已是拼合后的
+ * 实际位置；每个带 `testSpawn` 的地块额外给一枚测试按钮，点了先传送到该地块、再就地
+ * 生成假人 / 陪练，用完「清除测试单位」回到配置里的基线单位。
  */
 export function createLabPanel({
-  stations, world, view, container, onResetZoom,
+  stations, plots = [], world, view, container, onResetZoom,
+  onPlotTest, onClearTestUnits,
 }: LabPanelOptions): LabPanel {
   const el = container ?? document.getElementById('lab-panel');
   let activeId: string | null = null;
@@ -98,6 +113,27 @@ export function createLabPanel({
     resetDummies(world);
   }
 
+  /** 点测试按钮：先传送到拼合后的落点（让「当前地块」名副其实），再就地生成单位。 */
+  function testPlot(plot: AssembledPlot): number {
+    goto(plot.id);
+    return onPlotTest ? onPlotTest(plot) : 0;
+  }
+
+  function clearSpawned(): number {
+    return onClearTestUnits ? onClearTestUnits() : 0;
+  }
+
+  function spawnAt(idOrIndex: string | number): number {
+    const plot = typeof idOrIndex === 'number'
+      ? plots.find((p) => p.index === idOrIndex)
+      : plots.find((p) => p.id === idOrIndex);
+    return plot && plot.testSpawn ? testPlot(plot) : 0;
+  }
+
+  const testPlots = plots.filter((p) => p.testSpawn);
+  const testCount = (p: AssembledPlot): number =>
+    (p.testSpawn?.dummies ?? 0) + (p.testSpawn?.fighters ?? 0);
+
   // ---- DOM ----
   if (el) {
     el.textContent = '';
@@ -138,6 +174,42 @@ export function createLabPanel({
     hintEl.className = 'lab-hint';
     el.appendChild(hintEl);
 
+    // v9s.43 · 地块测试按钮：一地块一行，点一下就地生成假人 / 陪练。
+    // 用 div 而不是 button 作行容器，避免 button 嵌套 button 的非法 HTML。
+    if (testPlots.length > 0) {
+      const testHead = document.createElement('div');
+      testHead.className = 'lab-head lab-subhead';
+      testHead.textContent = '地块测试';
+      const testTip = document.createElement('span');
+      testTip.className = 'lab-tip';
+      testTip.textContent = '就地生成';
+      testHead.appendChild(testTip);
+      el.appendChild(testHead);
+
+      for (const p of testPlots) {
+        const row = document.createElement('div');
+        row.className = 'lab-row lab-test-row';
+        row.dataset.plot = p.id;
+        const name = document.createElement('span');
+        name.className = 'lab-name';
+        name.textContent = p.name;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'lab-btn lab-test';
+        btn.dataset.uiButton = '';
+        btn.dataset.plotTest = p.id;
+        btn.textContent = p.testSpawn?.label ?? `生成 ${testCount(p)} 人`;
+        btn.setAttribute('aria-label', `在${p.name}就地生成 ${testCount(p)} 个测试单位`);
+        btn.addEventListener('pointerdown', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          testPlot(p);
+        });
+        row.append(name, btn);
+        el.appendChild(row);
+      }
+    }
+
     const foot = document.createElement('div');
     foot.className = 'lab-foot';
     const recallBtn = document.createElement('button');
@@ -152,6 +224,21 @@ export function createLabPanel({
       recall();
     });
     foot.appendChild(recallBtn);
+    if (testPlots.length > 0) {
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.className = 'lab-btn';
+      clearBtn.dataset.uiButton = '';
+      clearBtn.dataset.clearTestUnits = '';
+      clearBtn.textContent = '清除测试单位';
+      clearBtn.setAttribute('aria-label', '清除所有由地块测试按钮生成的假人与陪练');
+      clearBtn.addEventListener('pointerdown', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        clearSpawned();
+      });
+      foot.appendChild(clearBtn);
+    }
     if (onResetZoom) {
       const zoomBtn = document.createElement('button');
       zoomBtn.type = 'button';
@@ -184,5 +271,5 @@ export function createLabPanel({
 
   paint();
 
-  return { goto, current, tick: paint, recall, element: el };
+  return { goto, current, tick: paint, recall, spawnAt, clearSpawned, element: el };
 }

@@ -1,0 +1,19 @@
+{
+  "id": "sparring-demo",
+  "name": "陪练试验场",
+  "hint": "动态拼合示范地块 · 点「生成 4 人」就地摆出假人 + 持械陪练，用完点「清除」回基线",
+  "radius": 2.0,
+  "color": "#7fd8c0",
+  "owner": "v9s.43 动态拼合示范（auto 地块，不写世界坐标，由 assemblePlots 自动分配槽位）",
+  "testSpawn": {
+    "label": "生成 4 人",
+    "dummies": 2,
+    "modes": [
+      "idle",
+      "keep-distance"
+    ],
+    "fighters": 2,
+    "ringRadius": 1.5,
+    "startDeg": -90
+  }
+}

@@ -34,6 +34,8 @@ import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
 import { createVoxelRig } from './voxel-rig';
 import { createYawSmoother } from './yaw-smooth';
 import { createWeaponTrail } from './weapon-trail';
+import { createGrassLayer } from './grass-layer';
+import type { GrassDebug } from './grass-layer';
 import { FX_ORDER, setFxOrder } from './fx-layer';
 import type { HurtPose } from './hurt-pose';
 
@@ -54,6 +56,11 @@ export type SceneView = {
   bodyTypes(): { id: string; ids: string[] };
   /** 屏幕坐标 → 被点中的假人 id（0 = 没点中）。表现层做射线拾取，Core 只收 id。 */
   pickDummy(clientX: number, clientY: number): number;
+  /**
+   * v9s.43：当前已建好的假人渲染对象数。测试按钮动态生成 / 清除单位后，
+   * 它应与 `world.dummies.length` 严格相等 —— 用来断言「Core 有状态、画面也真的多出人」。
+   */
+  dummyRenderCount(): number;
   /** 世界坐标 → 屏幕像素坐标，供自动化验收精确定位假人。 */
   projectToScreen(x: number, y: number, z: number): { x: number; y: number };
   /** v9s.37：击地尘环读数（spawns = 累计生成次数，live = 当前活跃环） */
@@ -64,6 +71,8 @@ export type SceneView = {
   };
   /** v9s.35：朝向平滑读数（target = 插值后的 bodyYaw，shown = 实际渲染的根节点 yaw） */
   yawDebug(): { target: number; shown: number; tauMs: number };
+  /** v9s.39：草块渲染读数（实例数 / draw call / 本帧 dirty / 压弯 / 割断 / 碎片） */
+  grassDebug(): GrassDebug;
   /** v9s.40：持械陪练的步态读数（简化假人没有腿骨架 → null） */
   dummyRigDebug(id: number): FighterGaitDebug | null;
   /**
@@ -267,6 +276,13 @@ export function createSceneView(
   const lab = createLabLayer(stations, view);
   scene.add(lab.group);
 
+  // ---- v9s.39 体素草块 ----
+  // 状态全在 world.grass（Core），这里只做实例化渲染 + 脏标记局部更新。
+  // 走 setFxOrder 而不是写裸数字；草是不透明实体，分组不关深度测试。
+  const grassLayer = createGrassLayer(world.grass, view.grass, world.config.grass.wind);
+  setFxOrder(grassLayer.object, FX_ORDER.grass);
+  scene.add(grassLayer.object);
+
   // ---- 体素角色 ----
   // playerRoot 承担「位置 + 身体平滑朝向」；rig 自身只承担翻滚旋转。
   // 这样绕 rig 局部 X 轴前滚时，滚动方向会随身体朝向一起转（不会锁死在世界 X 轴）。
@@ -318,7 +334,13 @@ export function createSceneView(
     dispose(): void;
   };
   const fighterMoveSpeed = world.config.dummies.fighters?.moveSpeed ?? world.config.dummies.moveSpeed;
-  const dummyRigs: AnyDummyRig[] = world.dummies.map((s, i) => {
+
+  /**
+   * v9s.43：抽成工厂函数，供「地块测试按钮」动态生成单位时复用。
+   * 基线单位与运行时新增单位走同一套外观规则（配色轮转 / 持械陪练骨架），
+   * 不会出现「新生成的假人长得不一样」。
+   */
+  function makeDummyRig(s: DummyState, i: number): AnyDummyRig {
     const palette = view.dummies.colors;
     const tint = palette[i % palette.length] ?? '#cccccc';
     let rig: AnyDummyRig;
@@ -356,8 +378,11 @@ export function createSceneView(
     rig.group.traverse((obj) => { obj.userData.dummyId = s.id; });
     scene.add(rig.group);
     return rig;
-  });
-  const dummyGroups = dummyRigs.map((r) => r.group);
+  }
+
+  const dummyRigs: AnyDummyRig[] = world.dummies.map(makeDummyRig);
+  // v9s.43：不再是 map 的一次性快照，随容量动态 push / pop（pickDummy 用同一份）。
+  const dummyGroups: THREE.Group[] = dummyRigs.map((r) => r.group);
   const raycaster = new THREE.Raycaster();
 
   // ---- v9s.9 / v9s.10 脚下指示半环（世界坐标，不随角色旋转） ----
@@ -393,7 +418,8 @@ export function createSceneView(
   playerRing.mesh.name = 'player-ground-ring';
   scene.add(playerRing.mesh);
 
-  const dummyRings = world.dummies.map((s) => {
+  // v9s.43：环 / 光晕 / 预警弧也抽成工厂，供动态扩容复用。
+  function makeDummyRing(s: DummyState) {
     const ring = createGroundRing({
       radius: dummyRadius,
       thickness: ringThickness,
@@ -407,11 +433,9 @@ export function createSceneView(
     ring.mesh.name = `dummy-ground-ring-${s.id}`;
     scene.add(ring.mesh);
     return ring;
-  });
-  // 选中外发光：更宽更淡的一圈，和主环同色，只负责把「选中」从背景里拔出来。
-  // v9s.11：径向剖面换成高斯（`profile: 'glow'`），配合下面每帧的淡入 / 淡出缓动，
-  // 才是「光渗出来 / 收回去」而不是一盏灯被拧开拧灭。
-  const dummyHalos = world.dummies.map((s) => {
+  }
+
+  function makeDummyHalo(s: DummyState) {
     const halo = createGroundRing({
       radius: dummyRadius * ringCfg.haloRadiusFactor,
       thickness: ringThickness * ringCfg.haloThicknessFactor,
@@ -426,7 +450,28 @@ export function createSceneView(
     halo.mesh.name = `dummy-ground-halo-${s.id}`;
     scene.add(halo.mesh);
     return halo;
-  });
+  }
+
+  function makeDummyWarn(s: DummyState) {
+    const m = createArcMeter({
+      radius: dummyRadius * ringCfg.warnRadiusFactor,
+      thickness: ringThickness * ringCfg.warnThicknessFactor,
+      arcRad: baseArc,
+      edgeFade: 0.02,
+      color: ringCfg.warnColor,
+      y: 0.031,
+      renderOrder: FX_ORDER.ringWarn,
+    });
+    m.mesh.name = `dummy-ground-warn-${s.id}`;
+    scene.add(m.mesh);
+    return m;
+  }
+
+  const dummyRings = world.dummies.map(makeDummyRing);
+  // 选中外发光：更宽更淡的一圈，和主环同色，只负责把「选中」从背景里拔出来。
+  // v9s.11：径向剖面换成高斯（`profile: 'glow'`），配合下面每帧的淡入 / 淡出缓动，
+  // 才是「光渗出来 / 收回去」而不是一盏灯被拧开拧灭。
+  const dummyHalos = world.dummies.map(makeDummyHalo);
   // 选中混合量：主环形态（弧长 / 厚度 / 提亮）与外侧光晕各自一条缓动曲线
   const selMix = world.dummies.map(() => 0);
   const haloMix = world.dummies.map(() => 0);
@@ -446,20 +491,7 @@ export function createSceneView(
   scene.add(playerMeter.mesh);
 
   // 假人起手预警弧：和假人环同半径、更厚，windup 期间从左往右填满，满格即命中
-  const dummyWarns = world.dummies.map((s) => {
-    const m = createArcMeter({
-      radius: dummyRadius * ringCfg.warnRadiusFactor,
-      thickness: ringThickness * ringCfg.warnThicknessFactor,
-      arcRad: baseArc,
-      edgeFade: 0.02,
-      color: ringCfg.warnColor,
-      y: 0.031,
-      renderOrder: FX_ORDER.ringWarn,
-    });
-    m.mesh.name = `dummy-ground-warn-${s.id}`;
-    scene.add(m.mesh);
-    return m;
-  });
+  const dummyWarns = world.dummies.map(makeDummyWarn);
   // 冲锋落点预览（玩家派生招 windup 阶段）
   // 落点圈用玩家色系：红色会被读成「敌人的危险范围」，而这是「我自己要冲到这里」
   const landingPreview = createAreaRing({
@@ -689,6 +721,60 @@ export function createSceneView(
   const p0 = world.character.position;
   cam.update(p0.x, p0.y, p0.z, 1, world.camera);
 
+  /**
+   * v9s.43 · 假人渲染对象随 `world.dummies.length` 动态伸缩。
+   *
+   * 「地块测试按钮」会在运行时 push / filter `world.dummies`，而旧实现把
+   * rig / 环 / 光晕 / 预警弧 / 缓动量都按初始长度一次性建好 —— 生成单位后
+   * Core 有状态、画面却不会多出人。这里在每帧 render 开头对齐容量：
+   *   - 变多：按同一套工厂补建并加入场景；
+   *   - 变少：摘出场景、dispose 几何体、从并行数组弹掉，避免残留幽灵；
+   *   - id 变化（清除后重排）：刷新射线拾取用的 userData.dummyId。
+   */
+  function syncDummyCapacity(w: World): void {
+    const n = w.dummies.length;
+    while (dummyRigs.length < n) {
+      const i = dummyRigs.length;
+      const s = w.dummies[i];
+      const rig = makeDummyRig(s, i);
+      dummyRigs.push(rig);
+      dummyGroups.push(rig.group);
+      dummyRings.push(makeDummyRing(s));
+      dummyHalos.push(makeDummyHalo(s));
+      dummyWarns.push(makeDummyWarn(s));
+      selMix.push(0);
+      haloMix.push(0);
+    }
+    // 只在真的发生缩容的那一帧刷新 id：Core 清除测试单位后会重排 id，
+    // 射线拾取用的 userData.dummyId 要跟上。稳态帧零分配，不给主循环添负担。
+    let shrunk = false;
+    while (dummyRigs.length > n) {
+      shrunk = true;
+      const rig = dummyRigs.pop()!;
+      scene.remove(rig.group);
+      rig.dispose();
+      dummyGroups.pop();
+      const ring = dummyRings.pop()!;
+      scene.remove(ring.mesh);
+      ring.dispose();
+      const halo = dummyHalos.pop()!;
+      scene.remove(halo.mesh);
+      halo.dispose();
+      const warn = dummyWarns.pop()!;
+      scene.remove(warn.mesh);
+      warn.dispose();
+      selMix.pop();
+      haloMix.pop();
+    }
+    if (shrunk) {
+      for (let i = 0; i < n; i++) {
+        const id = w.dummies[i].id;
+        if (dummyRigs[i].group.userData.dummyId === id) continue;
+        dummyRigs[i].group.traverse((obj) => { obj.userData.dummyId = id; });
+      }
+    }
+  }
+
   function pickDummy(clientX: number, clientY: number): number {
     if (dummyGroups.length === 0) return 0;
     const rect = renderer.domElement.getBoundingClientRect();
@@ -756,6 +842,9 @@ export function createSceneView(
     yawDebug() {
       return { target: yawTarget, shown: yawSmoother.value, tauMs: view.renderInterp?.yawSmoothMs ?? 0 };
     },
+    grassDebug() {
+      return grassLayer.debug();
+    },
     fxDebug() {
       return {
         // 任意一块「非调试线框」状态的地块都应该是 opaque；只要有一块透明就说明排序问题回来了
@@ -791,6 +880,8 @@ export function createSceneView(
       return voxel.gripDebug();
     },
     render(w, frameDt): void {
+      // v9s.43：测试按钮会动态增减 world.dummies，先对齐渲染对象容量再画。
+      syncDummyCapacity(w);
       const c = w.character;
       const cb = w.combat;
 
@@ -1107,6 +1198,9 @@ export function createSceneView(
         e.trail.visible = !ar.stuck;
       }
 
+      // v9s.39：草块按 Core 状态做脏标记局部更新（静止草场本帧 dirty = 0）
+      grassLayer.update(w, frameDt);
+
       cam.update(c.position.x, c.position.y, c.position.z, frameDt, w.camera);
       renderer.render(scene, cam.camera);
     },
@@ -1167,6 +1261,8 @@ export function createSceneView(
       return { id: bodyTypeId, ids: Object.keys(view.bodyTypes ?? {}) };
     },
     pickDummy,
+    /** v9s.43：渲染对象容量，验收动态生成 / 清除单位时与 Core 的 dummies.length 对齐。 */
+    dummyRenderCount: () => dummyRigs.length,
     projectToScreen,
     /** v9s.40：持械陪练的步态读数（id 从 1 开始，与 DummyState.id 一致）。 */
     dummyRigDebug(id: number): FighterGaitDebug | null {
@@ -1253,6 +1349,7 @@ export function createSceneView(
     dispose(): void {
       voxel.dispose();
       lab.dispose();
+      grassLayer.dispose();
       for (const rig of dummyRigs) rig.dispose();
       playerRing.dispose();
       for (const ring of dummyRings) ring.dispose();

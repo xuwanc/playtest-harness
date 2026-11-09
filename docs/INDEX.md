@@ -7,6 +7,7 @@
 
 | 你的目的 | 走这条 |
 |---|---|
+| 新加入的 agent / 刚拉下 git | [`AGENTS.md`](../AGENTS.md)（3 分钟：三条铁律 + 流程）→ README |
 | 第一次接手，想知道项目是什么 | `README.md` → 本页 §2 挑一份系统文档 |
 | 有个现象要查（看不见 / 抖 / 卡 / 滑）/ 要改某块代码 | 本页 §2「按症状查」→ §3「按模块查」 |
 | 想知道「现在做到哪、下一步做什么」 | [`state/CURRENT.md`](state/CURRENT.md) |
@@ -36,6 +37,16 @@
 | 朝向发抖 / 转身反向转圈 | `core/orientation.ts`、`core/turn-in-place.ts` | `wrapAngle`、`turnInPlace` | [systems/movement-facing.md](systems/movement-facing.md) | `__harness.yawDebug()` |
 | 手机摇杆方向乱跳 | `src/adapters/input.ts` | `screenX/Y` 坐标源、摇杆平移吸收 | [systems/input-controls.md](systems/input-controls.md) | `__harness.telemetry()` |
 | 线上页面周期性自动刷新 | 发布目录（`dist/`） | — | [systems/overview.md](systems/overview.md) | 发布后看 HTML 有无 `@vite/client` |
+| 草压不开 / 刀割不到草 / 草挡住角色 | `core/grass.ts`、`presentation/grass-layer.ts` | `grassUpdate`、`grassCut`、`currentMeleeShape` | [systems/grass.md](systems/grass.md) | `tests/grass.test.ts`、`__harness.grassDebug()` |
+| 草不随风摆 / 浪带不明显 / 摆得太乱 | `core.grass.wind`、`presentation/grass-layer.ts` | `windPhase`、`windSample`、`windAdvance`、`installGrassWind` | [systems/grass.md](systems/grass.md) §12 | 主场景「风：开」/ `G` 键 A/B、`__harness.windDebug()` |
+| 草割断后「长回来」太突然 / 想缓慢长高 | `core/grass.ts`、`presentation/grass-layer.ts` | `grassGrowth`、`GRASS_GROWTH_STAGGER`、`sampleHeight` | [systems/grass-growth-pivot.md](systems/grass-growth-pivot.md) §1 | `tests/grass-growth-pivot.test.ts`、`__harness.grassDebug().sampleHeight` |
+| 风把草每节 box 拉歪 / 想要一节一节弯且保持方块 | 同上 | `windPivotAngles`、`windPivotEffLength`、`windPivotRotate`、`<project_vertex>` | 同上 §2 | `tests/grass-growth-pivot.test.ts`、`__harness.grassDebug().wind.mode` |
+| 多个 agent 同时开发 / 怎么合并提交 | `tools/gh-commit.mjs`、冲突分类 | `--apply`、ref SHA 乐观锁 | [systems/multi-agent-workflow.md](systems/multi-agent-workflow.md) | `node tools/gh-commit.mjs`（dry-run） |
+| 测试场景该用哪个 / 新功能要加测试环境 | `config/plots/*.json`、`core/plot-assembly.ts` | 主场景 `index.html`、一地块一文件 | [systems/plot-assembly.md](systems/plot-assembly.md) | 只保留主场景、单入口 build |
+| 两边同时加同一位置地块 / 不想写绝对坐标 | `core/plot-assembly.ts`、`src/config.ts` | `assemblePlots`、`PLOT_ASSEMBLY`、`plotDebug()` | [systems/plot-assembly.md](systems/plot-assembly.md) §2/§4 | `tests/plot-assembly.test.ts`、`__harness.plotDebug()` |
+| 工位传送没跟着地块走 / 拼合后坐标不对 | `lab-panel.ts` 的 `goto()` | `StationSpec.spawnX/spawnZ` | 同上 §4 | `__harness.lab.goto(id)` + `plotDebug()` |
+| 地块测试按钮生成 / 清除假人陪练 | `core/plot-spawn.ts`、`presentation/three-scene.ts` | `spawnPlotTestUnits`、`syncDummyCapacity`、`dummyRenderCount` | 同上 §5 | `tests/plot-spawn.test.ts`、`__harness.spawnAt()` |
+| 每次任务完成怎么更新线上 / 贴链接 | `tools/publish-preview.mjs` | `publish:preview` | 同上 §6 | `npm run publish:preview` 打印两条公网链接 |
 
 ## 3. 按模块查
 
@@ -53,6 +64,10 @@
 | `orientation.ts` / `gaze.ts` / `turn-in-place.ts` | 面朝向 / 两级注视 / 原地转身 | `orientationUpdate`、`gazeUpdate` |
 | `abilities.ts` / `skills/*` / `arrows.ts` | 技能、投射物 | `abilitiesUpdate`、`channelVolley` |
 | `notify.ts` / `pose-clip.ts` | 关键帧事件扫描 / 语义关键帧采样 | `notifyUpdate`、`samplePoseClip` |
+| `grass.ts` | 体素草块：生成 / 压弯 / 恢复 / 割断 / **缓慢生长 / 枢轴风公式**（确定性、网格桶） | `createGrassState`、`grassUpdate`、`grassCut`、`grassReset`、`grassGrowth`、`windPivotAngles`、`windPivotEffLength`、`windPivotRotate` |
+| `plot-assembly.ts` | **确定性地块拼合**：按 id 排序、分配不重叠槽位、解算绝对坐标 | `assemblePlots`、`DEFAULT_PLOT_LAYOUT` |
+| `plot-spawn.ts` | 地块测试按钮就地生成 / 清除假人陪练（运行时调试，不进 `step`） | `spawnPlotTestUnits`、`clearPlotTestUnits`、`plotTestUnitCount` |
+| `hits.ts` 的刀风导出 | 本帧命中形状（草块等周边系统复用，不改 `playerHits`） | `currentMeleeShape`、`inMeleeShape`、`inSlamShape` |
 
 ### 3.2 表现层（`src/presentation/`）
 
@@ -66,17 +81,20 @@
 | `fighter-rig.ts` / `dummy-rig.ts` | 陪练适配（复用 `voxel-rig`）/ 普通假人轻量骨架 | `createFighterRig`、`createDummyRig` |
 | `debug-panel.ts` | lil-gui 调试面板（7 个一级分类） | `createDebugPanel`、`DebugActions` |
 | `weapon-trail.ts` / `ground-ring.ts` | 刀光 ribbon / 脚下环与进度弧 | `pulse()`、`groundRingRadius` |
-| `lab-scene.ts` / `lab-stations.ts` | 7 个测试工位 | `warpTo` 配套 |
+| `lab-scene.ts` / `lab-stations.ts` / `lab-panel.ts` | 测试工位（来自拼合结果）+ 地块测试按钮 / 清除测试单位 | `stationAt`、`warpTo`、`spawnAt`、`clearSpawned` |
 | `yaw-smooth.ts` / `swing-pose.ts` | 渲染根节点 yaw 低通 / 挥击姿态数据 | `smoothYaw`、`blendCombatPose` |
+| `grass-layer.ts` | 草块 InstancedMesh + 脏标记局部上传 + 碎片对象池 + **缓慢生长连续插值** + **枢轴顶点风场**（替换 `<project_vertex>`） | `createGrassLayer`、`installGrassWind`、`grassDebug` |
 
 ### 3.3 其余
 
 | 路径 | 说明 |
 |---|---|
-| `config/game.json` | 所有可调数值（`core.*` 逻辑 / `view.*` 表现 / `scene.*` 关卡） |
+| `config/game.json` | 所有可调数值（`core.*` 逻辑 / `view.*` 表现 / `scene.*` 关卡；工位 / 草块区域已迁出） |
+| `config/plots/*.json` | 一地块一文件（不写世界坐标，`assemblePlots()` 动态拼合成工位 / 草块） |
 | `src/app.ts` | 组装层 + `window.__harness`（所有 `*Debug()` 验收接口在这里暴露） |
-| `tests/` | vitest；`tests/helpers.ts` 的 `FIXTURE_CORE_PATCH` 是**冻结夹具** |
-| `tools/smoke.py` | 线上自检（16 项）；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样 |
+| `tests/` | vitest；`tests/helpers.ts` 的 `FIXTURE_CORE_PATCH` 是**冻结夹具**，另用同一套拼合器注入线上配置 |
+| `tools/smoke.py` | 线上自检；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样 |
+| `tools/publish-preview.mjs` | **每次任务完成的发布闸门**：build → 同步线上预览 → 校验资源 → 打印公网链接 |
 
 ### 3.4 调试面板分组
 
@@ -100,9 +118,12 @@
 | `npm test` | vitest 全量（88 文件 / 876 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
-| `npm run smoke` | 起 `dist/`，跑 16 项画面层 + 契约自检 | 发布前 |
-| `npm run verify` | build → test → portable → smoke 全链 | **发布前必跑** |
+| `npm run smoke` | 起 `dist/`，跑画面层 + 契约自检 | 发布前 |
+| `npm run verify` | build → test → portable → docs → smoke 全链 | **发布前必跑** |
+| `npm run publish:preview` | 同步线上静态预览 + 校验资源 + **打印公网链接** | **每次任务完成必跑**，把链接贴进回复 |
 | `npm run docs:check` | README 行数 / INDEX 链接 / 单文件 300 行 | 改文档后 |
+| `node tools/gh-commit.mjs` | REST 提交网关（**默认 dry-run**，`--apply` 才写远端） | 多 agent 提交 / 用户批准后 |
+| `node tools/gh-commit.mjs --list` | 只列待提交文件（不联网） | 分工前 |
 | `npm run clip:lab:check` | 九段挥击剪辑回归 | 动动画数据后 |
 | `npm run sweep -- --check` | 扫掠角曲线与真实 `bladeWorld()` 的偏差 | 动挥击数据 / 卡肉后 |
 
@@ -116,6 +137,11 @@ gaitDebug()   步态（speed / chestYaw / stopStep / stopDip）
 interpDebug() 渲染插值（alpha / applied）
 yawDebug()    朝向平滑（target / shown）
 telemetry()   最近 20 秒输入 / 位移 / 事件诊断
+grassDebug()  草块渲染读数（instances / draw calls / dirty / bent / cut / debris / growing / avgGrowth / sampleHeight / wind.mode=pivot）
+plotDebug()   动态地块拼合（地块数 / placement / slot / 拼合中心 / 落点 / diagnostics /
+              dummies / rendered / testUnits）；rendered 应 == world.dummies.length
+spawnAt(id)   在指定地块就地生成测试单位（先传送到拼合落点），返回数量
+clearSpawned() 清除全部测试单位，返回数量
 ```
 
 ## 5. 检索技巧
@@ -143,6 +169,11 @@ telemetry()   最近 20 秒输入 / 位移 / 事件诊断
 | [`systems/input-controls.md`](systems/input-controls.md) | 摇杆、按钮、手势、按键表 |
 | [`systems/verification.md`](systems/verification.md) | 自动 / 量化 / 移植验收 |
 | [`systems/known-limits.md`](systems/known-limits.md) | 已知限制（现状，不是待办） |
+| [`systems/grass.md`](systems/grass.md) | 体素草块：压开 / 割断 / 实例化渲染 / 风吹麦浪 / 性能结论 |
+| [`systems/grass-growth-pivot.md`](systems/grass-growth-pivot.md) | v9s.44 缓慢连续生长 + 枢轴顶点动画（每节 box 刚体旋转，实现正本） |
+| [`systems/test-scene-policy.md`](systems/test-scene-policy.md) | 单一主测试场景 + 三条规则（规则正本） |
+| [`systems/plot-assembly.md`](systems/plot-assembly.md) | 动态地块拼合 / 工位传送 / 测试按钮 / 每次任务更新线上（实现正本） |
+| [`systems/multi-agent-workflow.md`](systems/multi-agent-workflow.md) | 多 agent 分支、契约先行、冲突分类、REST 提交网关、发布闸门 |
 | [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 89 步手动验收 |
 | [`state/CURRENT.md`](state/CURRENT.md) | 当前状态 + 下一步（覆盖写） |
 | [`risk-review.md`](risk-review.md) | 活跃风险 + 历史关闭记录 |
@@ -154,4 +185,5 @@ telemetry()   最近 20 秒输入 / 位移 / 事件诊断
 | [`decisions/ADR-005`](decisions/ADR-005-ground-height.md) | 贴地高度查询放 Core |
 | [`decisions/ADR-006`](decisions/ADR-006-fixed-step-events.md) | 固定步长 + 显式事件队列 |
 | [`decisions/ADR-007`](decisions/ADR-007-knockback-default.md) | 默认配置反映真实手感 |
-| [`journal/`](journal/) | 按日期的迭代记录（21 份，2026-11-05 起；`-00` 是功能总表，`-06` 是 v9s.38，`-07` 是文档重构，`-08` 是大文件职责梳理，`-09` 是陪练连击） |
+| [`decisions/ADR-008`](decisions/ADR-008-grass.md) | 草块状态在 Core、几何在表现层、判定复用 hits |
+| [`journal/`](journal/) | 按日期的迭代记录（2026-11-05 起；`-02` 是场景收敛与集成规则）。文件名带主题后缀，避免 add/add 撞车 |

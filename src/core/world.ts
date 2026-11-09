@@ -3,6 +3,7 @@ import { initialCameraIntent, resetCameraIntent } from './camera';
 import { initialCombatState } from './combat';
 import { initialDashState, resetDash } from './dash';
 import { createDummies, resetDummies } from './dummies';
+import { createGrassState, grassReset } from './grass';
 import { initialHurt, NEVER_HURT_AT } from './hits';
 import { initialLinkState, resetLink } from './links';
 import { resetCharacter } from './movement';
@@ -29,12 +30,13 @@ import type { CoreConfig, SceneConfig, World } from './types';
 
 /** 创建初始世界。配置由外部注入，Core 自身不 import 任何配置文件。 */
 export function createWorld(core: CoreConfig, scene: SceneConfig): World {
+  const boxes = buildBoxes(scene);
   return {
     tick: 0,
     time: 0,
     rngState: 0x9e3779b9,
     config: core,
-    boxes: buildBoxes(scene),
+    boxes,
     gridMeta: scene.grid,
     character: {
       position: { x: core.spawn.x, y: core.spawn.y, z: core.spawn.z },
@@ -79,6 +81,8 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
     gaze: initialGazeState(),
     dummies: createDummies(core.dummies),
     dummyAttackCount: 0,
+    // v9s.39：草场只在这里生成一次；冻结夹具没有 scene.grass → 空草场，行为零影响。
+    grass: createGrassState(core, scene, boxes, scene.grid),
     events: [],
     modules: {
       movement: true,
@@ -95,6 +99,7 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
       camera: true,
       gaze: true,
       dummies: true,
+      grass: true,
     },
   };
 }
@@ -142,5 +147,6 @@ export function resetWorld(world: World): void {
   g.centroidYaw = 0;
   g.threatCount = 0;
   g.threat = 0;
+  grassReset(world);
   world.events.length = 0;
 }
