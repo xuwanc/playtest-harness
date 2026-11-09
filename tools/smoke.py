@@ -389,6 +389,61 @@ def main() -> int:
                 )
                 page.evaluate("() => { window.__harness.world.combat.phase = 'idle'; }")
 
+                # ---- v9s.42：手感面板的相位曲线（sin φ）+ 踩地分色 ----
+                # 面板第三区画的是「真正喂给 solveGait 的相位」的 sin 曲线：一个周期一步，
+                # 正半周 = 左脚支撑相（琥珀）、负半周 = 右脚支撑相（紫）。
+                # 判据不截图，直接读采样：站定应判双踩；走路时左右脚都要出现且反复交替。
+                page.evaluate(
+                    "() => {"
+                    "  const h = window.__harness, w = h.world, c = w.character;"
+                    "  for (const d of w.dummies) { d.mode = 'idle'; d.position.x = 60; d.position.z = 60; }"
+                    "  w.combat.phase = 'idle'; w.combat.phaseTimer = 0; w.combat.queued = false;"
+                    "  c.velocity.x = 0; c.velocity.z = 0;"
+                    "  h.motionDebug.setEnabled(true);"
+                    "  window.__phaseStillT0 = w.time;"
+                    "}"
+                )
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__phaseStillT0 + 1.0",
+                    timeout=90000,
+                )
+                still = page.evaluate(
+                    "() => { const s = window.__harness.motionDebug.last();"
+                    "  return { stance: s.stance, phase: +s.phase.toFixed(3) }; }"
+                )
+                check("手感面板：站着不动判「双踩」（相位冻住不该随便判左右脚）",
+                      still["stance"] == "both", str(still))
+
+                page.evaluate(
+                    "() => {"
+                    "  const w = window.__harness.world;"
+                    "  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', code: 'KeyW', bubbles: true }));"
+                    "  window.__walkT0 = w.time;"
+                    "}"
+                )
+                page.wait_for_function(
+                    "() => window.__harness.world.time > window.__walkT0 + 2.0",
+                    timeout=90000,
+                )
+                walk = page.evaluate(
+                    "() => {"
+                    "  window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w', code: 'KeyW', bubbles: true }));"
+                    "  const S = window.__harness.motionDebug.samples();"
+                    "  const seen = new Set();"
+                    "  let flips = 0; let badPhase = 0;"
+                    "  for (let i = 0; i < S.length; i++) {"
+                    "    const st = S[i].stance;"
+                    "    if (st === 'L' || st === 'R') seen.add(st);"
+                    "    if (i > 0 && (st === 'L' || st === 'R') && st !== S[i - 1].stance) flips += 1;"
+                    "    if (!Number.isFinite(S[i].phase)) badPhase += 1;"
+                    "  }"
+                    "  return { n: S.length, seen: [...seen].sort(), flips, badPhase };"
+                    "}"
+                )
+                check("手感面板：走路时相位曲线左右脚交替（L/R 都出现且换脚 ≥ 3 次）",
+                      len(walk["seen"]) == 2 and walk["flips"] >= 3 and walk["badPhase"] == 0,
+                      str(walk))
+
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
                       f"{max(gaps):.1f}°" if gaps else "-", " 零增量帧", f"{zero}/{len(dels)}",
                       " 命中 progress", f"{hit_prog:.3f}" if hit_prog is not None else "-")

@@ -1,6 +1,6 @@
 # 动画规范：连击骨架 / 平衡 / 节奏
 
-> 最后更新：2026-11-09（v9s.41）。
+> 最后更新：2026-11-09（v9s.42）。
 > 管什么：一段动作怎么切锚点与窗口、动态平衡怎么做、节奏怎么排、踩过的坑、加新动作的检查清单。
 > 这是**规范**（当前有效）；按版本追加的落地细节在 `animation-notes-1/2/3.md`。
 > 代码：`src/presentation/voxel-rig.ts`（主体）、`program-anim.ts`（纯函数）、`gait.ts`（步态）、`config/game.json` → `view.animation`。
@@ -104,6 +104,13 @@ return Math.max(0, 1 - (t - 0.5) / 0.5);         // 收势：50%
 > 判据不要用「每段腿角峰值符号」——幅度包络在 active 段才涨起来，峰值位置会随
 > 打击帧漂移。用**段起始相位**：相邻段之差应落在 `[0.5π, 1.2π]`。
 > 验收：`tests/v9s41-attack-step-legs.test.ts`、`npm run smoke`「连击跨步左右换腿」。
+> 肉眼验证现在有工具了：手感面板第三区画相位曲线（见 [`animation-notes-3.md`](animation-notes-3.md) §17）。
+
+### 1.5 相位怎么看（v9s.42）
+
+`attackGaitDrive` 的相位在画面上是看不见的，调参只能凭腿的观感猜。手感面板第三区
+现在把它画成 `sin φ` 并按踩地侧分色 —— 细节与三个坑见
+[`animation-notes-3.md`](animation-notes-3.md) §17。
 
 ---
 

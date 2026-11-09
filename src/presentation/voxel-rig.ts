@@ -176,6 +176,12 @@ export type VoxelRig = {
     legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
     /** v9s.33：腿部被真实步态接管的比例（0 = 攻击姿态，1 = 完全真实步态） */
     legTakeover: number;
+    /**
+     * v9s.42：本帧真正喂给 solveGait 的相位（rad，未归一化，可能超出 0..TAU）。
+     * 手感面板用它画 sin 曲线 —— 读 Core 的 `gaitPhase` 不行：攻击时 Core 锁移速、
+     * 相位冻住，而这一段腿其实由 `attackGaitDrive` 的等效驱动在走。
+     */
+    phase: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
    *  供验收「腿摆动方向」：投影基准必须与腿所在坐标系一致，否则非正前方时方向被歪。 */
@@ -2745,6 +2751,7 @@ export function createVoxelRig(
         legTakeover: legTakeoverSm,
         legLPitch: lastLegs.lp, legLRoll: lastLegs.lr,
         legRPitch: lastLegs.rp, legRRoll: lastLegs.rr,
+        phase: lastDrive.phase,
       };
     },
     gaitYaw(): number {

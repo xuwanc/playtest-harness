@@ -87,6 +87,8 @@ export type SceneView = {
     stopT: number; hipYaw: number; chestYaw: number; speed: number; gaitSpeed: number;
     stopStep: number; stopShift: number; stopDip: number;
     legLPitch: number; legLRoll: number; legRPitch: number; legRRoll: number;
+    /** v9s.42：本帧喂给 solveGait 的相位（rad，未归一化），手感面板画 sin 曲线用 */
+    phase: number;
   };
   /** 表现层诊断读数：惯性倾斜、斩击弧世界法线、弓/箭世界前向、冲刺视觉、下盘偏航、智能相机，纯观测用。 */
   diagnostics(): {

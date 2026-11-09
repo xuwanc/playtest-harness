@@ -1,19 +1,20 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-09 12:05。
+> 最后更新：2026-11-09 12:45。
 
 ## 一句话
 
-v0.9.62 已发布：连击的下盘改成**一段 = 迈一步**（相位单向推进、段间接续），
-连着打几刀会左右换腿，换段也不再「脚被拽回去」（腿角单帧跳变 0.82 → 0.003 rad）。
+v0.9.63 已发布：手感面板加了第三区 —— **步态相位的 sin 曲线**，并按「哪只脚踩地」分色
+（琥珀左 / 紫右 / 灰双踩 / 青腾空）。相位读的是**本帧真正喂给 `solveGait` 的那个**
+（`gaitDebug().phase`），所以连点攻击时曲线照样推进，不会像 Core 的 `gaitPhase` 那样冻成平线。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.62` |
-| 线上徽标 | `v0.9.62`（构建时间随发布变化） |
+| `package.json` 版本 | `0.9.63` |
+| 线上徽标 | `v0.9.63`（构建时间随发布变化） |
 | 发布方式 | `npm run build` → `node /root/.codebuddy/skills/sites/scripts/publish.js --dir dist --language static`（覆盖更新，不换链接） |
 | 线上链接 | 通过项目内部渠道获取（仓库不存凭据） |
 
@@ -22,20 +23,21 @@ v0.9.62 已发布：连击的下盘改成**一段 = 迈一步**（相位单向�
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 91 文件 / 899 例全绿 |
+| `npx vitest run` | 92 文件 / 904 例全绿 |
 | `npm run verify:portable` | PASS（Core 25 文件边界未破） |
-| `npm run smoke` | 21/21 PASS |
-| `npm run docs:check` | PASS（50 份文档，单份 ≤300 行） |
+| `npm run smoke` | 23/23 PASS |
+| `npm run docs:check` | PASS（51 份文档，单份 ≤300 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 
 ## 正在做
 
-- 无。v9s.41 已完成（`docs/journal/2026-11-09-02.md`）。
-- 攻击跨步的新契约写在 [`../systems/animation.md`](../systems/animation.md) §1.4；
-  验收接口 `__harness.gaitDebug()`（腿角）+ `attackWeights().strideBase / stepIndex`（段起始相位）。
-- 风险历史（v9s.37 及更早）已归档到 [`../risk-history.md`](../risk-history.md)，
-  `risk-review.md` 只留当前风险。
+- 无。v9s.42 已完成（`docs/journal/2026-11-09-03.md`）。
+- 面板规则写在 [`../systems/animation-notes-3.md`](../systems/animation-notes-3.md) §17：
+  一个周期 = 一步、`sin φ > 0` = 左脚支撑相、**不能读 Core `gaitPhase`**（攻击时冻住）、
+  **不能拿速度判「在不在走」**（攻击时速度也是 0，要看相位自己有没有推进）。
+- 读数接口：`__harness.motionDebug.last()` 给 `{ phase, stance }`，
+  `samples()` 给窗口内逐帧 `{ phase, stance, moving, grounded }`。
 
 ## 下一步（按投入产出排序）
 
@@ -48,6 +50,7 @@ v0.9.62 已发布：连击的下盘改成**一段 = 迈一步**（相位单向�
 3. **`renderOrder` 收成编译期约束**（约半天）。`FX_ORDER` 目前只是约定。
 4. 陪练卡肉（只给**玩家受击**短卡肉，别给 AI —— 三个互相拖慢会变成慢动作）。
 5. `groundHeightAt` 只按中心点取高，环跨台阶边缘会一半埋进去（低优先）。
+6. 面板相位图例可以再明确一点（现在只有左边缘 L / R 小字，没有「L = 左脚踩地」的说明）。
 
 ## 已知未关闭的结构性风险
 
@@ -58,4 +61,5 @@ v0.9.62 已发布：连击的下盘改成**一段 = 迈一步**（相位单向�
 - `spar` 站位带在窄地形顶墙（v9s.40 的连续径向缓解了「抽搐」，但空踩风险还在）；
 - 连击让单轮伤害事件 ×3，混战占空比要按「轮」而不是「刀」评估；
 - 收势淡出会把相位「扫回」真实步态（最多 π；静止收招看不出来，边走边收招 0.28 rad/帧）；
+- 面板的「踩地」是**相位判据**不是脚的真实高度（极端姿态下可能不一致）；
 - `groundHeightAt` 只按中心点取高。
