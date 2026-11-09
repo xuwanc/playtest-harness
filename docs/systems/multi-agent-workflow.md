@@ -193,8 +193,10 @@ npm run publish:preview   # tools/publish-preview.mjs
 3. 打印**唯一**公网链接。
 
 链接只认 [`../state/CURRENT.md`](../state/CURRENT.md) 里那一条；换域名要同时改 CURRENT 与本文。
-2026-11-09 曾并行两套通道（`/workspace/grass-preview` + `aac01946…` 与 `dist` + `aef42c…`），
-用户手机打开两个链接看到两个版本（0.9.63 / 0.9.66）—— 已收敛为一套。
+2026-11-09 复核：发布脚本实际返回 `aac01946…`（v0.9.68 / 9 地块 / 可破坏物件在正确坐标），
+而 `aef42c…` 仍停在旧站点 v0.9.67 —— CURRENT 曾误记后者，已统一到脚本真正更新的那条。
+**判据永远是 `npm run publish:preview` 打印的 shareLink**，不要凭历史记录抄域名；
+换发布服务导致域名变化时，同一提交里改 `CURRENT.md` + 本文，并用浏览器实测徽标。
 
 代码推送与合并按 §11 自动执行，不再逐次请示用户。
 

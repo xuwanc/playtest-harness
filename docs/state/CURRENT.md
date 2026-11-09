@@ -17,7 +17,7 @@ v0.9.68：可破坏物件（按命中位置斜切、切口朝攻击方向）补�
 | `package.json` 版本 | `0.9.68`（内部代号 v9s.47；合并闸门领号后自动 +1） |
 | 线上徽标 | `v0.9.68`（构建时间随发布变化） |
 | 发布方式 | `npm run build` → `npm run publish:preview`（唯一通道） |
-| 线上链接 | <https://aef42c265bdddcf97.app.workbuddy.host/?sharecode=2FOZ6AI6QC> |
+| 线上链接 | <https://aac01946d09c8d76e.app.workbuddy.host/?sharecode=NMGIO3HVAK>（以 `publish:preview` 打印的 shareLink 为准） |
 
 ## 验证基线（改完必须复跑）
 
@@ -33,10 +33,11 @@ v0.9.68：可破坏物件（按命中位置斜切、切口朝攻击方向）补�
 
 ## 正在做
 
-- 无阻塞项。功能分支 `feat/destructibles-cut` 基于 `origin/main b1f3370`，
-  收尾走 `tools/agent-sync.py finish`（自动推送 + 自动并入 main + 同步线上）。
-- 旧功能分支与本地备份仅作对照；合并队列见 [`MERGE_QUEUE.md`](MERGE_QUEUE.md)，
-  空表即没有待接手的合并。
+- 无。合并闸门已跑完：`feat/destructibles-cut` 经 PR 自动并入 main
+  （merge commit `e695574`），`v0.9.68` 已发布到唯一线上链接。
+- 合并队列见 [`MERGE_QUEUE.md`](MERGE_QUEUE.md)，空表即没有待接手的合并。
+- 收尾时 `git fetch` 曾遇网络抖动，已给 `agent-sync.py` 补容错（发布不依赖 github.com）；
+  远端状态由 MCP 网关核验，网络恢复后 `git fetch` 补齐本地引用即可。
 
 ## 下一步
 
