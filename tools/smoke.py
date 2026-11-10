@@ -1305,7 +1305,7 @@ def main() -> int:
                 }""")
                 check("淡出结束后回收指示器几何（不残留、不无限累积）", gone, str(gone))
 
-                # ---- v9s.x ⑥ 装备展示界面：动态站立 / 视线跟随 / 拖动旋转 / 换装换色 ----
+                # ---- v9s.x ⑥ 装备展示界面：动态站立 / 视线跟随 / 拖动旋转 / 换装 + 合成 ----
                 w0 = page.evaluate("() => window.__harness.wardrobe()")
                 check("装备界面默认收起、WebGL 上下文惰性未创建",
                       w0["open"] is False and w0["rendered"] is False and w0["frames"] == 0,
@@ -1317,19 +1317,20 @@ def main() -> int:
                   const d = h.wardrobe();
                   return {
                     open: d.open, rendered: d.rendered, sections: d.sections, slots: d.slots,
+                    charId: d.characterId,
                     stage: document.querySelectorAll('#wardrobe-stage').length,
                     canvas: document.querySelectorAll('#wardrobe canvas').length,
                     secEls: document.querySelectorAll('.wardrobe-sec').length,
-                    slotEls: document.querySelectorAll('.wardrobe-slot').length,
+                    cellEls: document.querySelectorAll('.wardrobe-cell').length,
                     wpEls: document.querySelectorAll('[data-wp]').length,
-                    dyeEls: document.querySelectorAll('[data-dye]').length,
+                    charLabel: (document.querySelector('#wardrobe-char')||{}).textContent || '',
                   };
                 }""")
-                check("点开后角色转台惰性建好、分区/槽位/换装/染色齐全",
+                check("点开后角色转台惰性建好、武器+合成台齐全、3×4 魔方 12 格、匹配当前角色",
                       ui["open"] and ui["rendered"] and ui["stage"] == 1
-                      and ui["canvas"] == 1 and ui["sections"] == 4 and ui["slots"] >= 10
-                      and ui["secEls"] == 4 and ui["slotEls"] == ui["slots"]
-                      and ui["wpEls"] == 5 and ui["dyeEls"] == 5,
+                      and ui["canvas"] == 1 and ui["sections"] == 2 and ui["slots"] == 12
+                      and ui["secEls"] == 2 and ui["cellEls"] == 12
+                      and ui["wpEls"] == 5 and len(ui["charId"]) > 0,
                       str(ui))
 
                 # 动态站立：rAF 轮询看 frames 真在涨（软件渲染帧率不稳，不用固定等待）
@@ -1379,21 +1380,26 @@ def main() -> int:
                       and -3.1416 <= spin["many"] <= 3.1416,
                       str(spin))
 
-                swap = page.evaluate("""() => {
+                craft = page.evaluate("""() => {
                   const c = window.__harness.wardrobeCtl, d = window.__harness.wardrobe;
-                  c.setWeapon('greatsword'); c.setPalette('ember');
-                  const x = d();
-                  const activeWp = [...document.querySelectorAll('[data-wp].is-active')].map(e => e.dataset.wp);
-                  const activeDye = [...document.querySelectorAll('[data-dye].is-active')].map(e => e.dataset.dye);
-                  c.setPalette('nope');            // 未知 id 不应改配色
-                  return { weapon: x.weapon, palette: x.palette, activeWp, activeDye,
-                           unknown: d().palette, rendered: d().rendered };
+                  c.craftClear();
+                  c.setCraftCell(0, 'iron'); c.setCraftCell(1, 'iron'); c.setCraftCell(2, 'iron');
+                  const before = d();
+                  const r = c.craftSynthesize();
+                  const after = d();
+                  return {
+                    ok: r.ok, recipe: r.recipe, slot: r.slot,
+                    equippedBefore: before.equipped.slice(),
+                    equippedAfter: after.equipped.slice(),
+                    cellsAfter: after.craftCells.slice(0, 3),
+                  };
                 }""")
-                check("换装/染色即时生效且高亮同步，未知配色不改状态",
-                      swap["weapon"] == "greatsword" and swap["palette"] == "ember"
-                      and swap["activeWp"] == ["greatsword"] and swap["activeDye"] == ["ember"]
-                      and swap["unknown"] == "ember" and swap["rendered"],
-                      str(swap))
+                check("合成台：3 铁 → 头盔，装备进 3D 视窗、材料被消耗",
+                      craft["ok"] and craft["recipe"] == "helmet" and craft["slot"] == "helmet"
+                      and "helmet" in craft["equippedAfter"]
+                      and "helmet" not in craft["equippedBefore"]
+                      and craft["cellsAfter"] == [None, None, None],
+                      str(craft))
 
                 closed = page.evaluate("""async () => {
                   const c = window.__harness.wardrobeCtl, d = window.__harness.wardrobe;

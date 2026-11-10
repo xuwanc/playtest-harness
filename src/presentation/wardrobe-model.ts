@@ -1,9 +1,9 @@
-import type { ColorConfig } from '../core';
+import type { ColorConfig, VoxelConfig } from '../core';
 
 /**
  * 装备 / 外观展示界面（Wardrobe）的**纯数据层**。
  *
- * 与 `wardrobe.ts`（DOM + WebGL）分开，是为了让「视线映射 / 拖动旋转 / 配色合并」
+ * 与 `wardrobe.ts`（DOM + WebGL）分开，是为了让「视线映射 / 拖动旋转 / 合成配方」
  * 这些规则能被单测直接覆盖，且单测不需要 DOM 或 WebGL。这里没有 THREE、没有
  * document、没有时间源 —— 所有输入显式传入，输出是 plain data。
  *
@@ -11,6 +11,9 @@ import type { ColorConfig } from '../core';
  *  1. 点开 = 角色恒待机动态站立（渲染循环在 wardrobe.ts，本文件只给 idle 摆动公式）；
  *  2. 点击 / 悬停 = 角色看向鼠标（resolveLook 把归一化指针坐标转成头 / 身朝向）；
  *  3. 左右拖动 = 角色绕上下轴（Y 轴）旋转（dragYaw 累加水平位移）。
+ *
+ * v9s.69 起新增「合成台」：侧栏一个 3×4 魔方（12 格）放入材料，按配方合成装备。
+ * 合成的全部规则（材料计数 / 配方匹配 / 消耗）都是纯函数，落在本文件，便于单测。
  */
 
 /** 视线 / 拖动的可调参数（角度用度写，读起来直观，运行时再转弧度）。 */
@@ -84,63 +87,19 @@ export function idleSway(t: number): number {
   return Math.sin((t / p) * Math.PI * 2) * WARDROBE_LOOK.idleSwayRad;
 }
 
-/** 染色预设：只覆盖角色外观相关的颜色键，地面 / 墙等场景色不参与。 */
-export type WardrobePalette = {
-  id: string;
-  label: string;
-  /** 色卡上的代表色，仅用于 UI 展示 */
-  swatch: string;
-  colors: Partial<ColorConfig>;
-};
-
-/** 第一套是「原色」（colors 为空 = 完全沿用主场景配色），便于 A/B 对照。 */
-export const WARDROBE_PALETTES: readonly WardrobePalette[] = [
-  { id: 'default', label: '原色', swatch: '#4ea1de', colors: {} },
-  {
-    id: 'ember', label: '赤铜', swatch: '#d9603f',
-    colors: { body: '#d9603f', limb: '#9c3f2c', metal: '#e0a060', shoe: '#3a241d' },
-  },
-  {
-    id: 'tide', label: '苍青', swatch: '#3fb8a8',
-    colors: { body: '#3fb8a8', limb: '#217a72', metal: '#9fd8cf', shoe: '#163b3a' },
-  },
-  {
-    id: 'dusk', label: '夜紫', swatch: '#8b6fd0',
-    colors: { body: '#8b6fd0', limb: '#5b4596', metal: '#c3b0e8', shoe: '#241c3a' },
-  },
-  {
-    id: 'frost', label: '霜白', swatch: '#cdd9e8',
-    colors: { body: '#cdd9e8', limb: '#8798ad', metal: '#e8f0fa', shoe: '#2b3440' },
-  },
-] as const;
-
-/** 合并配色：返回新对象，绝不改写 base（主场景的 VIEW_CONFIG.colors 不能被污染）。 */
-export function mergePalette(base: ColorConfig, paletteId: string): ColorConfig {
-  const p = WARDROBE_PALETTES.find((x) => x.id === paletteId);
-  return p ? { ...base, ...p.colors } : { ...base };
-}
-
-/**
- * 界面分区定义（数据驱动，后续接背包只需改这张表 + 在 wardrobe.ts 里加渲染分支）。
- * kind:
- *  - weapon：真实可点，切换展示武器（走 CombatState.weapon，rig 每帧 setWeapon）
- *  - dye：真实可点，切换染色（重建 rig，见 wardrobe.ts）
- *  - placeholder：占位槽，明确标注「预留 / 后续扩展」，不假装能装备
- */
+/** 界面分区定义（数据驱动，渲染分支在 wardrobe.ts）。kind：
+ *  - weapon：真实可点，切换展示武器（走 CombatState.weapon，rig 每帧 setWeapon）；
+ *  - craft：3×4 合成魔方，放材料 → 按配方合成装备（纯数据，见下方配方表）。 */
 export type WardrobeSection = {
   id: string;
   label: string;
   hint: string;
-  kind: 'weapon' | 'dye' | 'placeholder';
-  /** placeholder 的占位格子标签；weapon / dye 由选项表生成，不用填 */
-  slots?: readonly string[];
+  kind: 'weapon' | 'craft';
 };
 
 export const WARDROBE_SECTIONS: readonly WardrobeSection[] = [
   { id: 'weapon', label: '武器', hint: '点选即换装', kind: 'weapon' },
-  { id: 'armor', label: '防具', hint: '预留 · 后续接装备', kind: 'placeholder', slots: ['头', '胸', '腿', '饰品'] },
-  { id: 'dye', label: '染色', hint: '切换外观配色', kind: 'dye' },
-  { id: 'bag', label: '背包', hint: '后续扩展', kind: 'placeholder', slots: ['1', '2', '3', '4', '5', '6'] },
+  { id: 'craft', label: '合成台', hint: '3×4 魔方 · 放材料合成装备', kind: 'craft' },
 ] as const;
 
 /** 界面里可选武器（与 WEAPON_ORDER 同序，标签用中文短名）。 */
@@ -151,3 +110,91 @@ export const WARDROBE_WEAPONS = [
   { id: 'staff', label: '法杖' },
   { id: 'bow', label: '弓' },
 ] as const;
+
+// =====================================================================
+//  v9s.69：合成台（3×4 魔方）
+// =====================================================================
+
+/** 可合成的装备槽位（也是合成产物的落点；每件装备以 3D 形式出现在视窗内）。 */
+export type EquipmentSlot = 'helmet' | 'chest' | 'legs' | 'trinket' | 'bag';
+
+/** 合成可用材料（与配方、色卡一一对应，仅用于 UI 展示 + 计数）。 */
+export type MaterialId = 'iron' | 'wood' | 'leather' | 'crystal' | 'cloth';
+
+/** 合成魔方的格子数：3 列 × 4 行 = 12 格（用户要求的「3*4 魔方」）。 */
+export const CRAFT_CELLS = 12;
+
+export const WARDROBE_MATERIALS: readonly { id: MaterialId; label: string; swatch: string }[] = [
+  { id: 'iron', label: '铁', swatch: '#b8c0c8' },
+  { id: 'wood', label: '木', swatch: '#8b5e3c' },
+  { id: 'leather', label: '皮', swatch: '#9c6b3f' },
+  { id: 'crystal', label: '晶', swatch: '#7fe3ff' },
+  { id: 'cloth', label: '布', swatch: '#cdd9e8' },
+] as const;
+
+/** 配方：需求是「材料计数」的多重集，与放入的格子位置无关。 */
+export type WardrobeRecipe = {
+  id: string;
+  /** 合成产物落点（对应 3D 视窗里的装备部位） */
+  slot: EquipmentSlot;
+  label: string;
+  need: Partial<Record<MaterialId, number>>;
+};
+
+export const WARDROBE_RECIPES: readonly WardrobeRecipe[] = [
+  { id: 'helmet', slot: 'helmet', label: '头盔', need: { iron: 3 } },
+  { id: 'chest', slot: 'chest', label: '胸甲', need: { leather: 3 } },
+  { id: 'legs', slot: 'legs', label: '护腿', need: { iron: 2, leather: 1 } },
+  { id: 'trinket', slot: 'trinket', label: '饰品', need: { crystal: 1 } },
+  { id: 'bag', slot: 'bag', label: '背包', need: { wood: 2, cloth: 1 } },
+] as const;
+
+/** 把 12 格数组计成各材料的数量（纯函数）。 */
+export function countMaterials(cells: readonly (MaterialId | null)[]): Record<MaterialId, number> {
+  const out: Record<MaterialId, number> = { iron: 0, wood: 0, leather: 0, crystal: 0, cloth: 0 };
+  for (const c of cells) if (c) out[c] += 1;
+  return out;
+}
+
+/**
+ * 在「当前格子」里找第一个能被满足的配方（需求是计数的子集即可，不看位置）。
+ * 返回 { recipe, slot }，找不到返回 null。多配方命中时按 WARDROBE_RECIPES 顺序取第一个，
+ * 保证结果确定、可单测。
+ */
+export function matchRecipe(cells: readonly (MaterialId | null)[]): { recipe: WardrobeRecipe; slot: EquipmentSlot } | null {
+  const have = countMaterials(cells);
+  for (const recipe of WARDROBE_RECIPES) {
+    let ok = true;
+    for (const k of Object.keys(recipe.need) as MaterialId[]) {
+      if ((have[k] ?? 0) < (recipe.need[k] ?? 0)) { ok = false; break; }
+    }
+    if (ok) return { recipe, slot: recipe.slot };
+  }
+  return null;
+}
+
+/**
+ * 合成消耗：从格子里移除「满足配方所需」的材料（按出现顺序取前 N 个），返回新的格子数组。
+ * 不改动入参，纯函数 + 不可变。若材料不够（理论上不应调用），原样返回副本。
+ */
+export function consumeForRecipe(
+  cells: readonly (MaterialId | null)[],
+  recipe: WardrobeRecipe,
+): (MaterialId | null)[] {
+  const out = cells.slice() as (MaterialId | null)[];
+  for (const k of Object.keys(recipe.need) as MaterialId[]) {
+    let need = recipe.need[k] ?? 0;
+    for (let i = 0; i < out.length && need > 0; i++) {
+      if (out[i] === k) { out[i] = null; need -= 1; }
+    }
+  }
+  return out;
+}
+
+/** 当前角色展示配置：id（体型键）+ 展示名 + voxel 尺寸 + 配色，由 app.ts 实时提供。 */
+export type CharacterConfig = {
+  id: string;
+  name: string;
+  voxel: VoxelConfig;
+  colors: ColorConfig;
+};
