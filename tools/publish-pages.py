@@ -28,6 +28,7 @@ GitHub 的静态托管服务，URL 完全由仓库身份决定（`https://<user>
 
 import argparse
 import importlib.util
+import json
 import os
 import sys
 import time
@@ -43,7 +44,7 @@ MCP, MCP_URL, DEFAULT_REPO = _pb.MCP, _pb.MCP_URL, _pb.DEFAULT_REPO
 
 DIST = os.path.join(ROOT, 'dist')
 PREVIEW_BRANCH = 'preview'
-MANIFEST = '.preview-files.txt'  # preview 分支根目录的发布清单，用于增量删旧
+MANIFEST = '.preview-files.txt'  # preview 分支根目录的发布清单（记录用；删旧改为列目录）
 
 
 def collect_dist():
@@ -65,14 +66,37 @@ def collect_dist():
     return files
 
 
-def read_manifest(mcp, owner, repo):
-    try:
-        txt = mcp.call('get_file_contents', {
-            'owner': owner, 'repo': repo, 'path': MANIFEST, 'ref': PREVIEW_BRANCH,
-        })
-        return [line.strip() for line in txt.splitlines() if line.strip()]
-    except Exception:
-        return []
+def list_preview_files(mcp, owner, repo, branch):
+    """列出分支上所有文件路径（get_file_contents 的**目录**模式返回 JSON 数组）。
+
+    不能用它读单个文本文件：该 MCP 工具对文件返回的是「successfully downloaded
+    text file (SHA: ...)」状态串而非内容，旧版靠 .preview-files.txt 清单做增量
+    清理因此永远拿到空集合，旧哈希产物一直堆积。改成列目录后，即使历史分支
+    根本没写过清单，也能自愈清理干净。
+    """
+    out = []
+    todo = ['']
+    seen = set()
+    while todo:
+        d = todo.pop()
+        if d in seen:
+            continue
+        seen.add(d)
+        try:
+            items = json.loads(mcp.call('get_file_contents', {
+                'owner': owner, 'repo': repo, 'path': d, 'ref': branch,
+            }))
+        except Exception as e:
+            # 列目录失败宁可跳过清理，也不能静默：否则旧产物会无声堆积
+            print(f'[publish-pages] 列目录失败（跳过清理）: {d!r} {str(e)[:120]}')
+            continue
+        for it in items:
+            p = it.get('path') or ''
+            if it.get('type') == 'dir':
+                todo.append(p)
+            elif it.get('type') == 'file':
+                out.append(p)
+    return out
 
 
 def main():
@@ -81,6 +105,13 @@ def main():
     ap.add_argument('--branch', default=PREVIEW_BRANCH)
     ap.add_argument('--dry', action='store_true')
     args = ap.parse_args()
+
+    # 护栏：本脚本会「先列目录删旧、再整批写 dist」，一旦目标分支传错成 main /
+    # feat/*，等于把源码分支清成只有构建产物。--branch 只为自定义 Pages 分支留的口子，
+    # 绝不能指向源码分支（2026-11-10 补）。
+    if args.branch in {'main', 'master', 'HEAD'} or args.branch.startswith(('feat/', 'fix/', 'backup/')):
+        sys.exit(f'[publish-pages] 拒绝写入源码分支 "{args.branch}"：'
+                 'Pages 产物只能发到 preview / gh-pages 之类的产物分支')
 
     if not os.path.isdir(DIST) or not os.path.exists(os.path.join(DIST, 'index.html')):
         sys.exit('[publish-pages] dist/index.html 不存在：先 npm run build')
@@ -110,9 +141,10 @@ def main():
         })
         print('[publish-pages] 创建分支:', out[:160])
 
-    # 增量删旧：上次的清单里、这次没有的路径，删掉，避免哈希重命名后孤儿文件堆积
-    old = set(read_manifest(mcp, owner, repo))
-    stale = sorted(old - paths)
+    # 删旧：分支上现有文件里、本次产物没有的，删掉（哈希重命名后不留孤儿）。
+    # 直接列目录，不再依赖可能缺失 / 读不出内容的 .preview-files.txt 清单。
+    old = set(list_preview_files(mcp, owner, repo, args.branch))
+    stale = sorted(old - paths - {MANIFEST})
     for p in stale:
         try:
             mcp.call('delete_file', {

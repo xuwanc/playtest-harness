@@ -63,6 +63,23 @@ for (const f of [readme, ...mdFiles]) {
   }
 }
 
+// 4b. 反引号里引用的 tools/ scripts/ 路径必须真实存在。
+// 链接检查只看 [](...)；文档表格大量用 `tools/xxx.py` 反引号，路径写错不触发任何检查
+// （实测 INDEX / conventions 写 tools/sweep.py、risk-history 写 tools/sweep-sample.mjs，
+//  实际文件是 tools/sweep_sample.py）。限定 tools/ 与 scripts/ 两类，避开 shots/ 等
+// 有意不入库的截图路径。
+const codePathRe = /`(?:tools|scripts)\/[A-Za-z0-9_./-]+\.(?:py|mjs|sh|js|ts|json)`/g;
+for (const f of [readme, ...mdFiles]) {
+  const txt = readFileSync(f, 'utf8');
+  let m;
+  while ((m = codePathRe.exec(txt))) {
+    const p = m[0].slice(1, -1);
+    if (!existsSync(join(ROOT, p))) {
+      errors.push(`${relative(ROOT, f)} → 反引号引用的工具路径不存在: ${p}`);
+    }
+  }
+}
+
 // 5. INDEX 必须存在且登记了每个 systems 文档
 const index = join(docsDir, 'INDEX.md');
 if (!existsSync(index)) errors.push('docs/INDEX.md 不存在');
@@ -82,4 +99,4 @@ if (errors.length) {
   for (const e of errors) console.error('  - ' + e);
   process.exit(1);
 }
-console.log(`[docs] PASS — README ${lineCount(readme)} 行；${mdFiles.length} 份文档，单份均 ≤300 行；链接全部可达。`);
+console.log(`[docs] PASS — README ${lineCount(readme)} 行；${mdFiles.length} 份文档，单份均 ≤300 行；链接 / 工具路径全部可达。`);

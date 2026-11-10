@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runSteps, snapshot, step } from '../src/core';
+import { currentMeleeShape, meleeCoverage, runSteps, snapshot, step } from '../src/core';
 import type { World } from '../src/core';
 import { intent, makeWorld, run } from './helpers';
 
@@ -193,5 +193,82 @@ describe('命中模块开关与确定性', () => {
     runSteps(a, 360, script);
     runSteps(b, 360, script);
     expect(snapshot(a)).toBe(snapshot(b));
+  });
+});
+
+/* ---------------- v9s.x：攻击覆盖范围与判定口径一致性 ---------------- */
+
+describe('meleeCoverage：脚底指示器范围与 playerHits / playerGroundSlam 同源', () => {
+  /** 把 combat 摆到 active 命中窗口内，让 currentMeleeShape 的时间闸门打开。 */
+  function activeWindow(w: World): void {
+    w.combat.phase = 'active';
+    w.combat.timings.active = 0.2;
+    w.combat.phaseTimer = 0.1; // u = 0.5，落在 hitWindow 内
+  }
+
+  it('半径 = currentMeleeShape.reach + dummies.radius，半角 = acos(cosArc)', () => {
+    const w = makeWorld();
+    w.combat.weapon = 'greatsword';
+    activeWindow(w);
+    const shape = currentMeleeShape(w);
+    const cov = meleeCoverage(w);
+    expect(shape.active).toBe(true);
+    expect(cov.radius).toBeCloseTo(shape.reach + w.config.dummies.radius, 6);
+    expect(Math.cos((cov.halfArcDeg * Math.PI) / 180)).toBeCloseTo(shape.cosArc, 6);
+  });
+
+  it('整段扫掠值域包含 currentMeleeShape 任一时刻的瞬时区间', () => {
+    const w = makeWorld();
+    w.combat.weapon = 'greatsword';
+    w.combat.timings.active = 0.2;
+    const cov = meleeCoverage(w);
+    expect(cov.sweep).not.toBeNull();
+    for (let i = 0; i <= 8; i++) {
+      w.combat.phase = 'active';
+      w.combat.phaseTimer = 0.2 * (i / 10);
+      const shape = currentMeleeShape(w);
+      if (!shape.active || !shape.sweepActive) continue;
+      expect(shape.sweepLo).toBeGreaterThanOrEqual(cov.sweep!.lo - 1e-6);
+      expect(shape.sweepHi).toBeLessThanOrEqual(cov.sweep!.hi + 1e-6);
+    }
+  });
+
+  it('击地圆半径 / 落点前移与 currentMeleeShape 的 slam 一致', () => {
+    const w = makeWorld();
+    w.combat.weapon = 'greatsword';
+    w.combat.timings.active = 0.2;
+    w.combat.phase = 'active';
+    w.combat.attackFacing = 0;
+    w.combat.phaseTimer = 0.2 * 0.7; // u >= slamU(0.6)
+    const shape = currentMeleeShape(w);
+    const cov = meleeCoverage(w);
+    expect(shape.slamRadius).toBeGreaterThan(0);
+    expect(cov.slam!.radius).toBeCloseTo(shape.slamRadius + w.config.dummies.radius, 6);
+    expect(cov.slam!.ahead).toBeCloseTo(shape.slamZ - w.character.position.z, 6);
+  });
+
+  it('bow 没有近战覆盖（与 playerHits 首行同句）', () => {
+    const w = makeWorld();
+    w.combat.weapon = 'bow';
+    const cov = meleeCoverage(w);
+    expect(cov.melee).toBe(false);
+    expect(cov.radius).toBe(0);
+    expect(cov.slam).toBeNull();
+  });
+
+  it('lunge 按 comboIndex 取当前段的前冲距离', () => {
+    const w = makeWorld();
+    w.combat.weapon = 'greatsword';
+    w.combat.comboIndex = 3;
+    expect(meleeCoverage(w).lunge).toBe(w.config.combat.weapons.greatsword.lunge[2]);
+  });
+
+  it('纯查询：反复调用不写 World（快照逐字节一致）', () => {
+    const w = makeWorld();
+    w.combat.weapon = 'greatsword';
+    activeWindow(w);
+    const before = snapshot(w);
+    for (let i = 0; i < 5; i++) meleeCoverage(w);
+    expect(snapshot(w)).toBe(before);
   });
 });

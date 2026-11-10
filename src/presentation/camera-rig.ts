@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import type { GroundBasis } from '../adapters/input';
 import type { CameraConfig, CameraIntent, CameraZoomViewConfig, SmartCameraViewConfig } from '../core';
+import { SHAKE_PRESETS, shakeOffset } from './shake';
+import type { ShakeKind, ShakePreset } from './shake';
 
 export type SmartCameraState = {
   distanceScale: number;
@@ -24,15 +26,18 @@ export type CameraRig = {
   /** 表现层实际采用的平滑后构图值，供 diagnostics / 验收读数。 */
   smart(): SmartCameraState;
   /**
-   * v9s.29：命中震动（相机冲击）。
+   * v9s.x：注入一次震动。`kind` 决定波形 / 衰减 / 频段，`amount` 是 0..1 的 trauma。
+   * 兼容旧调用（不传 kind 时按普通命中处理）。
    *
-   * 卡肉负责「停」，震动负责「砸」。两者叠加才有重量：只停不震像掉帧，
-   * 只震不停像穿模。能量按指数衰减、幅度只有几厘米 —— 大了会晕，
-   * 但它和定格同一帧触发，玩家读到的就是「打实了」。
+   * 卡肉负责「停」，震动负责「砸」。旧版三轴高频正弦 + 累加能量会读成掉帧，
+   * 现在改成 trauma² 整形 + 平滑噪声 + 低频主导 + 按冲击类型分档，见 shake.ts。
    */
-  addShake(amount: number): void;
-  /** v9s.31：当前震动能量 0..1（纯观测，供 diagnostics / 自动化验收） */
+  addShake(amount: number, kind?: ShakeKind): void;
+  /** 当前震动能量 0..1（纯观测，供 diagnostics / 自动化验收） */
   shakeLevel(): number;
+  /** 当前生效的震动档位 / 参数（验收「按击中类型分档」直接读这里） */
+  shakeKind(): ShakeKind;
+  shakePreset(): ShakePreset;
   /**
    * v9s.33：方向性微推。命中瞬间把相机沿「玩家 → 受击者」方向推几厘米，
    * 和全向震动分开：震动表达「多沉」，微推表达「从哪边打过来的」。
@@ -72,9 +77,12 @@ export function createCameraRig(
   };
   /** 用户缩放目标（由组装层喂入），smart.zoom 平滑跟随，不进 Core / 快照 */
   let zoomTarget = 1;
-  /** v9s.29 命中震动：能量 0..1 + 相位（纯表现，不进 Core / 快照） */
-  let shake = 0;
-  let shakePhase = 0;
+  /** v9s.x 命中震动：trauma 0..1 + 当前档位 + 连续时间（纯表现，不进 Core / 快照） */
+  let trauma = 0;
+  let preset: ShakePreset = SHAKE_PRESETS.impact;
+  let activeKind: ShakeKind = 'impact';
+  let shakeClock = 0;
+  let lastTriggerAt = -1e9;
   /** v9s.33 方向性微推：单位方向 × 幅度（米），能量指数衰减 */
   let kickX = 0;
   let kickZ = 0;
@@ -127,17 +135,18 @@ export function createCameraRig(
       camera.position.copy(focus).add(offset);
       camera.lookAt(focus);
 
-      // v9s.29 命中震动：位移式（不改朝向），所以背景不旋转、只有「顿一下」的错位感。
-      // 相位用两个不互质的频率叠加，避免看出明显的来回摆动。
-      if (shake > 1e-3) {
-        shakePhase += dt * 52;
-        const amp = shake * 0.055;
-        camera.position.x += Math.sin(shakePhase * 1.7) * amp;
-        camera.position.y += Math.sin(shakePhase * 2.3 + 1.1) * amp * 0.75;
-        camera.position.z += Math.sin(shakePhase * 1.3 + 2.4) * amp * 0.5;
-        shake *= Math.exp(-9 * dt);
+      // v9s.x 命中震动：trauma 驱动 + 平滑噪声（低频主导）+ 线性衰减。
+      // 仍是纯平移、不改朝向：背景不旋转，只有「砸一下再余震」的错位感；
+      // 人眼对旋转震动敏感约 3 倍，这里刻意不加 roll，避免眩晕。
+      shakeClock += dt;
+      if (trauma > 1e-3) {
+        const o = shakeOffset(trauma, preset, shakeClock);
+        camera.position.x += o.x;
+        camera.position.y += o.y;
+        camera.position.z += o.z;
+        trauma = Math.max(0, trauma - preset.decay * dt);
       } else {
-        shake = 0;
+        trauma = 0;
       }
       if (kickE > 1e-3) {
         camera.position.x += kickX * kickE;
@@ -174,12 +183,27 @@ export function createCameraRig(
         forwardZ: fwd.z / fl,
       };
     },
-    addShake(amount): void {
+    addShake(amount, kind = 'impact'): void {
       if (!Number.isFinite(amount) || amount <= 0) return;
-      shake = Math.min(1, shake + amount);
+      const p = SHAKE_PRESETS[kind] ?? SHAKE_PRESETS.impact;
+      // 一次挥砍可能跨多帧命中 / 同帧多目标：同类 60ms 内只认一次，
+      // 且 trauma 取最大而非累加 —— 连击不再叠成持续蜂鸣（旧版「越砍越碎」的根因）。
+      // 例外：这次冲击更强时仍允许覆盖，保证重击不会被前面的轻击吃掉。
+      if (activeKind === kind && shakeClock - lastTriggerAt < 0.06
+        && trauma >= Math.min(1, amount)) return;
+      activeKind = kind;
+      lastTriggerAt = shakeClock;
+      preset = p;
+      trauma = Math.max(trauma, Math.min(1, amount));
     },
     shakeLevel(): number {
-      return shake;
+      return trauma;
+    },
+    shakeKind(): ShakeKind {
+      return activeKind;
+    },
+    shakePreset(): ShakePreset {
+      return { ...preset };
     },
     addKick(dirX, dirZ, amount) {
       if (!Number.isFinite(dirX) || !Number.isFinite(dirZ) || !(amount > 0)) return;

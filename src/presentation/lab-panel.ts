@@ -2,6 +2,8 @@ import { resetDummies, warpTo } from '../core';
 import type { AssembledPlot, StationSpec, World } from '../core';
 import type { SceneView } from './three-scene';
 import { cycleStation, stationAt, stationById } from './lab-stations';
+import { classifyStation, groupStations } from './station-groups';
+import type { StationGroupId } from './station-groups';
 
 export type LabPanel = {
   /** 传送到工位（id 或 index）；返回是否传送成功 */
@@ -57,6 +59,8 @@ export function createLabPanel({
   let activeId: string | null = null;
   let hintEl: HTMLElement | null = null;
   const rows = new Map<string, HTMLButtonElement>();
+  /** v9s.x：组容器，paint() 里给「玩家当前所在组」加高亮 */
+  const groupEls = new Map<StationGroupId, HTMLElement>();
 
   // 入场提示条：走进 / 传送到某工位时在屏幕下方浮出一条「这里测什么」，5s 后自动消失。
   // 放在 DOM 而不是 3D 标牌：不挡视线、字号可读、手机上也清楚。
@@ -85,6 +89,8 @@ export function createLabPanel({
     const left = activeId !== null;
     activeId = curId;
     for (const [id, row] of rows) row.classList.toggle('is-active', id === curId);
+    const curGroup = cur ? classifyStation(cur.id, cur.name) : null;
+    for (const [gid, gel] of groupEls) gel.classList.toggle('is-current', gid === curGroup);
     if (hintEl) {
       hintEl.textContent = cur
         ? `${cur.index} · ${cur.hint}`
@@ -146,28 +152,53 @@ export function createLabPanel({
     head.appendChild(tip);
     el.appendChild(head);
 
-    for (const st of [...stations].sort((a, b) => a.index - b.index)) {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'lab-row';
-      row.dataset.station = st.id;
-      row.dataset.uiButton = '';
-      row.style.setProperty('--lab-color', st.color);
-      row.setAttribute('aria-label', `传送到工位 ${st.index}：${st.name}`);
-      const idx = document.createElement('span');
-      idx.className = 'lab-idx';
-      idx.textContent = String(st.index);
-      const name = document.createElement('span');
-      name.className = 'lab-name';
-      name.textContent = st.name;
-      row.append(idx, name);
-      row.addEventListener('pointerdown', (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        goto(st.id);
-      });
-      el.appendChild(row);
-      rows.set(st.id, row);
+    // v9s.x：按功能分组（纯表现层）。组内仍按 index 排序，行本身的结构 / 类名 /
+    // data-station 一个没变 —— 传送、[ ] 循环、smoke 的工位计数断言全部照旧。
+    const sorted = [...stations].sort((a, b) => a.index - b.index);
+    for (const { group, items } of groupStations(sorted)) {
+      const section = document.createElement('div');
+      section.className = 'lab-group';
+      section.dataset.group = group.id;
+      section.style.setProperty('--lab-group-color', group.color);
+      const gHead = document.createElement('div');
+      gHead.className = 'lab-group-head';
+      const gLabel = document.createElement('span');
+      gLabel.className = 'lab-group-label';
+      gLabel.textContent = group.label;
+      const gCount = document.createElement('span');
+      gCount.className = 'lab-group-count';
+      gCount.textContent = String(items.length);
+      const gHint = document.createElement('span');
+      gHint.className = 'lab-group-hint';
+      gHint.textContent = group.hint;
+      gHead.append(gLabel, gCount, gHint);
+      section.appendChild(gHead);
+      groupEls.set(group.id, section);
+
+      for (const st of items) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'lab-row';
+        row.dataset.station = st.id;
+        row.dataset.uiButton = '';
+        row.style.setProperty('--lab-color', st.color);
+        row.setAttribute('aria-label', `传送到工位 ${st.index}：${st.name}`);
+        const idx = document.createElement('span');
+        idx.className = 'lab-idx';
+        idx.textContent = String(st.index);
+        const name = document.createElement('span');
+        name.className = 'lab-name';
+        name.textContent = st.name;
+        row.append(idx, name);
+        row.addEventListener('pointerdown', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          goto(st.id);
+        });
+        section.appendChild(row);
+        rows.set(st.id, row);
+      }
+      el.appendChild(section);
     }
 
     hintEl = document.createElement('div');

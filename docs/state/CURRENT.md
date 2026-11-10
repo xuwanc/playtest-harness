@@ -1,32 +1,34 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-10 15:44。
+> 最后更新：2026-11-10 17:24。
 
 ## 一句话
 
-v0.9.84：**鱼人（Murloc）不是新骨架，是同一套人形骨架换五处几何**。
-① 造型：方颅钝吻 + 两颗凸出的黄眼 + 冠鳍 / 背鳍 / 肩鳍 + 蹼手蹼脚 + 短尾
-（`presentation/murloc-parts.ts`，约 240 行造型、零动画）；
-② 因为骨架名 / IK / 步态 / 挥击 / 断肢映射 / 倒杆物理**一行没改**，鱼人天生会跑、
-会砍、断头时整颗鱼头掉下来、倒下会侧倒；
-③ 两种出场：`?hero=murloc` 当主角（`B` 键循环体型），`y-murloc` 工位三只当杂兵
-（血量 90，重击 5 刀砍死，`sever.part` 实测 `head`）。
+v0.9.85：**把 UI / 手感 / 工程治理三条线一起收进主干**（鱼人造型是上一版 v0.9.84）。
+① 界面：竖屏操作簇下移到 4/5 高度、按钮显示冷却 / 蓄力 / 引导 / 冲刺 / 空中状态、
+工位按功能分组、状态读数按语义分区；
+② 手感：震屏按击中类型与强度分档（trauma² + 平滑噪声，不再像掉帧）、常驻帧率条、
+脚底技能范围指示器统一读 Core 判定口径（扇角取真实半角 ∩ 扫掠区间、内圈按角色碰撞
+半径裁剪、进出淡入淡出、描边为有面积窄带且大射程收敛）；
+③ 工程：`scripts/check-facts.mjs` 现场采集验收真值守住文档数字、推送护栏拒绝
+「基线非 HEAD 祖先」、`check-online.py` 参数化、`.github/workflows/verify.yml`
+四层 CI，并修掉 3 处失效工具路径与 smoke 工位硬编码。
 
-上一版的仙人掌侧臂单一真源 / 旗杆桩高 / 移动端降档仍在。
+上一版（v0.9.84 鱼人换几何不换骨架、v0.9.83 可破坏物去壳）仍在。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.84`（内部代号 v9s.63） |
-| 线上徽标 | `v0.9.84`（构建时间随发布变化） |
+| `package.json` 版本 | `0.9.85`（内部代号 v9s.64） |
+| 线上徽标 | `v0.9.85`（构建时间随发布变化） |
 | 发布方式 | `npm run ship`（构建 → 推 main → 重建 `preview` 产物；带凭证自恢复与推送重试） |
 | 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— 此链接固定不变 |
 | 蜘蛛开局 | <https://xuwanc.github.io/playtest-harness/?hero=spider> |
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 鱼人开局 | <https://xuwanc.github.io/playtest-harness/?hero=murloc> |
-| 本轮线上核验 | `assets/main-t1aEvwxz.js` 本地 / 线上同一份（913382 B），徽标 `v0.9.84` 有 → PASS |
+| 本轮线上核验 | 发布后 `python3 tools/check-online.py --wait 180` 校验本地 / 线上同一份产物与徽标 `v0.9.85`（不写死 js 名，构建期注入会变） |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
@@ -34,9 +36,9 @@ v0.9.84：**鱼人（Murloc）不是新骨架，是同一套人形骨架换五�
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 112 文件 / 1121 例全绿 |
+| `npx vitest run` | 118 文件 / 1210 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
-| `npm run smoke` | 53/53 PASS |
+| `npm run smoke` | 70/70 PASS |
 | `npm run docs:check` | PASS（98 份文档 ≤300 行，README 99 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
@@ -47,7 +49,7 @@ v0.9.84：**鱼人（Murloc）不是新骨架，是同一套人形骨架换五�
 
 ## 正在做
 
-- 无。v9s.63（v0.9.84）已合并发布。
+- 无。v9s.64（v0.9.85）已合并发布。
 
 ## 伤害 / 死亡的关键数（改之前先读）
 
