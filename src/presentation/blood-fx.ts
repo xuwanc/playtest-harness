@@ -100,10 +100,23 @@ function bloodConfig(v: ViewConfig): BloodViewConfig {
   };
 }
 
+/**
+ * v9s.57 · 把 Core 的「归一化命中部位」换算成世界坐标。
+ *
+ * Core 只给 `u`（0 脚底 / 1 头顶），因为骨架的实际高度在表现层：
+ * 同一个人驼背、屈膝、后仰时躯干高度都会变。这里由 three-scene 提供采样函数，
+ * 用 `u × 当前骨架身高` 取一个点再吸附到最近骨骼段 —— 血就从「真正被打中的那根骨头」喷出来。
+ * 返回 null 时回退到 Core 算好的静态点。
+ */
+export type BodySample = (
+  id: number, u: number, fallbackX: number, fallbackY: number, fallbackZ: number,
+) => { x: number; y: number; z: number } | null;
+
 export function createBloodFx(
   scene: THREE.Scene,
   view: ViewConfig,
   groundY: (x: number, z: number, fromY: number) => number,
+  sample?: BodySample,
 ): BloodFx {
   const cfg = bloodConfig(view);
   let bursts = 0;
@@ -189,6 +202,10 @@ export function createBloodFx(
     // 方向：击打方向 + 一点向上的抛射；横向散布是为了「一片」而不是「一条线」
     const dirX = m.dx === 0 && m.dz === 0 ? 0 : m.dx;
     const dirZ = m.dx === 0 && m.dz === 0 ? 1 : m.dz;
+    // v9s.57：血从实际骨骼位置喷（打头在头、打腿在腿），采样失败再退回 Core 的静态点。
+    // 骨骼段在身体中轴，往击打方向外推 10cm —— 否则前几帧血还在躯干内部，被不透明体素挡住。
+    const raw = (sample && sample(m.id, clamp(m.u, 0, 1), m.x, m.y, m.z)) || { x: m.x, y: m.y, z: m.z };
+    const at = { x: raw.x + dirX * 0.1, y: raw.y, z: raw.z + dirZ * 0.1 };
     const n = Math.round(cfg.drops * clamp(0.6 + power * 0.6, 0.5, 1.8));
     for (let k = 0; k < n; k++) {
       const d = drops.find((x) => !x.live);
@@ -199,9 +216,9 @@ export function createBloodFx(
       const fwd = 0.6 + rnd(seed + 2) * 0.8;
       const speed = cfg.spraySpeed * (0.55 + power * 0.55);
       d.live = true;
-      d.x = m.x + (rnd(seed + 3) - 0.5) * 0.12;
-      d.y = m.y + (rnd(seed + 4) - 0.5) * 0.14;
-      d.z = m.z + (rnd(seed + 5) - 0.5) * 0.12;
+      d.x = at.x + (rnd(seed + 3) - 0.5) * 0.12;
+      d.y = at.y + (rnd(seed + 4) - 0.5) * 0.14;
+      d.z = at.z + (rnd(seed + 5) - 0.5) * 0.12;
       d.vx = (dirX * fwd - dirZ * side * cfg.spread) * speed;
       d.vz = (dirZ * fwd + dirX * side * cfg.spread) * speed;
       d.vy = cfg.sprayLift * up * (0.6 + power * 0.5);
@@ -215,9 +232,9 @@ export function createBloodFx(
     const mist = mists.find((x) => x.life <= 0);
     if (mist) {
       mist.mesh.position.set(
-        m.x + dirX * 0.12,
-        m.y + 0.02,
-        m.z + dirZ * 0.12,
+        at.x,
+        at.y + 0.02,
+        at.z,
       );
       mist.mesh.rotation.set(rnd(m.seq) * 3, rnd(m.seq + 1) * 3, rnd(m.seq + 2) * 3);
       mist.mesh.visible = true;

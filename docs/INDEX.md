@@ -41,6 +41,7 @@
 | 起手一帧抬手 / 收招停在半挥 / 打完回待机闪一下 | `voxel-rig.ts` 的 `posePhaseU`、`combatPoseW`、`applyBladeTarget` | `posePhaseU`、`combatPoseW`、`fadeTarget`、`poseW`、`bladePitch × w` | [systems/pose-entry.md](systems/pose-entry.md) | `tests/v9s55-pose-entry.test.ts`、`python3 tools/probe-entry.py` |
 | 打中只有卡肉 / 没有血 / 想要飙血 | `presentation/blood-fx.ts`、`core/health.ts` 的 `pushHitMark` | `createBloodFx`、`HitMark`、`HIT_MARK_CAP`、`FX_ORDER.bloodDrop/Stain/Mist` | [systems/blood.md](systems/blood.md) | `tests/v9s56-damage-blood.test.ts`、`python3 tools/blood-shot.py` |
 | 陪练打不死 / 打死了不消失 / 死了不刷新 | `core/health.ts`、`core/dummies.ts`、`three-scene.ts` 的 `applyDeathPose` | `damageDummy`、`killDummy`、`reviveDummy`、`updateHealth`、`REVIVE_GUARD` | [systems/damage-death.md](systems/damage-death.md) | `tests/v9s56-damage-blood.test.ts`、`__harness.deathDebug(id)` |
+| 血总喷在胸口（打头打腿一个位置） / 能穿过尸体 / 陪练没血条 | `core/hits.ts` 的 `hitU`、`core/separation.ts` 的尸体分支、`presentation/healthbar-layer.ts` | `hits.hitHeight`、`dummies.corpse`、`BodySample`、`healthBarDebug` | [systems/damage-death.md](systems/damage-death.md) §6–8 | `tests/v9s57-death-polish.test.ts`、`python3 tools/death-polish-shot.py` |
 | 剑盾挥剑不舒展 / 扫角只有 130° / 剑扫到身后看不见 | `config.view.animation.swing` 的 `ss.*` 与 `weaponScale` | `armYaw` 换向、`elbow` 行程、`armLPitch`/`elbowL`（盾臂） | [systems/pose-entry.md](systems/pose-entry.md) §三 | `npm run clip:lab:check`、`python3 tools/swing-shot.py` |
 | 截图放哪 / 能不能入库 | `shots/`（`.gitignore` 已挡） | — | [assets/conventions.md](assets/conventions.md) | `git status` 里不该出现 png |
 | 刀光 / 斩击弧不出现 | `presentation/three-scene.ts` | `weapon-trail.ts`、`FX_ORDER.trail / slash` | [systems/presentation-fx.md](systems/presentation-fx.md) | `__harness.fxDebug()` |
@@ -103,7 +104,8 @@
 | `fx-layer.ts` | **特效层级唯一来源** | `FX_ORDER`、`setFxOrder` |
 | `voxel-rig.ts` | 人形主角骨架装配 + 逐帧姿态解算（含**姿态进出场**：`posePhaseU` 定采样点、`combatPoseW` 定交叉淡出） | `createVoxelRig`、`rig.update`、`posePhaseU`、`combatPoseW`、`bladeWorld` |
 | `health.ts` | **生命值 / 死亡 / 重生**（Core）：扣血、判死、复活保护、命中记录环形 | `damageDummy`、`killDummy`、`reviveDummy`、`updateHealth`、`pushHitMark` |
-| `blood-fx.ts` | 命中飙血三层：血珠（InstancedMesh）/ 血雾 / 地面血迹 | `createBloodFx`、`spawnBurst`、`spawnStain` |
+| `blood-fx.ts` | 命中飙血三层：血珠（InstancedMesh）/ 血雾 / 地面血迹 | `createBloodFx`、`spawnBurst`、`spawnStain`、`BodySample` |
+| `healthbar-layer.ts` | 陪练头顶血条（DOM 覆盖层，只画有血量的单位） | `createHealthBarLayer`、`healthBarDebug` |
 | `gait.ts` | **程序化步态解算（纯函数）**：相位推进 / 反向前后融合 / 停步惯性 / 转身闸门 / **待机斜跨站姿** | `solveGait`、`slewDirSign`、`solveStopInertia`、`solveIdleStance`、`leadFootIsLeft` |
 | `spider-rig.ts` | **8 腿主角骨架**：两节身体 + 三角步态 + 每腿两骨闭式解（按 `bodyTypes.rig` 切换） | `createSpiderRig`、`solveLeg`、`debug()`、`legs()` |
 | `beard.ts` / `voxel-rig.ts` 的 `style` 段 | **造型特征**：驼背 / 屈膝 / 地中海（一盒穿三面）/ 长白胡子（三节 × 前后左右两通道）/ 肩甲 / 呼吸 | `CharacterStyle`、`solveBeard`、`beardAvoidAt`、`createBeardState` |

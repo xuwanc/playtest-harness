@@ -69,6 +69,8 @@ export function separationUpdate(world: World): void {
   const dr = world.config.dummies.radius;
   const iterations = Math.max(1, Math.floor(cfg.iterations));
   const slop = Math.max(0, cfg.slop);
+  /** 尸体圆心（算出来的临时点；不复用尸体 position，避免把 Core 状态写脏）。 */
+  const corpseAt: Vec3 = { x: 0, y: 0, z: 0 };
 
   for (let iter = 0; iter < iterations; iter++) {
     // 假人 ↔ 假人：各承担一半；重合时按 (i,j) 生成不同的确定性方向，避免挤成一堆
@@ -93,6 +95,27 @@ export function separationUpdate(world: World): void {
         Math.cos(ang), Math.sin(ang),
       );
     }
+
+    // v9s.57：玩家 ↔ 尸体 —— 权重**反过来**（玩家让开、尸体不动）。
+    // 尸体是静态障碍：躺下的身体中心不在脚底，而在倒向（-facing）前方约一个躯干处，
+    // 所以碰撞圆要跟着位移；只用站立半径会让人从胸口那一段穿过去。
+    const corpse = world.config.dummies.corpse;
+    if (corpse && corpse.enabled !== false) {
+      const cr = Math.max(0.05, corpse.radius ?? 0.62);
+      const off = Math.max(0, corpse.offset ?? 0.55);
+      for (let k = 0; k < dummies.length; k++) {
+        const s = dummies[k];
+        if (!s.health.dead) continue;
+        const ang = (k + 1) * GOLDEN_ANGLE;
+        // 复用同一个临时对象：only 读，separatePair 的 wb=0 不会写它
+        corpseAt.x = s.position.x - Math.sin(s.facing) * off;
+        corpseAt.z = s.position.z - Math.cos(s.facing) * off;
+        separatePair(
+          p, corpseAt, pr, cr, 1, 0, slop,
+          Math.cos(ang), Math.sin(ang),
+        );
+      }
+    }
   }
 
   // 分离可能把假人推进白盒 / 推出边界，统一再解算一次
@@ -103,6 +126,19 @@ export function separationUpdate(world: World): void {
     s.position.x = clamp(s.position.x, b.minX, b.maxX);
     s.position.z = clamp(s.position.z, b.minZ, b.maxZ);
   }
+  // v9s.57：玩家也可能被尸体顶进墙里（尸体贴着墙倒），同样解算 + 夹紧。
+  // 只在真有尸体时跑，避免给没有死亡的场景加无谓开销。
+  if (corpseBlocks(dummies)) {
+    resolveHorizontal(world.boxes, p, pr, world.config.characterHeight, stepH);
+    p.x = clamp(p.x, b.minX, b.maxX);
+    p.z = clamp(p.z, b.minZ, b.maxZ);
+  }
+}
+
+/** 是否有尸体（决定要不要给玩家做一次额外解算）。 */
+function corpseBlocks(dummies: readonly { readonly health: { readonly dead: boolean } }[]): boolean {
+  for (const d of dummies) if (d.health.dead) return true;
+  return false;
 }
 
 /* -------------------------------------------------------------------------- *

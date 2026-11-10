@@ -22,6 +22,9 @@
     "publish:preview": "node tools/publish-preview.mjs",
     "publish:pages": "python3.11 tools/publish-pages.py",
     "ship": "bash tools/ship.sh",
+    "feat:start": "python3.11 tools/agent-sync.py start",
+    "feat:finish": "python3.11 tools/agent-sync.py finish",
+    "feat:status": "python3.11 tools/agent-sync.py status",
     "sweep": "python3 tools/sweep_sample.py",
     "docs:check": "node scripts/check-docs.mjs"
   },

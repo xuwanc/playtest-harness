@@ -332,6 +332,8 @@ export function startApp(): void {
     bloodDebug: () => view.bloodDebug(),
     /** v9s.56：某个假人的死亡渲染读数（倒地角 / 下沉量 / 升起量） */
     deathDebug: (id: number) => view.deathDebug(id),
+    /** v9s.57：头顶血条读数（总条数 / 当前可见条数） */
+    healthBarDebug: () => view.healthBarDebug(),
     /** v9s.56：假人血量快照（血量 / 是否死亡 / 距重生 / 击杀数），验收直接读 */
     dummyHealth: () => world.dummies.map((d) => ({
       id: d.id,

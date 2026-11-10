@@ -1274,6 +1274,15 @@ export type HitsConfig = {
    * 大剑一记 1.4 倍 = 两三下打死陪练，双刀 0.7 倍要磨十下 —— 重量差从数字上就读得出来。
    */
   damageMul?: Partial<Record<WeaponId, number>>;
+  /**
+   * v9s.57 · 命中部位表（0 = 脚底，1 = 头顶），按受击类型分档。
+   *
+   * 命中判定是 2D 扇形（没有垂直维度），所以「打头还是打腿」只能由**招式档位**决定：
+   * 轻击在胸口、重击偏下、击飞/砸地在腰腹。斜劈与突刺本来就不是一个高度，
+   * 统一按 0.52 喷血才会出现「砍脚踝也喷胸口」。
+   * 缺省 { light: 0.60, heavy: 0.50, knock: 0.40 }。
+   */
+  hitHeight?: { light: number; heavy: number; knock: number };
 };
 
 export type HitstopWarpConfig = {
@@ -1920,6 +1929,20 @@ export type DummyConfig = {
   health?: number;
   /** v9s.56 · 假人死亡后自动重生延迟（秒），缺省 3 */
   respawnSec?: number;
+  /**
+   * v9s.57 · 尸体碰撞体。
+   *
+   * 旧版死者直接跳过 `separation`，玩家能从倒下的陪练身上穿过去 —— 死亡看起来像「模型消失了」。
+   * 现在尸体变成**静态障碍**：玩家让开、尸体不动（权重反过来），碰撞圆随倒地方向前移，
+   * 因为躺下后的身体中心不在脚底，而在脚后约一个躯干的位置。
+   *
+   * | 字段 | 含义 | 缺省 |
+   * |---|---|---|
+   * | `enabled` | 总开关（false 精确回到「可以穿过尸体」） | true |
+   * | `radius` | 碰撞半径（躺下是长条，用一个略大于站立的圆近似） | 0.62 |
+   * | `offset` | 圆心沿「倒向」前移的距离（米） | 0.55 |
+   */
+  corpse?: { enabled?: boolean; radius?: number; offset?: number };
 };
 
 /**
@@ -1957,6 +1980,14 @@ export type HitMark = {
   x: number;
   y: number;
   z: number;
+  /**
+   * v9s.57 · 命中部位（0 = 脚底，1 = 头顶）。
+   *
+   * Core 只给**归一化高度**，不给世界 Y —— 因为「跟骨骼」的高度只有表现层知道：
+   * 同一个人驼背 / 屈膝 / 正在后仰时，躯干的实际世界高度会变，而 Core 不读骨架。
+   * 表现层用 `u × 当前骨架身高` 再吸附到最近骨骼段，血就从「实际被打中的那根骨头」喷出来。
+   */
+  u: number;
   /** 击打方向（单位向量，世界 XZ）：血往哪边喷 */
   dx: number;
   dz: number;
@@ -3276,6 +3307,13 @@ export type ViewConfig = {
   groundSlam: GroundSlamViewConfig;
   /** v9s.56 · 命中飙血（血珠 / 血雾 / 地面血迹） */
   blood?: BloodViewConfig;
+  /**
+   * v9s.57 · 陪练头顶血条（纯 DOM 覆盖层）。
+   *
+   * 只对 `health.maxHp > 0` 的单位显示 —— 打不死的测试桩不挂血条，否则「这个能打 /
+   * 这个打不死」读不出来。`enabled: false` 时完全不建 DOM（截图 A/B 用）。
+   */
+  healthBar?: { enabled?: boolean; /** 条相对头顶再抬高的米数 */ lift?: number };
   /** v9s.39 · 体素草块的观感参数（颜色 / 尺寸 / 实例上限 / 碎片） */
   grass: GrassViewConfig;
   /** v9s.33：动态平衡量化 / 自动配重（纯表现，只读骨架，不写 Core） */
