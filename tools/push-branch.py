@@ -21,6 +21,21 @@ git 凭证：`git push` 会报 `could not read Username for 'https://github.com'
 再 `git reset --hard origin/<branch>` 让本地与远端对齐（git commit SHA 会不同，
 因为远端 commit 由 API 重建，但 tree 逐字节相同）。
 
+每次推代码都顺带刷新固定页面（2026-11-10 用户约定）：**推送成功后**自动调用
+`publish-pages.py`，把本地 `dist/` 推到 `preview` 分支，让 GitHub Pages 与刚推的
+代码保持一致，不用再单独说「发个链接」。失败只告警、绝不阻断推送结果；
+`--no-pages` 可显式关闭，`--dry` 不会触发发布。
+
+两条护栏（2026-11-10 补）：
+  - `preview` / `gh-pages` 与 main 一样是受保护分支，源码绝不能推上去（会毁掉 Pages）；
+  - 基线回落到 `origin/main` 时，若 main 不是本地 HEAD 的祖先就拒绝推送 ——
+    否则 `git diff origin/main HEAD` 会把对方这段时间**新增的文件**全部算成删除，
+    推上去等于抹掉别人的工作（当天真实踩过一次，靠手工 merge 才避免）。
+
+`--pages-wait N` 可选：发布后调 `check-online.py --wait N` 核验线上真的生效
+（Pages 构建偶尔 abandoned / CDN 缓存 10 分钟，见 docs/risk-review.md §v9s.55）。
+默认 0 = 不核验、不拖慢推送，完成提示里给出手动核验命令。
+
 用法
 ----
     python3.11 tools/push-branch.py                       # 推当前分支，message 取最近一次本地 commit
@@ -134,6 +149,11 @@ def main():
                     help='差异基线；默认优先 origin/<branch>（增量），否则 origin/main（全量）')
     ap.add_argument('-m', '--message', default=None)
     ap.add_argument('--dry', action='store_true', help='只打印计划，不写远端')
+    ap.add_argument('--no-pages', action='store_true',
+                    help='推送后不刷新 GitHub Pages（默认每次推送都刷新 preview 分支）')
+    ap.add_argument('--pages-wait', type=int, default=0,
+                    help='发布后核验线上生效：传给 check-online.py --wait 的秒数；'
+                         '0（默认）只推 preview 不核验，不拖慢推送')
     args = ap.parse_args()
 
     owner, repo = args.repo.split('/', 1)
@@ -141,7 +161,8 @@ def main():
     message = args.message or git('log', '-1', '--format=%B')
 
     # 硬护栏：绝不写受保护分支；源文件未提交就先停下（推完要 reset --hard，会吞掉改动）
-    PROTECTED = {'main', 'master', 'HEAD'}
+    # preview / gh-pages 是 Pages 的产物分支，把源码推上去会直接毁掉线上页面。
+    PROTECTED = {'main', 'master', 'HEAD', 'preview', 'gh-pages'}
     if branch in PROTECTED or branch.startswith('backup/'):
         sys.exit(f'[push-branch] 拒绝写入受保护分支 "{branch}"：只允许推 feat/* / fix/* 等功能分支')
     dirty = [
@@ -171,6 +192,20 @@ def main():
                 f'[push-branch] 拒绝推送：远端 {branch} 有本地没有的提交（别的 agent 推过）。\n'
                 '  先 git fetch origin && git merge --no-ff origin/<branch>，'
                 '或换一个带 agent 后缀的分支名 feat/<topic>-<agent>。'
+            )
+
+    # 护栏：无论基线是 origin/main 还是显式 --base，都必须是本地 HEAD 的祖先。
+    # 否则 git diff 会把「对方在这段时间新增的文件」算成 D，push_files/delete_file
+    # 就会把它们从远端抹掉。2026-11-10 实测：对方前进 21 个提交、新增 13 个文件，
+    # --dry 计划里全成了 D，靠人工 merge --no-ff 才避免。把这次判断固化成代码。
+    if git_ok('rev-parse', '--verify', base):
+        if not git_ok('merge-base', '--is-ancestor', base, 'HEAD'):
+            sys.exit(
+                f'[push-branch] 拒绝推送：基线 {base} 不是本地 HEAD 的祖先'
+                '（本地落后或已与主干分叉）。\n'
+                '  此时取差异会把别人新增的文件当成「删除」推上去。\n'
+                '  先 git fetch origin && git merge --no-ff origin/main，'
+                '按规范解完冲突并 npm run verify 后再推。'
             )
 
     diff = git('diff', '--name-status', '--no-renames', base, 'HEAD').splitlines()
@@ -252,10 +287,53 @@ def main():
         except Exception as e:
             print('[push-branch] 删除失败(可能已不存在):', path, str(e)[:120])
 
+    # ── 每次推送后刷新固定页面（GitHub Pages） ─────────────────────────────
+    # 2026-11-10 用户约定：推代码 = 页面同步更新，不用再单独说「发个链接」。
+    # 复用 publish-pages.py 的 MCP 网关通道把本地 dist/ 推到 preview 分支；
+    # 失败只告警、绝不阻断推送结果（Pages 构建由 GitHub 侧完成）。
+    if not args.no_pages:
+        pages = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'publish-pages.py')
+        try:
+            r = subprocess.run(
+                [sys.executable, pages], cwd=ROOT, text=True,
+                capture_output=True, timeout=360,
+            )
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    if '写入 OK' in line or '删除旧文件' in line:
+                        print('[push-branch][pages]', line.strip())
+                print('[push-branch][pages] 固定页面已更新: '
+                      f'https://{owner}.github.io/{repo}/')
+            else:
+                print('[push-branch][pages] 页面更新失败（不阻断推送）:',
+                      (r.stderr or r.stdout).strip()[:300])
+        except Exception as e:
+            print('[push-branch][pages] 页面更新异常（不阻断推送）:', str(e)[:200])
+
+    # 发布后线上生效核验（可选）。ship.sh 末尾已有 check-online.py 兜底，
+    # 但「推分支 → 自动 publish-pages」这条新链路之前没有；Pages 构建 abandoned
+    # 或 CDN 缓存 10 分钟时，preview 已是新版而线上仍是旧包（risk-review §v9s.55）。
+    # 默认不跑、不拖慢推送；--pages-wait N 显式开启，失败只提示不改退出码。
+    if not args.no_pages and args.pages_wait > 0:
+        online = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'check-online.py')
+        try:
+            v = subprocess.run(
+                [sys.executable, online, '--wait', str(args.pages_wait), '--repo', args.repo],
+                cwd=ROOT, text=True, capture_output=True,
+                timeout=args.pages_wait + 180,
+            )
+            tail = (v.stdout or v.stderr).strip().splitlines()
+            print('[push-branch][pages] 线上核验:',
+                  (tail[-1] if tail else '（无输出）')[:200])
+        except Exception as e:
+            print('[push-branch][pages] 线上核验异常（不阻断推送）:', str(e)[:150])
+
     print('\n[push-branch] 完成。请执行：')
     print(f'  git fetch origin {branch}')
     print(f'  git diff --stat HEAD origin/{branch}     # 应为空（树一致）')
     print(f'  git reset --hard origin/{branch}         # 本地与远端对齐')
+    if not args.no_pages:
+        print('  python3 tools/check-online.py --wait 180   # 确认线上产物 == 本地 dist')
     print(f'  https://github.com/{args.repo}/tree/{branch}')
     return 0
 

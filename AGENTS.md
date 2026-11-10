@@ -23,7 +23,9 @@
    - 对外只贴固定链接 `https://<user>.github.io/<repo>/`（根路径，Pages 已开启，branch `preview`）；
    - `npm run publish:preview` 走沙盒隧道（`*.app.workbuddy.host`），**只用于自己临时调试**，
      按 runtimeId 定址、沙盒重建即失效，不要贴给用户；
-   - feature agent 不发布，由合并闸门在 main 上跑一次 `npm run ship`；
+   - **每次推分支都更新页面**（2026-11-10 用户约定）：`push-branch.py` 推送成功后自动跑
+     `publish-pages.py` 把本地 `dist/` 推到 `preview` 分支，失败只告警、不阻断推送，
+     `--no-pages` 可显式关闭；合并闸门仍跑一次 `npm run ship` 对齐 main 与产物；
 
 > 为什么：多套场景让「看到的」≠「主线接入的」；手写绝对坐标 + 共改一个数组是多 agent
 > 冲突的根源；只 commit 不同步线上，别人和用户没法快速验证。

@@ -130,7 +130,7 @@
 | `config/plots/*.json` | 一地块一文件（不写世界坐标；`span` 声明占几格，自带地形 / 摆设 / 假人 / 草块） |
 | `src/app.ts` | 组装层 + `window.__harness`（所有 `*Debug()` 验收接口在这里暴露） |
 | `tests/` | vitest；`tests/helpers.ts` 的 `FIXTURE_CORE_PATCH` 是**冻结夹具**，另用同一套拼合器注入线上配置 |
-| `tools/smoke.py` | 线上自检（53 项）；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样；`tools/sever-shot.py` 断肢 / 倒地验收截图（7 张，走 `__harness.hitTest`） |
+| `tools/smoke.py` | 线上自检（70 项）；`tools/clip-lab/` 动作验证台；`tools/sweep_sample.py` 扫掠采样；`tools/sever-shot.py` 断肢 / 倒地验收截图（7 张，走 `__harness.hitTest`） |
 | `tools/publish-preview.mjs` | **每次任务完成的发布闸门**：build → 发布 `dist/` → 校验资源 → 打印公网链接 |
 
 ### 3.4 调试面板分组
@@ -152,10 +152,10 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（109 文件 / 1101 例） | 提交前 |
+| `npm test` | vitest 全量（118 文件 / 1210 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
-| `npm run smoke` | 起 `dist/`，跑 53 项画面层 + 契约自检 | 发布前 |
+| `npm run smoke` | 起 `dist/`，跑 70 项画面层 + 契约自检 | 发布前 |
 | `npm run verify` | build → test → portable → docs → smoke 全链 | **发布前必跑** |
 | `npm run publish:preview` | 发布 `dist/` 到唯一线上地址 + 校验资源 + **打印公网链接** | **每次任务完成必跑**，把链接贴进回复 |
 | `python3 tools/check-online.py --wait 180` | 线上产物是否就是本地 `dist/`（JS 文件名 / 大小 / 徽标版本） | **发布后**核验；`ship.sh` 末尾已自动跑一次 |

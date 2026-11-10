@@ -168,10 +168,12 @@ def main() -> int:
                         hit_prog = r["prog"]
                         break
                     prev_hits = r["hits"]
-                if hit_prog is None:
-                    check("攻击能命中（近身一剑）", False, f"hitCount 未增加（{before}）")
-                else:
-                    check("攻击能命中（近身一剑）", True)
+                # 自检项数与 check( 调用数严格一一对应（scripts/check-facts.mjs 靠它
+                # 采集文档里的「smoke N 项」真值）：命中成功 / 失败只改这一项的
+                # ok / detail，不再在 if/else 两个分支里各写一次同名 check。
+                check("攻击能命中（近身一剑）", hit_prog is not None,
+                      f"hitCount 未增加（{before}）" if hit_prog is None else "")
+                if hit_prog is not None:
                     # 旧行为 = 0.217（active 第一帧）；扫掠门后应到 0.3+
                     check("卡肉发生在刃身挥出之后（progress ≥ 0.30）", hit_prog >= 0.30,
                           f"命中时 progress={hit_prog:.3f}")
@@ -894,6 +896,415 @@ def main() -> int:
                 check("真机挥刀能打断（3D 刀刃相交 → Intents → Core → 斜切渲染）",
                       live_ok and live["broken"] > 0,
                       f"broken={live['broken']} cuts={live['cuts']}")
+                # 按钮状态层端到端：单测只覆盖 derive，这里验收 app.ts 的每帧接线
+                # 真的把派生状态写进了真实按钮 DOM（data-phase / data-badge / --bs-deg）。
+                bs = page.evaluate("""() => {
+                  const h = window.__harness, s = h.world;
+                  s.combat.charging = true;
+                  s.combat.charge = 0.6;
+                  const list = h.buttonStatus();
+                  const el = document.getElementById('btn-attack');
+                  return {
+                    derived: list.find(x => x.id === 'attack'),
+                    phase: el.dataset.phase,
+                    badge: el.dataset.badge,
+                    deg: el.style.getPropertyValue('--bs-deg'),
+                    aria: el.getAttribute('aria-label'),
+                  };
+                }""")
+                check("按钮状态接到真实 DOM（蓄力 60% 角标 + 216.0deg 进度环）",
+                      bs["derived"]["phase"] == "charging"
+                      and bs["phase"] == "charging"
+                      and bs["badge"] == "60%"
+                      and bs["deg"] == "216.0deg"
+                      and "蓄力" in bs["aria"],
+                      str(bs))
+                bs2 = page.evaluate("""() => {
+                  const h = window.__harness, s = h.world;
+                  s.combat.charging = false; s.combat.charge = 0;
+                  s.combat.phase = 'idle'; s.combat.comboIndex = 0;
+                  s.combat.attackProgress = 0;
+                  s.abilities.channeling = false; s.abilities.cooldown = 0;
+                  s.abilities.rings.length = 0;
+                  s.dash.phase = 'idle'; s.dash.cooldown = 0;
+                  s.playerLink.cooldown = 0;
+                  s.character.grounded = false;
+                  h.buttonStatus();
+                  const j = document.getElementById('btn-jump');
+                  const a = document.getElementById('btn-attack');
+                  const out = { jumpPhase: j.dataset.phase, jumpBadge: j.dataset.badge,
+                                atkPhase: a.dataset.phase, atkBadge: a.dataset.badge };
+                  s.character.grounded = true;
+                  h.buttonStatus();
+                  return out;
+                }""")
+                check("按钮状态相位切换（空中锁定 / 复位回 ready）",
+                      bs2["jumpPhase"] == "locked" and bs2["jumpBadge"] == "空中"
+                      and bs2["atkPhase"] == "ready" and bs2["atkBadge"] == "",
+                      str(bs2))
+
+                # 竖屏布局：临时切成手机竖屏，量操作簇中心是否落在约 4/5 高度、贴右侧。
+                # 之后立刻恢复 960×600，不影响后续读数 / 采样。
+                page.set_viewport_size({"width": 420, "height": 840})
+                page.wait_for_timeout(200)
+                lay = page.evaluate("""() => {
+                  const p = document.getElementById('pad-right');
+                  const r = p.getBoundingClientRect();
+                  const perf = document.getElementById('perf-meter').getBoundingClientRect();
+                  const row = document.getElementById('panel-row').getBoundingClientRect();
+                  return {
+                    center: r.top + r.height / 2, rightGap: innerWidth - r.right,
+                    vh: innerHeight,
+                    overlap: !(perf.left >= row.right || perf.right <= row.left
+                               || perf.top >= row.bottom || perf.bottom <= row.top),
+                    perfTop: perf.top, rowBottom: row.bottom,
+                  };
+                }""")
+                check("竖屏操作簇落在右下约 4/5 高度（中心 ≈ 0.8×视口高）",
+                      abs(lay["center"] - 0.8 * lay["vh"]) < lay["vh"] * 0.08
+                      and 0 <= lay["rightGap"] < 40,
+                      str(lay))
+                check("竖屏常驻性能条不与顶部胶囊行重叠",
+                      not lay["overlap"], str(lay))
+                page.set_viewport_size({"width": 960, "height": 600})
+                page.wait_for_timeout(200)
+
+                # ---- v9s.x ① 震屏：低频 trauma² 模型 + 按冲击类型分档 ----
+                shk = page.evaluate("""() => {
+                  const d = window.__harness.shakeDebug(), P = d.presets;
+                  return {
+                    kind: d.kind, freq: d.preset.freq, power: d.preset.power,
+                    decay: d.preset.decay,
+                    lightFreq: P.light.freq, slamFreq: P.slam.freq,
+                    lightDecay: P.light.decay, slamDecay: P.slam.decay,
+                    lightAmp: P.light.amplitude, heavyAmp: P.heavy.amplitude,
+                  };
+                }""")
+                check("震屏改为低频 trauma² 模型（不再 ~11~19Hz 高频碎抖）",
+                      shk["power"] == 2 and 1 <= shk["freq"] <= 8 and shk["decay"] > 0,
+                      str(shk))
+                check("震屏按冲击类型分档（轻击短促 / 重击大幅长余震）",
+                      shk["slamFreq"] < shk["lightFreq"]
+                      and shk["slamDecay"] < shk["lightDecay"]
+                      and shk["heavyAmp"] > shk["lightAmp"],
+                      str(shk))
+
+                # ---- v9s.x ② 常驻性能条：读数 + 人为制造慢帧能否判掉帧 ----
+                perf0 = page.evaluate("""() => {
+                  const el = document.getElementById('perf-meter');
+                  const d = window.__harness.perfDebug();
+                  return {
+                    exists: !!el, spark: !!el && !!el.querySelector('canvas.perf-spark'),
+                    text: el ? el.textContent : '',
+                    fps: d.fps, level: d.level, hist: d.history.length, spikes: d.spikes,
+                  };
+                }""")
+                check("帧率信息常驻可读（FPS / 帧时 / 慢帧 / sparkline）",
+                      perf0["exists"] and perf0["spark"]
+                      and "fps" in perf0["text"] and "慢帧" in perf0["text"]
+                      and perf0["fps"] > 0 and perf0["hist"] > 0
+                      and perf0["level"] in ("ok", "warn", "bad"),
+                      str(perf0))
+                # 阻塞主线程 70ms → 下一帧必然是慢帧，验证「能看到是否掉帧」
+                page.evaluate("""() => {
+                  const t0 = performance.now();
+                  while (performance.now() - t0 < 70) {}
+                }""")
+                page.wait_for_timeout(350)
+                perf1 = page.evaluate("""() => {
+                  const d = window.__harness.perfDebug();
+                  const el = document.getElementById('perf-meter');
+                  return { slow: d.slowFrames, spikes: d.spikes, max: d.maxMs,
+                           level: d.level, worst: d.worstMs, dataLevel: el.dataset.level };
+                }""")
+                check("人为制造慢帧时性能条能判定掉帧（尖峰 / 慢帧 / 预警）",
+                      perf1["spikes"] > perf0["spikes"] or perf1["slow"] >= 1,
+                      str(perf1))
+
+                # ---- v9s.x ③ 技能指示器：数据驱动自动适配 ----
+                ind = page.evaluate("""() => {
+                  const h = window.__harness, w = h.world;
+                  // 前面真机挥刀留下的战斗 / 引导状态先归零，保证 idle 判定干净
+                  w.combat.phase = 'idle';
+                  w.combat.charging = false;
+                  w.combat.comboIndex = 0;
+                  w.abilities.channeling = false;
+                  w.abilities.rings.length = 0;
+                  w.playerLink.phase = 'idle';
+                  const idle = h.skillIndicatorDescribe();
+                  const oldWeapon = w.combat.weapon;
+                  w.combat.weapon = 'bow';
+                  w.combat.charging = true;
+                  w.combat.charge = 0.7;
+                  w.character.facing = 0.5;
+                  const s = h.skillIndicatorDescribe().find(x => x.id === 'bow-charge');
+                  const reach0 = w.config.hits.reach.bow;
+                  // 热改配置里的射程 → 描述应立刻跟着变（不写死数值）
+                  w.config.hits.reach.bow = reach0 + 3;
+                  const s2 = h.skillIndicatorDescribe().find(x => x.id === 'bow-charge');
+                  const s3 = h.skillIndicatorDescribe(1, 0).find(x => x.id === 'bow-charge');
+                  w.config.hits.reach.bow = reach0;
+                  w.combat.charging = false;
+                  // 法杖引导：形状 / 半径从技能 params 自动推断
+                  w.combat.weapon = 'staff';
+                  w.abilities.channeling = true;
+                  w.abilities.channelYaw = -0.6;
+                  const v = h.skillIndicatorDescribe().find(x => x.id === 'skill:arcane');
+                  const homing = w.config.abilities.arcane.homingRange;
+                  w.abilities.channeling = false;
+                  w.combat.weapon = oldWeapon;
+                  return {
+                    idle: idle.length,
+                    shape: s && s.shape, radius: s && s.radius, yaw: s && s.yaw, reach0,
+                    radius2: s2 && s2.radius, yaw3: s3 && s3.yaw,
+                    volleyShape: v && v.shape, volleyRadius: v && v.radius,
+                    volleyYaw: v && v.yaw, homing,
+                  };
+                }""")
+                check("技能指示器：蓄力线 / 引导扇形的范围与朝向全部来自数据",
+                      ind["idle"] == 0
+                      and ind["shape"] == "line"
+                      and abs(ind["radius"] - ind["reach0"]) < 1e-6
+                      and abs(ind["yaw"] - 0.5) < 1e-6
+                      and abs(ind["radius2"] - (ind["reach0"] + 3)) < 1e-6
+                      and abs(ind["yaw3"] - math.pi / 2) < 1e-6
+                      and ind["volleyShape"] == "sector"
+                      and abs(ind["volleyRadius"] - ind["homing"]) < 1e-6
+                      and abs(ind["volleyYaw"] + 0.6) < 1e-6,
+                      str(ind))
+
+                # 渲染层接线：塞一个持久电环，等一帧后 debug 应出现对应范围
+                page.evaluate("""() => {
+                  window.__harness.world.abilities.rings.push({
+                    id: 991, x: 2.5, z: -1.5, radius: 2.4,
+                    life: 3.0, duration: 3.0, pulseTimer: 1.0,
+                  });
+                }""")
+                page.wait_for_timeout(200)
+                rind = page.evaluate("""() => {
+                  const list = window.__harness.skillIndicatorDebug();
+                  const s = list.find(x => x.id === 'ring:991');
+                  window.__harness.world.abilities.rings.length = 0;
+                  return { count: list.length, ids: list.map(x => x.id),
+                           shape: s && s.shape, radius: s && s.radius,
+                           x: s && s.x, z: s && s.z };
+                }""")
+                check("技能指示器已接进渲染帧（电环范围画在放置点）",
+                      rind["shape"] == "circle"
+                      and abs(rind["radius"] - 2.4) < 1e-6
+                      and abs(rind["x"] - 2.5) < 1e-6
+                      and abs(rind["z"] + 1.5) < 1e-6,
+                      str(rind))
+
+                # ---- v9s.x ④ 界面划分：工位分功能组 / 状态分语义区 / 胶囊分两组 ----
+                ui = page.evaluate("""() => {
+                  const panel = document.getElementById('lab-panel');
+                  const groups = [...panel.querySelectorAll('.lab-group')].map(g => ({
+                    id: g.dataset.group,
+                    count: g.querySelectorAll('[data-station]').length,
+                    label: (g.querySelector('.lab-group-label') || {}).textContent || '',
+                  }));
+                  const rows = panel.querySelectorAll('[data-station]').length;
+                  return {
+                    groups, rows, sum: groups.reduce((n, g) => n + g.count, 0),
+                    // 工位面板的行数应与实际地块数相等：地块增删时不再写死一个数字
+                    // （v9s.62 合并时 zz-cactus-test 并入 x-destructibles，10→9，
+                    //  旧断言 rows>=10 从此恒假）。与 tests/station-groups.test.ts 的
+                    //  EXPECTED 名单表同源：名单变，这里跟着变。
+                    plots: window.__harness.plotDebug().count,
+                    view: document.querySelectorAll('#panel-row [data-pill-group="view"]').length,
+                    sw: document.querySelectorAll('#panel-row [data-pill-group="switch"]').length,
+                    sep: !!document.querySelector('#panel-row .pill-sep'),
+                  };
+                }""")
+                check("工位面板按功能分组，全部工位都在组内、一个没丢",
+                      len(ui["groups"]) >= 3 and ui["sum"] == ui["rows"]
+                      and ui["rows"] == ui["plots"]
+                      and all(g["label"] for g in ui["groups"]),
+                      str(ui))
+                check("顶部胶囊按「面板 / 开关」划分（4 查看 + 2 开关 + 分隔线）",
+                      ui["view"] == 4 and ui["sw"] == 2 and ui["sep"], str(ui))
+
+                # 展开「状态」面板，验收分区渲染 + diff 缓存（标题帧帧不重写）
+                page.evaluate("""() => {
+                  const t = document.getElementById('hud-toggle');
+                  if (t.getAttribute('aria-expanded') !== 'true') {
+                    t.dispatchEvent(new PointerEvent('pointerdown',
+                      { bubbles: true, cancelable: true }));
+                  }
+                }""")
+                page.wait_for_timeout(260)
+                hud = page.evaluate("""() => {
+                  const el = document.getElementById('hud');
+                  const vis = (list) => list.filter(x => x.style.display !== 'none');
+                  const heads = vis([...el.querySelectorAll('.hud-head')]);
+                  const lines = vis([...el.querySelectorAll('.hud-line')]);
+                  window.__hudHeads = heads;
+                  window.__hudHeadWrites = 0;
+                  window.__hudObs = new MutationObserver(recs => {
+                    for (const r of recs) {
+                      const pn = r.target && r.target.parentElement;
+                      if (pn && pn.classList.contains('hud-head')) window.__hudHeadWrites++;
+                    }
+                  });
+                  window.__hudObs.observe(el, { subtree: true, childList: true,
+                                                characterData: true });
+                  return {
+                    titles: heads.map(x => x.textContent),
+                    lineCount: lines.length,
+                    compact: el.classList.contains('is-compact'),
+                    firstLine: lines.length ? lines[0].textContent : '',
+                  };
+                }""")
+                check("状态读数分成 6 个语义区（横屏 15 行读数不丢）",
+                      len(hud["titles"]) == 6
+                      and hud["titles"][0] == "运行 / 角色"
+                      and hud["titles"][-1] == "调试 / 事件"
+                      and hud["lineCount"] == 15
+                      and not hud["compact"]
+                      and "tick" in hud["firstLine"],
+                      str(hud))
+                page.wait_for_timeout(420)
+                stab = page.evaluate("""() => {
+                  const heads = [...document.querySelectorAll('#hud .hud-head')]
+                    .filter(x => x.style.display !== 'none');
+                  window.__hudObs.disconnect();
+                  return {
+                    same: heads.length === window.__hudHeads.length
+                          && heads.every((h, i) => h === window.__hudHeads[i]),
+                    headWrites: window.__hudHeadWrites,
+                    writes: window.__harness.hudDebug().writes,
+                  };
+                }""")
+                check("状态分区用 diff 缓存：标题不重写、节点不重建（不拖帧率）",
+                      stab["same"] and stab["headWrites"] == 0, str(stab))
+                # 收起状态面板，恢复默认折叠态，不影响后续段
+                page.evaluate("""() => {
+                  const t = document.getElementById('hud-toggle');
+                  if (t.getAttribute('aria-expanded') === 'true') {
+                    t.dispatchEvent(new PointerEvent('pointerdown',
+                      { bubbles: true, cancelable: true }));
+                  }
+                }""")
+
+                # ---- v9s.x ⑤ 指示器细化：弓特判 / 内圈裁剪 / 扇角数据化 ----
+                ind2 = page.evaluate("""() => {
+                  const h = window.__harness, w = h.world;
+                  const oldWeapon = w.combat.weapon;
+                  w.combat.phase = 'idle'; w.combat.charging = false;
+                  w.abilities.channeling = false; w.abilities.rings.length = 0;
+                  w.playerLink.phase = 'idle';
+
+                  // ① 弓释放：charging=false + phase=active，不该有任何近战扇形
+                  w.combat.weapon = 'bow'; w.combat.charging = false;
+                  w.combat.phase = 'active'; w.combat.attackProgress = 0.5;
+                  const bowRel = h.skillIndicatorDescribe();
+                  const bowSectors = bowRel.filter(x => x.shape === 'sector').length;
+
+                  // ② 近战：范围与 Core 判定同源（半角翻倍 / 含目标半径 / 击地圆）
+                  const oldCombo = w.combat.comboIndex;
+                  w.combat.weapon = 'greatsword'; w.combat.phase = 'active';
+                  w.combat.comboIndex = 1;   // 固定第一段，扫掠覆盖整个前半球
+                  const melee = h.skillIndicatorDescribe().find(x => x.id === 'melee');
+                  const slam = h.skillIndicatorDescribe().find(x => x.id === 'slam');
+                  const cr = w.config.characterRadius, arc0 = w.config.hits.arcDeg;
+                  const expectR = w.config.hits.reach.greatsword + w.config.dummies.radius;
+                  const expectSlamR = w.config.combat.weapons.greatsword.groundSlam.radius
+                                    + w.config.dummies.radius;
+                  w.config.characterRadius = cr + 0.15;
+                  const melee2 = h.skillIndicatorDescribe().find(x => x.id === 'melee');
+                  w.config.characterRadius = cr;
+                  w.combat.comboIndex = oldCombo;
+
+                  // ③ 齐射扇角严格来自 params（无 +24° 魔法余量）
+                  w.combat.weapon = 'staff'; w.combat.phase = 'idle';
+                  w.abilities.channeling = true;
+                  const volley = h.skillIndicatorDescribe().find(x => x.id === 'skill:arcane');
+                  const rt = w.skills.find(x => x.cfg.kind === 'channelVolley');
+                  const expectArc = (rt.params.perWave - 1) * rt.params.spreadDeg;
+                  w.abilities.channeling = false;
+                  w.combat.weapon = oldWeapon;
+                  return {
+                    bowSectors, bowLen: bowRel.length,
+                    meleeInner: melee && melee.innerRadius, cr,
+                    meleeInner2: melee2 && melee2.innerRadius,
+                    meleeArc: melee && melee.arcDeg, arc0,
+                    meleeRadius: melee && melee.radius, expectR,
+                    slamRadius: slam && slam.radius, expectSlamR,
+                    volleyArc: volley && volley.arcDeg, expectArc,
+                  };
+                }""")
+                check("指示器范围与 Core 判定同源：弓无扇形 / 半角翻倍 / 含目标半径 / 击地圆 / 内圈裁剪",
+                      ind2["bowSectors"] == 0
+                      and abs(ind2["meleeInner"] - (ind2["cr"] + 0.02)) < 1e-6
+                      and abs(ind2["meleeInner2"] - (ind2["cr"] + 0.15 + 0.02)) < 1e-6
+                      and abs(ind2["meleeArc"] - 2 * ind2["arc0"]) < 1e-6
+                      and abs(ind2["meleeRadius"] - ind2["expectR"]) < 1e-6
+                      and abs(ind2["slamRadius"] - ind2["expectSlamR"]) < 1e-6
+                      and abs(ind2["volleyArc"] - ind2["expectArc"]) < 1e-6,
+                      str(ind2))
+
+                # ---- v9s.x ⑤ 显示 / 退出过渡：真实渲染帧采样 alpha 序列 ----
+                fade = page.evaluate("""async () => {
+                  const h = window.__harness, w = h.world;
+                  h.debug.paused = true;            // 冻住 Core，手动状态不被 step 清掉
+                  w.combat.weapon = 'staff';
+                  w.combat.phase = 'idle';
+                  w.abilities.channeling = false;
+                  w.abilities.rings.length = 0;
+                  await new Promise(r => setTimeout(r, 400));   // 等残留指示器淡出
+                  const sample = () => {
+                    const f = h.skillIndicatorFade().find(x => x.id === 'skill:arcane');
+                    return f ? f.alpha : 0;
+                  };
+                  const collect = async (n) => {
+                    const seq = [];
+                    await new Promise(res => {
+                      let i = 0;
+                      const tick = () => {
+                        seq.push(sample());
+                        if (++i < n) requestAnimationFrame(tick); else res();
+                      };
+                      requestAnimationFrame(tick);
+                    });
+                    return seq;
+                  };
+                  // 出现 → 淡入
+                  w.abilities.channeling = true; w.abilities.channelYaw = 0.3;
+                  const rise = await collect(16);
+                  // 退出 → 淡出
+                  w.abilities.channeling = false;
+                  const fall = await collect(20);
+                  const live = h.skillIndicatorDebug().some(x => x.id === 'skill:arcane')
+                    || h.skillIndicatorFade().some(x => x.id === 'skill:arcane');
+                  h.debug.paused = false;
+                  return { rise, fall, live };
+                }""")
+                midRise = [a for a in fade["rise"] if 0 < a < 0.999]
+                midFall = [a for a in fade["fall"] if 0 < a < 0.999]
+                check("指示器显示/退出有淡入淡出过渡（不是瞬间跳变）",
+                      len(midRise) >= 1 and max(fade["rise"]) >= 0.5
+                      and len(midFall) >= 1
+                      and fade["fall"][0] > fade["fall"][-1]
+                      and fade["fall"][-1] < 0.5,
+                      str({"rise": fade["rise"][:6], "fall": fade["fall"][:6],
+                           "midRise": len(midRise), "midFall": len(midFall)}))
+                # 用 rAF 轮询而不是固定等待：软件渲染帧率不稳，固定 1s 可能不够，
+                # 固定时长会让「回收」断言偶发 flaky（verify 里出现过一次 69/70）。
+                gone = page.evaluate("""async () => {
+                  const nearlyGone = () => {
+                    const f = window.__harness.skillIndicatorFade()
+                      .find(x => x.id === 'skill:arcane');
+                    return !f || f.alpha < 0.02;
+                  };
+                  for (let i = 0; i < 60; i++) {
+                    if (nearlyGone()) return true;
+                    await new Promise(r => requestAnimationFrame(r));
+                  }
+                  return nearlyGone();
+                }""")
+                check("淡出结束后回收指示器几何（不残留、不无限累积）", gone, str(gone))
+
                 check("v9s.x 全段无新增页面异常", not errors, str(errors[:2]))
 
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",

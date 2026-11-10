@@ -1,0 +1,60 @@
+name: verify
+
+# 为什么补这个 workflow（2026-11-10）
+# ---------------------------------------------------------------------------
+# 仓库 167 次提交 / 1205 例单测 / 70 项浏览器自检，此前**全部**靠沙盒里人工跑
+# `npm run verify`：谁忘了跑、谁在落后 main 的分支上跑，没有任何强制闸门。
+# 多 agent 协作下尤其危险（合并前有没有在合并结果上验证，全凭自觉）。
+# 这里把「不依赖浏览器」的四层验收固化成 push / PR 的硬检查。
+#
+# 明确**不跑** `npm run smoke`：tools/smoke.py 需要 headful Chromium + WebGL
+# （纯 headless 拿不到上下文，见 docs/systems/known-limits.md），CI runner 上要
+# 装 playwright 浏览器 + xvfb，成本高且容易假红。画面层验收仍由本地
+# `npm run smoke` 负责，发布前必跑 —— 不要因为这里绿了就跳过它。
+#
+# 也明确**不校验**「dist/ 是否与源码同步」：vite.config.ts 注入 __BUILD_TIME__，
+# 每次 build 的产物 hash 都会变，`git diff --exit-code -- dist/` 永远失败。
+# 这是 dist/ 入库的固有代价（见 docs/risk-review.md「dist/ 入库」）。
+# 想做到可校验，得先把构建时间移出产物，或把 Pages 改成 Actions 部署并忽略 dist。
+
+on:
+  push:
+    # preview / gh-pages 只存构建产物、没有 package.json，触发只会假红。
+    branches-ignore: [preview, gh-pages]
+  pull_request:
+    branches-ignore: [preview, gh-pages]
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # tsc --noEmit + vite build：类型契约 + 单入口产物
+      - name: build
+        run: npm run build
+
+      # vitest 全量（含 determinism 黄金快照）
+      - name: unit tests
+        run: npm test
+
+      # Core 在纯 Node 跑 600 步 + 可移植边界守卫
+      - name: portable boundary
+        run: npm run verify:portable
+
+      # 文档结构守卫（行数 / 链接 / 工具路径）+ 事实守卫（用例数 / smoke 项数 /
+      # 版本号 / 文档份数）—— 以前数字漂移四份文档给出四个值照样 PASS，现在会在这拦下。
+      - name: docs + facts
+        run: npm run docs:check
