@@ -178,6 +178,12 @@ export type SceneView = {
   balanceDebug(): import('./balance').BalanceResult | null;
   /** v9s.33：脊柱分段读数（腰 / 胸 / 颈） */
   spineDebug(): { enabled: boolean; waistYaw: number; chestYaw: number; totalYaw: number; neckPitch: number } | null;
+  /** v9s.64：基础体态读数；没有 posture 的体型返回 null */
+  postureDebug(): {
+    enabled: boolean; pitch: number; waist: number;
+    hipY: number; headY: number; headZ: number; footY: number;
+    reachL: number; reachR: number; headLowY: number;
+  } | null;
   gaitDebug(): {
     stopT: number; hipYaw: number; chestYaw: number; speed: number; gaitSpeed: number;
     stopStep: number; stopShift: number; stopDip: number;
@@ -1383,6 +1389,10 @@ export function createSceneView(
     },
     spineDebug() {
       return hero.spineDebug?.() ?? null;
+    },
+    /** v9s.64：基础体态读数（头 / 髋 / 脚在 root 局部坐标里的高度与腿伸展比）。 */
+    postureDebug() {
+      return hero.postureDebug?.() ?? null;
     },
     spiderDebug() {
       return hero.debug?.() ?? null;

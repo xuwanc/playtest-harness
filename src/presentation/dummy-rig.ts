@@ -16,7 +16,7 @@ import type {
 } from '../core';
 import {
   buildMurlocBelly, buildMurlocDorsalFin, buildMurlocFoot, buildMurlocHead,
-  buildMurlocShoulderFin, buildMurlocTail,
+  buildMurlocShoulderFin, buildMurlocTail, MURLOC_POSTURE,
 } from './murloc-parts';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
@@ -107,6 +107,12 @@ export function createDummyRig(
   // v9s.63：鱼人不吃 tint（每个假人一种专属色），四条鱼人统一是青绿色 ——
   // 「鱼人是一群同种生物」，颜色区分交给别的手段。
   const murloc = variant === 'murloc';
+  // v9s.64：基础体态（与主角同一个 `CharacterPosture`，语义完全一致）。
+  // 假人没有脊柱拆分，所以 waist 直接并进 pitch —— 单块躯干上两者本来就不可分。
+  const posture = v.style?.posture ?? (murloc ? MURLOC_POSTURE : undefined);
+  const posturePitch = (posture?.pitch ?? 0) + (posture?.waist ?? 0);
+  const headBaseY = v.bodyHeight;
+
   const mc: ColorConfig = murloc
     ? { ...colors, body: '#4f9c78', head: '#5fb692', limb: '#3d7f61', shoe: '#2b5d49' }
     : colors;
@@ -613,6 +619,15 @@ export function createDummyRig(
         lower.position.x -= stopBodyX;
         lower.position.z -= stopBodyZ;
       }
+      // v9s.64 基础体态 · 骨盆升降 / 后坐（必须在 captureIKBase 之后：
+      //   锚点要取「还没被体态推走」的脚位，IK 才会把抬 / 沉反解成屈膝）。
+      if (posture && ((posture.pelvisLift ?? 0) !== 0 || (posture.pelvisDrop ?? 0) !== 0
+        || (posture.pelvisBack ?? 0) !== 0)) {
+        const lift = (posture.pelvisLift ?? 0) - (posture.pelvisDrop ?? 0);
+        pelvis.position.y += lift;
+        pelvis.position.z -= posture.pelvisBack ?? 0;   // 正 = 后坐（-Z 是屁股方向）
+        lower.position.y -= lift * (1 - ikWStop);
+      }
       if (leanCfg) {
         const dt = Math.max(1 / 240, Math.min(frameDt, 0.1));
         const fx = Math.sin(s.bodyYaw);
@@ -670,6 +685,17 @@ export function createDummyRig(
       legR.root.rotation.x -= pose.hip;
       armL.root.rotation.x += pose.arm;
       armR.root.rotation.x += pose.arm * 0.8;
+
+      // v9s.64 基础体态 · 躯干与头。放在受击层之后、挥砍弧之前：
+      //   ・受击是「叠在体态之上」的瞬时反应（老人被打也是弓着背挨），所以后写会覆盖前值 ——
+      //     这里用 += 追加，两者自然共存；
+      //   ・挥砍弧读的是手臂绝对角，体态写在前才不会让它少算一个基准俯仰。
+      if (posture) {
+        upper.rotation.x += posturePitch;
+        headPivot.rotation.x -= posturePitch * (posture.headLift ?? 0);
+        headPivot.position.z = posture.headReach ?? 0;
+        headPivot.position.y = headBaseY - (posture.neckDrop ?? 0);
+      }
 
       // 受击僵直时压过挥砍姿态：后仰 + 红闪优先，攻击弧隐藏
       if (s.attackPhase !== 'idle' && pose.intensity === 0) {

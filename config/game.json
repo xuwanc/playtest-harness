@@ -1026,6 +1026,30 @@
           "shoe": "#2a2f38"
         }
       },
+      "sentinel": {
+        "name": "哨兵机",
+        "height": 1.44,
+        "radius": 0.38,
+        "moveSpeed": 3.1,
+        "voxel": {
+          "headSize": 0.40,
+          "bodyWidth": 0.52,
+          "bodyHeight": 0.42,
+          "limbThickness": 0.14,
+          "legLength": 0.62,
+          "armLength": 0.56,
+          "style": {
+            "sentinel": true,
+            "posture": { "pitch": 0.14, "headLift": 0.6 }
+          }
+        },
+        "colors": {
+          "body": "#a3acb4",
+          "head": "#b6bfc6",
+          "limb": "#6a737c",
+          "shoe": "#454e56"
+        }
+      },
       "murloc": {
         "name": "鱼人",
         "height": 1.16,
@@ -1039,7 +1063,6 @@
           "legLength": 0.36,
           "armLength": 0.52,
           "style": {
-            "hunch": 0.4,
             "murloc": true
           }
         },

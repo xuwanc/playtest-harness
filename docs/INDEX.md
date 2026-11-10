@@ -42,6 +42,8 @@
 | 打中只有卡肉 / 没有血 / 想要飙血 | `presentation/blood-fx.ts`、`core/health.ts` 的 `pushHitMark` | `createBloodFx`、`HitMark`、`HIT_MARK_CAP`、`FX_ORDER.bloodDrop/Stain/Mist` | [systems/blood.md](systems/blood.md) | `tests/v9s56-damage-blood.test.ts`、`python3 tools/blood-shot.py` |
 | 陪练打不死 / 打死了不消失 / 死了不刷新 | `core/health.ts`、`core/dummies.ts`、`three-scene.ts` 的 `applyDeathPose` | `damageDummy`、`killDummy`、`reviveDummy`、`updateHealth`、`REVIVE_GUARD` | [systems/damage-death.md](systems/damage-death.md) | `tests/v9s56-damage-blood.test.ts`、`__harness.deathDebug(id)` |
 | 血总喷在胸口（打头打腿一个位置） / 能穿过尸体 / 陪练没血条 | `core/hits.ts` 的 `hitU`、`core/separation.ts` 的尸体分支、`presentation/healthbar-layer.ts` | `hits.hitHeight`、`dummies.corpse`、`BodySample`、`healthBarDebug` | [systems/damage-death.md](systems/damage-death.md) §6–8 | `tests/v9s57-death-polish.test.ts`、`python3 tools/death-polish-shot.py` |
+| 想让角色整体驼背 / 屁股高头压低 / 加一个「体态」而不是做新动画 | `core/types.ts` 的 `CharacterPosture`、`voxel-rig.ts` 2.96 / 3.0 段、`dummy-rig.ts` | `style.posture`、`MURLOC_POSTURE`、`postureDebug()`、`POSTURE_MAX_TOTAL` | [systems/posture.md](systems/posture.md) | `tests/v9s64-posture-sentinel.test.ts`、`__harness.view.postureDebug()` |
+| 想要一个机器人 / 单眼角色 | `presentation/sentinel-parts.ts`、`bodyTypes.sentinel` | `buildSentinelHead`、`buildSentinelTorso`、`bodyTypes.sentinel` | [systems/sentinel.md](systems/sentinel.md) | `?hero=sentinel`、`tests/v9s64-posture-sentinel.test.ts` |
 | 想加一个「怪物」角色 / 鱼人怎么做 | `presentation/murloc-parts.ts`、`voxel-rig.ts` / `dummy-rig.ts` 的挂点、`DummySpawn.variant` | `buildMurlocHead`、`buildMurlocDorsalFin`、`DummyVariant`、`bodyTypes.murloc` | [systems/murloc.md](systems/murloc.md) §1–4 | `tests/v9s63-murloc.test.ts`、`?hero=murloc`、`y-murloc` 工位 |
 | 死亡姿势全都一样 / 想按最后一击断手断头 / 倒下像插值 | `core/health.ts` 的 `decideSever`、`three-scene.ts` 的 `applySever` / `applyDeathPose` | `decideSever`、`sever`、`settled`、`SEVER_NODE`、`death.physics` | [systems/damage-death.md](systems/damage-death.md) §9–10 | `tests/v9s60-sever.test.ts`、`python3 tools/sever-shot.py` |
 | 仙人掌砍不到 / 一刀只断一棵 / 从可破坏物里穿过去 / 可破坏物被一个红方块包住 / 工位挤在圆心 / **砍下来的根再砍又掉叉 / 掉下来的叉变大 / 旗杆砍完还有一整根** | `presentation/destructible-layer.ts`、`core/destructibles.ts`、`three-scene.ts` 的白盒段 | `hitSegments`、`DEST_BOX_PREFIX`、`syncDestructibleBoxes`、`meleeGatePrev`、`cactusArmBoxes`、`clipArmBox`、`CACTUS_VIS_RATIO` | [systems/destructibles.md](systems/destructibles.md) §9–12 | `tests/v9s60-cactus-collide.test.ts`、`tests/destructibles.test.ts`、`npm run smoke`「真机挥刀能打断」 |
@@ -213,6 +215,8 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/grass.md`](systems/grass.md) | 体素草块：压开 / 割断 / 实例化渲染 / 风吹麦浪 / 性能结论 |
 | [`systems/grass-growth-pivot.md`](systems/grass-growth-pivot.md) | v9s.46 缓慢连续生长 + 枢轴顶点动画（每节 box 刚体旋转，实现正本） |
 | [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒、**仙人掌分段 / 碰撞盒 / 多判定轴 / 侧臂几何单一真源（实现正本）** |
+| [`systems/posture.md`](systems/posture.md) | 基础体态层：插入点、七个旋钮、三条硬边界（抬胯 / 屈膝 / 前倾预算）、验收读数 |
+| [`systems/sentinel.md`](systems/sentinel.md) | 哨兵机：大块抓型 + 小块点缀、单眼为什么是一条灯带、两处弯路 |
 | [`systems/murloc.md`](systems/murloc.md) | 鱼人造型：换几何不换骨架、四个辨识点、两种出场、单只假人血量（实现正本） |
 | [`systems/webview-perf.md`](systems/webview-perf.md) | 移动端「隔一段时间卡几秒」：桌面排除法、上下文丢失、质量档与自动降档、`?diag=1` 读数 |
 | [`systems/test-scene-policy.md`](systems/test-scene-policy.md) | 单一主测试场景 + 三条规则（规则正本） |

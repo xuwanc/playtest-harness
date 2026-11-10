@@ -57,8 +57,11 @@ import { beardAvoidAt, createBeardState, solveBeard } from './beard';
 import type { BeardState } from './beard';
 import {
   buildMurlocBelly, buildMurlocDorsalFin, buildMurlocFoot, buildMurlocHand, buildMurlocHead,
-  buildMurlocShoulderFin, buildMurlocTail,
+  buildMurlocShoulderFin, buildMurlocTail, MURLOC_POSTURE,
 } from './murloc-parts';
+import {
+  buildSentinelFoot, buildSentinelHand, buildSentinelHead, buildSentinelTorso,
+} from './sentinel-parts';
 
 export type VoxelRig = {
   group: THREE.Group;
@@ -176,6 +179,19 @@ export type VoxelRig = {
   spineDebug(): {
     enabled: boolean; waistYaw: number; chestYaw: number; totalYaw: number;
     totalPitch: number; totalLean: number; neckPitch: number; leak: number;
+  } | null;
+  /**
+   * v9s.64：基础体态读数（root 局部坐标，单位 m）。
+   *
+   * 用来回答「这个姿势还站得住吗」——`reach` 是髋→脚的距离除以腿长，
+   * 两骨 IK 的可达上限就是 1.0；超过 1 说明腿已经被拉直，脚必然离地。
+   * `headY < hipY` 才是真的「头比屁股低」；`headY` 只是低了但 `headZ` 没变大，
+   * 读起来会是「缩脖子」而不是「探头」。
+   */
+  postureDebug(): {
+    enabled: boolean; pitch: number; waist: number;
+    hipY: number; headY: number; headZ: number; footY: number;
+    reachL: number; reachR: number; headLowY: number;
   } | null;
   /**
    * v9s.34：躯干**总角**（腰 + 胸）。
@@ -370,6 +386,26 @@ export function createVoxelRig(
   const HS = H * headScale;            // 视觉头边长（headScale = 1 时数值与 H 相同）
   const beardLen = Math.max(0, style?.beard ?? 0);
   const hunch = Math.max(0, style?.hunch ?? 0);
+  /**
+   * v9s.64 · 基础体态（可选）。与 hunch 同属「静态基准」，但可组合：
+   * pitch（躯干总前倾）/ waist（拆分后再折腰）/ headLift / headReach / neckDrop /
+   * pelvisLift / pelvisDrop / pelvisBack。叠加顺序见 `CharacterPosture` 注释。
+   *
+   * 鱼人不带 `style.posture` —— 它的体态来自 `MURLOC_POSTURE`（造型自带，
+   * 因为和头 / 鳍 / 腿长是配套的），这样码头那三只杂兵也是同样的爬姿。
+   */
+  const posture = style?.posture ?? (style?.murloc ? MURLOC_POSTURE : undefined);
+  const posturePitch = (posture?.pitch ?? 0);
+  /** 腰部额外折角（拆分之后只加在腰段）—— 用来做「屁股高、背塌」的弧线。 */
+  const postureWaist = (posture?.waist ?? 0);
+  /**
+   * 体态前倾的总预算（弧度）。超过它，头就会插进地面、手臂够不到身前的目标 ——
+   * 实测 1.05（60°）时鱼人的吻部离地还有 4cm，再往上一步就穿地。
+   */
+  const POSTURE_MAX_TOTAL = posture?.maxTotal ?? 1.05;
+  /** 本帧真正吃进躯干的体态角（预算夹过之后）；拆分后的腰折也按这个比例走。 */
+  let postureAppliedPitch = 0;
+  let postureAppliedWaist = 0;
   const kneeSink = Math.max(0, style?.kneeSink ?? 0);
   const breathOn = !!style?.breath;
   /**
@@ -380,6 +416,8 @@ export function createVoxelRig(
    * 为 false 时所有分支都不进，几何与逐帧姿态与旧版逐字节一致（既有快照不用改）。
    */
   const murloc = !!style?.murloc;
+  /** v9s.64 · 哨兵机：同样只换几何，骨架 / 动作 / 断肢全部复用。 */
+  const sentinel = !!style?.sentinel;
   const legLen = v.legLength;
   const armLen = v.armLength;
   const t = v.limbThickness;
@@ -437,11 +475,16 @@ export function createVoxelRig(
   // 头部枢轴 = 躯干高度（配置值按标准体型写的 0.4）。瘦高体型躯干只有 0.24，
   // 直接沿用会让头飘在躯干上方 16cm，所以按 bodyHeight 夹一下。
   headPivot.position.y = Math.min(ori.headPivotHeight, bodyH) - chestPivotY;
+  /** 颈根基准高度：posture.neckDrop 从这里往下压（每帧按绝对值写，不累加）。 */
+  const headPivotBaseY = headPivot.position.y;
   torsoRoot.add(headPivot);
 
   if (murloc) {
     // 鱼头：三层颅骨 + 前突吻部 + 侧置凸眼 + 头冠鳍 + 鳃（`murloc-parts` 里全是比例值）
     buildMurlocHead(headPivot, HS, colors);
+  } else if (sentinel) {
+    // 机器头：方颅 + 护檐 + 单只灯眼 + 天线 + 后脑外露导线
+    buildSentinelHead(headPivot, HS, colors);
   } else {
     const head = makeBox(HS, HS, HS, colors.head);
     head.position.y = HS / 2;
@@ -557,6 +600,9 @@ export function createVoxelRig(
     if (murloc) {
       // 蹼足：脚掌前后拉到 0.26m（人形是 t×1.7≈0.18），压在同一踝高上
       buildMurlocFoot(knee, t, legLen, colors);
+    } else if (sentinel) {
+      // 机械脚：扁底板 + 两片前爪（比人脚宽，读作「站不稳但站得住」）
+      buildSentinelFoot(knee, t * 3.4, colors, -legLen / 2);
     } else {
       const shoe = makeBox(t * 1.15, 0.07, t * 1.7, colors.shoe);
       shoe.position.set(0, -legLen / 2 + 0.035, 0.045); // 脚尖朝 +Z
@@ -615,6 +661,9 @@ export function createVoxelRig(
     if (murloc) {
       // 蹼掌：宽掌 + 三指 + 指间薄蹼；挂点与 palm 相同，握持 IK 的靶点不变
       buildMurlocHand(hand, t, colors);
+    } else if (sentinel) {
+      // 夹钳：两片斜板 + 腕块，开口朝体外侧
+      buildSentinelHand(hand, t * 4.2, colors, sx < 0 ? -1 : 1);
     } else {
       const palm = makeBox(t * 1.1, 0.09, t * 1.1, colors.head);
       palm.position.y = 0.045;
@@ -651,6 +700,10 @@ export function createVoxelRig(
   }
 
   // ---- v9s.63 鱼人的「非人类」两件：背鳍 + 短尾 ----
+  if (sentinel) {
+    // 胸甲板 + 警示条 + 背包排气管 + 腰侧液压杆，全部挂在胸段（与背鳍同一套 baseY）
+    buildSentinelTorso(torsoRoot, bodyW, bodyH, torsoD, bodyH - chestPivotY);
+  }
   if (murloc) {
     // 背鳍挂 `torsoRoot`（开脊柱分段时就是 chest）并与肩共用 baseY：
     // 挂 `upper` 的话大幅挥击时背鳍不跟着胸段弯折，会在背上浮起来。
@@ -2793,6 +2846,21 @@ export function createVoxelRig(
         lower.position.y += kneeSink * (1 - clamp(ikW, 0, 1));
       }
 
+      // 1.7) v9s.64 基础体态 · 骨盆升降 / 后坐。
+      //   为什么在惯性层之后、战斗姿态之前：它是一个**静止基准**，不能被攻击姿态的
+      //   混合权重稀释成「打起来就消失」；同时步态已经写完 pelvis，叠加不会互相覆盖。
+      //   为什么抬得动：足 IK 在 4) 才跑，骨盆抬 / 沉都会反解成屈膝，脚仍钉在地面。
+      //   ⚠ 硬边界：两骨 IK 的可达上限 = legLength，而默认站姿已经用满（腿是直的），
+      //   所以 pelvisLift 单独用会让脚离地；必须配 pelvisDrop 先屈膝换行程。
+      if (posture && ((posture.pelvisLift ?? 0) !== 0 || (posture.pelvisDrop ?? 0) !== 0
+        || (posture.pelvisBack ?? 0) !== 0)) {
+        const lift = (posture.pelvisLift ?? 0) - (posture.pelvisDrop ?? 0);
+        pelvis.position.y += lift;
+        pelvis.position.z -= posture.pelvisBack ?? 0;   // 正 = 后坐（-Z 是屁股方向）
+        // IK 关闭时把升降补回下盘，脚不跟着飞（与 crouch / kneeSink 同一处理）
+        lower.position.y -= lift * (1 - clamp(ikW, 0, 1));
+      }
+
       // 2) 战斗姿态覆盖（只在攻击 / 蓄力 / 停顿期间生效）
       //    v9s.29：进出战斗各有一段交叉淡入淡出 —— 先记下「不打这一击时的待机姿态」，
       //    写完战斗姿态后按权重混合，待机 ↔ 起手 / 收招不再单帧换姿势。
@@ -2972,9 +3040,43 @@ export function createVoxelRig(
         headPivot.position.z = hunch * 0.10;
       }
 
+      // 2.96) v9s.64 基础体态 · 躯干俯仰 / 弓腰 / 头。与 hunch 同一个插入点
+      //   （动态层全部写完、splitSpine 之前），所以两者可以叠加而不是互相覆盖。
+      //   pitch 进 splitSpine 摊成腰 + 胸的弧；waist 在拆分之后单独折腰段（见下方 3.0）。
+      if (posture) {
+        // 姿态预算（v9s.64）：动态层已经吃掉多少前倾，体态只能用剩下的空间。
+        // 不做这件事的后果是实测到的：挥砍自带 ~30° 前压，叠在 65° 体态上 = 95°，
+        // 画面读作「整个人扑倒在地」，而且头会插进地面。
+        // 攻击期间只保留一半体态（`keep`），再被 `maxTotal` 夹一次 —— 夹完的头要
+        // 用**实际吃进去的角度**反算抬头量，否则体态被夹掉多少，脸就朝上多少。
+        const keep = 1 - clamp(attackBlend, 0, 1) * 0.5;
+        const room = Math.max(0, POSTURE_MAX_TOTAL - upper.rotation.x);
+        const applied = posturePitch > 0
+          ? Math.min(posturePitch * keep, room)
+          : posturePitch * keep;
+        upper.rotation.x += applied;
+        postureAppliedPitch = applied;
+        // 腰折同样受 keep 影响；具体角度在 splitSpine 之后写（那里才是腰段）。
+        postureAppliedWaist = postureWaist * keep;
+        // 头反向抬：pitch 60° 时脸会直接朝地，headLift=1 才把视线拉回水平。
+        headPivot.rotation.x -= (applied + postureAppliedWaist) * (posture.headLift ?? 0);
+        // 前倾的颈椎会把头送到胸口前方；reach 让脖子真的伸出去，而不是头留在原地转。
+        headPivot.position.z = (posture.headReach ?? 0) * keep;
+        headPivot.position.y = headPivotBaseY - (posture.neckDrop ?? 0);
+      }
+
       // v9s.33：躯干总角在此刻已经写完（步态 / 受击 / 惯性 / 持械 / 朝向）。
       // 拆分必须早于腕部与剑身反解 —— 它们读的是「躯干实际朝到哪」。
       splitSpine();
+
+      // 3.0) v9s.64 弓腰：拆分之后再把 waist 折在腰段（`upper` 就是腰段的节点）。
+      //   为什么不在拆分前加：那会被 42/58 摊到胸段，读起来是「整根斜」而不是「腰塌了」。
+      //   为什么必须回写 intendedTorso：帧尾的泄漏守卫拿它比对总角，
+      //   少记这一笔就会被当成「有人在 split 之后把 upper 当总角写」。
+      if (postureWaist !== 0 && postureAppliedWaist !== 0) {
+        upper.rotation.x += postureAppliedWaist;
+        if (intendedTorso) intendedTorso.x += postureAppliedWaist;
+      }
 
       // 3.4) v9s.24 腕部滞后：放在朝向 / 胸偏转之后 —— 它读的就是「躯干已经转到哪」，
       //      早一步读会漏掉 chestYaw，横向甩动就只在攻击时才有、走路时没有。
@@ -2986,7 +3088,9 @@ export function createVoxelRig(
       // 3.55) v9s.25 剑身仰角反解：数据给的是「剑离水平面多少度」，
       //       这里按实际手臂链换算成挂点角。必须在腕部之后、副手握持之前 ——
       //       腕滞后是链上的一环，副手 IK 又取柄的世界坐标。
-      applyBladeTarget(combat, torsoPitchForBlade);
+      // 体态是 3.0 之后才写进躯干的，这里把它加回「剑要抵消多少俯仰」——
+      // 只加**实际吃进去**的量（预算夹过的），否则高前倾时剑会反过来指向天空。
+      applyBladeTarget(combat, torsoPitchForBlade + postureAppliedPitch + postureAppliedWaist);
 
       // 3.5) v9s.22 副手握持：必须在朝向 / 胸偏转都写完之后解算 ——
       //  上半身一转动，柄的世界位置就变了，早一步解会「握在空气里」。
@@ -3193,6 +3297,47 @@ export function createVoxelRig(
     },
     torsoTotal() {
       return torsoTotal();
+    },
+    postureDebug() {
+      if (!posture) return null;
+      root.updateWorldMatrix(true, true);
+      const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+      const hip = new THREE.Vector3();
+      const head = new THREE.Vector3();
+      const fl = new THREE.Vector3();
+      const fr = new THREE.Vector3();
+      const dl = new THREE.Vector3();
+      const dr = new THREE.Vector3();
+      pelvis.getWorldPosition(hip).applyMatrix4(inv);
+      headPivot.getWorldPosition(head).applyMatrix4(inv);
+      head.y += HS / 2;   // 枢轴在颈根，加半个头才是「头的中心」
+      legL.tip.getWorldPosition(fl).applyMatrix4(inv);
+      legR.tip.getWorldPosition(fr).applyMatrix4(inv);
+      dl.copy(fl).sub(hip);
+      dr.copy(fr).sub(hip);
+      // 头部子树的最低点：判断「前倾到头什么时候啃地」只看这一个数。
+      // 不能量全骨架 —— 剑 / 盾在待机时就垂到地面以下 15cm，混进来判据立刻失效。
+      let headLowY = Number.POSITIVE_INFINITY;
+      const box = new THREE.Box3();
+      headPivot.traverse((o) => {
+        if (!(o instanceof THREE.Mesh)) return;
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        box.copy(o.geometry.boundingBox!).applyMatrix4(o.matrixWorld).applyMatrix4(inv);
+        if (box.min.y < headLowY) headLowY = box.min.y;
+      });
+      return {
+        enabled: true,
+        pitch: postureAppliedPitch,
+        waist: postureAppliedWaist,
+        hipY: hip.y,
+        headY: head.y,
+        headZ: head.z,
+        footY: Math.min(fl.y, fr.y),
+        // 两骨 IK 的可达上限 = legLength：>1 即脚被拉离地面
+        reachL: dl.length() / Math.max(1e-6, legLen),
+        reachR: dr.length() / Math.max(1e-6, legLen),
+        headLowY,
+      };
     },
     spineDebug() {
       if (!spineOn) return null;

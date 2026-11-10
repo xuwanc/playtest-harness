@@ -5,28 +5,29 @@
 
 ## 一句话
 
-v0.9.84：**鱼人（Murloc）不是新骨架，是同一套人形骨架换五处几何**。
-① 造型：方颅钝吻 + 两颗凸出的黄眼 + 冠鳍 / 背鳍 / 肩鳍 + 蹼手蹼脚 + 短尾
-（`presentation/murloc-parts.ts`，约 240 行造型、零动画）；
-② 因为骨架名 / IK / 步态 / 挥击 / 断肢映射 / 倒杆物理**一行没改**，鱼人天生会跑、
-会砍、断头时整颗鱼头掉下来、倒下会侧倒；
-③ 两种出场：`?hero=murloc` 当主角（`B` 键循环体型），`y-murloc` 工位三只当杂兵
-（血量 90，重击 5 刀砍死，`sever.part` 实测 `head`）。
+v0.9.85：**鱼人从「直立」变成「爬姿」，靠的是一层可组合的体态（`posture`），不是新动画**。
+① 七个旋钮（俯仰 / 弓腰 / 抬头 / 前伸 / 缩颈 / 抬胯 / 后坐）插在「动态层之后、
+脊柱拆分之前」，所以能叠在走路 / 挥砍 / 受击之上而不被覆盖（`systems/posture.md`）；
+② 鱼人取 `pitch 0.72 + waist 0.24`（≈55°）：髋不动、头胸压到接近水平、头前伸 16cm，
+臀线自然成了最高点 —— **抬胯不能抬骨盆**，默认腿已用满，抬 5cm 脚就离地；
+③ 另一个角色：**哨兵机**（`?hero=sentinel`）—— 方颅 + 一条发光横灯 + 天线 + 夹钳手，
+「大块抓型、小块点缀」，只画一只眼（`systems/sentinel.md`）。
 
-上一版的仙人掌侧臂单一真源 / 旗杆桩高 / 移动端降档仍在。
+上一版的鱼人造型 / 仙人掌侧臂单一真源 / 移动端降档仍在。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.84`（内部代号 v9s.63） |
-| 线上徽标 | `v0.9.84`（构建时间随发布变化） |
+| `package.json` 版本 | `0.9.85`（内部代号 v9s.64） |
+| 线上徽标 | `v0.9.85`（构建时间随发布变化） |
 | 发布方式 | `npm run ship`（构建 → 推 main → 重建 `preview` 产物；带凭证自恢复与推送重试） |
 | 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— 此链接固定不变 |
 | 蜘蛛开局 | <https://xuwanc.github.io/playtest-harness/?hero=spider> |
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 鱼人开局 | <https://xuwanc.github.io/playtest-harness/?hero=murloc> |
-| 本轮线上核验 | `assets/main-t1aEvwxz.js` 本地 / 线上同一份（913382 B），徽标 `v0.9.84` 有 → PASS |
+| 哨兵机开局 | <https://xuwanc.github.io/playtest-harness/?hero=sentinel> |
+| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
@@ -34,20 +35,21 @@ v0.9.84：**鱼人（Murloc）不是新骨架，是同一套人形骨架换五�
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 112 文件 / 1121 例全绿 |
+| `npx vitest run` | 113 文件 / 1127 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
 | `npm run smoke` | 53/53 PASS |
-| `npm run docs:check` | PASS（98 份文档 ≤300 行，README 99 行） |
+| `npm run docs:check` | PASS（101 份文档 ≤300 行，README 98 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 | `python3 tools/check-online.py --wait 180` | 发布后核验线上 JS 与本地 `dist` 同一份 |
 | `python3 tools/blood-shot.py` | 10 张：命中 3 帧 / 落地 / 倒下 / 沉没 / 升起 |
 | `python3 tools/sever-shot.py` | 7 张：断臂 / 断头 / 腰斩 / 断腿 / 倒下中 / 躺平 |
 | `python3 /tmp/murloc-kill.py` | 3 张：鱼人站位 / 断头特写 / 倒地侧视 |
+| `__harness.view.postureDebug()` | 体态读数：`pitch / waist / hipY / headY / headZ / footY / reachL,R / headLowY` |
 
 ## 正在做
 
-- 无。v9s.63（v0.9.84）已合并发布。
+- 无。v9s.64（v0.9.85）已合并发布。
 
 ## 伤害 / 死亡的关键数（改之前先读）
 
@@ -82,10 +84,23 @@ v0.9.84：**鱼人（Murloc）不是新骨架，是同一套人形骨架换五�
 14. **鱼人杂兵没有手**：`dummy-rig` 的手臂末端本来就没有手掌，蹼掌只做在主角上。
 15. **鱼人主角没有断肢**：断肢是假人系统的能力，主角只有受击 / 击退。
 16. **尾巴是静止的**：挂在 `pelvis` 上跟着屁股走，没有独立摆动。
+17. **体态是静态的**：不随速度 / 动作变化，跑起来还是同一个前倾角（想要「跑起来更趴」得给它加一档速度权重）。
+18. **头前伸不改碰撞盒**：鱼人贴墙时吻部会插进墙里约 15cm。
+19. **盾没有世界角语义**：压平体态后剑被补偿回目标仰角，盾却跟着小臂一起倒（只有剑有 `applyBladeTarget`）。
+20. **哨兵机只能当主角**：没有 `DummyVariant.sentinel`，还不能配置成杂兵。
 
 ## 已知风险
 
 见 [`../risk-review.md`](../risk-review.md)。本轮变化：
+
+- **「体态」是独立一层，不是改动作**：它必须插在 `splitSpine` 之前（否则不被摊成腰 / 胸两段，
+  读作「整根斜」）、足 IK 之前（否则抬沉骨盆时脚跟着飞）。位置错了不会有报错，只会「看起来哪里不对」。
+- **抬胯不能抬骨盆**：两骨 IK 可达上限 = `legLength`，默认站姿已用满；`pelvisLift: 0.05` 实测脚离地 2.6cm。
+  「屁股高」只能靠躯干压平，让臀线成为最高点。
+- **前倾需要总预算**：挥砍自带 ~30° 前压，叠在 65° 体态上 = 扑倒。体态只吃 `maxTotal − 已用`，
+  攻击期间再打五折；头抬头量必须用**实际吃进去**的角度反算，否则预算夹掉多少、脸就朝天多少。
+- **俯视下先坏的是可读性不是穿地**：三头身髋高 0.385m，头压到 103° 最低点还有 0.36m；
+  但头一低就挡住整个躯干，最高点从「头」变成「背」，读作一坨。停在 55° 是这个原因。
 
 - **「换造型」优先换几何，不要加骨架**：鱼人双足、髋膝踝肩肘腕、攻击前压都与人类同构，
   只换了头 / 背鳍 / 手 / 脚 / 尾五处几何，骨架名与骨骼层级一字未动 ——

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { ColorConfig } from '../core';
+import type { CharacterPosture, ColorConfig } from '../core';
 import { makeBox } from './rig-parts';
 
 /**
@@ -36,6 +36,24 @@ const MUR = {
   throat: '#a9dcc0',
   gill: '#1f4c40',
 } as const;
+
+/**
+ * 鱼人的基础体态：屁股留在原位（腿伸直 = 最高点）、躯干压到接近水平、再折一道腰，
+ * 头前伸出去把视线拉回水平 —— 「弓着背探头」的那条弧线就是这么来的。
+ *
+ * 为什么放在代码里而不是 `game.json`：它和头 / 背鳍 / 腿长的比例是**配套**的，
+ * 换个数值鱼人就不再像鱼人；而且杂兵（`dummy-rig`）没有独立的造型配置，
+ * 写死在这里才能保证「主角爬着走、码头的三只也爬着」。
+ */
+export const MURLOC_POSTURE: CharacterPosture = {
+  pitch: 0.72,
+  waist: 0.24,
+  headLift: 0.98,
+  headReach: 0.16,
+  neckDrop: 0.02,
+  pelvisDrop: 0,      // 屈膝会把脚压进地面（IK 残差随 drop 线性增长）
+  pelvisBack: 0.02,
+};
 
 /** 头部零件。坐标是 `headPivot` 局部：y=0 是脖子接口，+Z 是脸朝的方向。 */
 export function buildMurlocHead(
