@@ -1,4 +1,4 @@
 .nojekyll
+assets/main-B4QDkqmx.js
 assets/main-C0H8ghwn.css
-assets/main-t-7yhpqY.js
 index.html
