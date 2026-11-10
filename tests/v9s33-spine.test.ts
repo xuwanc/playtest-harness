@@ -4,6 +4,8 @@ import * as THREE from 'three';
 import type { AppConfig } from '../src/core';
 import { createVoxelRig } from '../src/presentation/voxel-rig';
 import { makeQuietWorld, intent, run } from './helpers';
+import { spineChain } from './rig-nodes';
+import { spineYawCurve } from '../src/presentation/spine-chain';
 
 const raw = JSON.parse(
   readFileSync(new URL('../config/game.json', import.meta.url), 'utf8'),
@@ -52,26 +54,31 @@ describe('v9s.33 脊柱分段', () => {
       run(off.w, 1, aim);
       on.rig.update(on.w.character, on.w.combat, on.w.playerHurt, on.w.config.fixedDt, false);
       off.rig.update(off.w.character, off.w.combat, off.w.playerHurt, off.w.config.fixedDt, false);
-      const upper = on.rig.group.getObjectByName('upper')!;
-      const chest = on.rig.group.getObjectByName('chest')!;
+      const chain = spineChain(on.rig);
+      const upper = chain[0];
       const lower = on.rig.group.getObjectByName('lower')!;
-      const total = upper.rotation.y + chest.rotation.y;
-      // v9s.69：偏航沿链「髋 → 腰 → 胸」**单调**过渡，腰段锚在髋上。
-      // v9s.66 那版让腰段从 0 起算（总角 × 0.58），下盘一转链上就是 40° → 7° → 24°，
-      // 先减后增 —— 画面读作「腿根转了、腰没转、胸又转了」。锚在髋上之后恒为单调。
+      const sum = (k: 'x' | 'y' | 'z'): number => chain.reduce((a, n) => a + n.rotation[k], 0);
+      const total = sum('y');
+      // v9s.70/v9s.72：偏航沿链「髋 → 腰 → … → 胸」**单调**过渡，且锚在髋上。
+      // 每一级的累计角 = 髋 +（总角 − 髋）× 曲线；曲线末项恒为 1，所以胸的世界角 = 总角。
       const hipYaw = lower.rotation.y;
-      const b = raw.view.animation.spine!.chainBlend ?? 0.58;
-      expect(upper.rotation.y).toBeCloseTo(hipYaw + (total - hipYaw) * b, 5);
-      expect(chest.rotation.y).toBeCloseTo(total - upper.rotation.y, 5);
-      // 腰段必须落在髋与胸之间（这就是「连续」的可测形式）
-      const lo = Math.min(hipYaw, total);
-      const hi = Math.max(hipYaw, total);
-      expect(upper.rotation.y).toBeGreaterThanOrEqual(lo - 1e-9);
-      expect(upper.rotation.y).toBeLessThanOrEqual(hi + 1e-9);
+      const curve = spineYawCurve(chain.length, raw.view.animation.spine!.chainBlend ?? 0.58);
+      let prev = 0;
+      for (let k = 0; k < chain.length; k++) {
+        const cum = prev + chain[k].rotation.y;
+        expect(cum).toBeCloseTo(hipYaw + (total - hipYaw) * curve[k], 5);
+        // 单调：每一级的世界角都夹在「髋」与「胸」之间（v9s.66 那版会跑出区间）
+        const lo = Math.min(hipYaw, total) - 1e-9;
+        const hi = Math.max(hipYaw, total) + 1e-9;
+        expect(cum).toBeGreaterThanOrEqual(lo);
+        expect(cum).toBeLessThanOrEqual(hi);
+        prev = cum;
+      }
+      expect(prev).toBeCloseTo(total, 6);
       // 总角与旧骨架（无拆分）逐帧一致 —— 分账只改「谁吃」，不改「吃多少」。
       const oldUpper = off.rig.group.getObjectByName('upper')!;
       expect(total).toBeCloseTo(oldUpper.rotation.y, 6);
-      expect(upper.rotation.x + chest.rotation.x).toBeCloseTo(oldUpper.rotation.x, 6);
+      expect(sum('x')).toBeCloseTo(oldUpper.rotation.x, 6);
     }
     on.rig.dispose();
     off.rig.dispose();
@@ -83,10 +90,10 @@ describe('v9s.33 脊柱分段', () => {
     for (let i = 0; i < 25; i++) {
       run(w, 1, aim);
       rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt, false);
-      const upper = rig.group.getObjectByName('upper')!;
-      const chest = rig.group.getObjectByName('chest')!;
+      const chain = spineChain(rig);
       const head = rig.group.getObjectByName('headPivot')!;
-      const worldHead = w.character.bodyYaw + upper.rotation.y + chest.rotation.y + head.rotation.y;
+      const torso = chain.reduce((a, n) => a + n.rotation.y, 0);
+      const worldHead = w.character.bodyYaw + torso + head.rotation.y;
       let d = worldHead - w.character.headYaw;
       d = Math.atan2(Math.sin(d), Math.cos(d));
       expect(Math.abs(d)).toBeLessThan(1e-6);
@@ -101,10 +108,9 @@ describe('v9s.33 脊柱分段', () => {
     run(w, 30, lean);
     rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt, false);
     for (let i = 0; i < 30; i++) { run(w, 1, lean); rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt, false); }
-    const upper = rig.group.getObjectByName('upper')!;
-    const chest = rig.group.getObjectByName('chest')!;
+    const chain = spineChain(rig);
     const head = rig.group.getObjectByName('headPivot')!;
-    const totalX = upper.rotation.x + chest.rotation.x;
+    const totalX = chain.reduce((a, n) => a + n.rotation.x, 0);
     if (Math.abs(totalX) < 0.02) return; // 该帧没有前倾就不强求
     // 头局部俯仰 = -headPitch - totalX * neck（neck=0.16）
     const expected = -Math.min(0.7, Math.max(-0.7, w.character.headPitch ?? 0)) - totalX * 0.16;
@@ -145,7 +151,7 @@ describe('v9s.33 脊柱分段', () => {
     }
     // 总角仍然等于「腰 + 胸」，且与拆分前记下的总角一致
     const d = rig.spineDebug()!;
-    expect(d.totalYaw).toBeCloseTo(d.waistYaw + d.chestYaw, 12);
+    expect(d.totalYaw).toBeCloseTo(d.waistYaw + d.midYaw + d.chestYaw, 12);
     expect(rig.torsoTotal().yaw).toBeCloseTo(d.totalYaw, 12);
     rig.dispose();
   });

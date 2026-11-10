@@ -41,6 +41,7 @@ import type { VoxelRig } from './voxel-rig';
 import { createSpiderRig } from './spider-rig';
 import { createYawSmoother } from './yaw-smooth';
 import { createWeaponTrail } from './weapon-trail';
+import { createAfterimage } from './elder-afterimage';
 import { createGrassLayer } from './grass-layer';
 import type { GrassDebug } from './grass-layer';
 import { createDestructibleLayer } from './destructible-layer';
@@ -181,7 +182,11 @@ export type SceneView = {
   /** v9s.33：动态平衡读数（COM / 捕获点 / 支撑余量） */
   balanceDebug(): import('./balance').BalanceResult | null;
   /** v9s.33：脊柱分段读数（腰 / 胸 / 颈） */
-  spineDebug(): { enabled: boolean; waistYaw: number; chestYaw: number; totalYaw: number; neckPitch: number } | null;
+  spineDebug(): {
+    enabled: boolean; segments: number; waistYaw: number; midYaw: number;
+    chestYaw: number; totalYaw: number; totalPitch: number; totalLean: number;
+    neckPitch: number; leak: number;
+  } | null;
   /** v9s.64：基础体态读数；没有 posture 的体型返回 null */
   postureDebug(): {
     enabled: boolean; pitch: number; waist: number;
@@ -561,6 +566,11 @@ export function createSceneView(
   // v9s.38：刀光归到统一层级（weapon-trail 组件内部的默认值不再参与排序判断）
   setFxOrder(playerTrail.object, FX_ORDER.trail);
   scene.add(playerTrail.object);
+  // v9s.56：老头移动残影（纯表现，克隆浅拷贝 + 半透明淡出，默认仅 elder 生效）
+  const elderAfterimage = createAfterimage(view.afterimage);
+  setFxOrder(elderAfterimage.container, FX_ORDER.trail - 1);
+  scene.add(elderAfterimage.container);
+  const aiPrev = new THREE.Vector3();
   const playerRoot = new THREE.Group();
   // 翻滚枢轴放在身体中心高度：若直接绕脚底原点旋转，前滚到 90° 以后头部会插进地面。
   // rollPivot 上抬一个枢轴高，rig 内部反向偏移同样高度，净位置不变，
@@ -1614,6 +1624,21 @@ export function createSceneView(
         hero.update(c, cb, w.playerHurt, animDt, w.abilities.channeling, w.time, w.playerLink, w.turnInPlace);
       }
 
+      // v9s.56：老头移动残影（纯表现，克隆浅拷贝 + 半透明淡出，默认仅 elder）。
+      // 用真实帧时长计时；站位在 hero.update 之后，此时本帧 playerRoot 位置已落定。
+      if (view.afterimage.enabled) {
+        const moved = Math.hypot(
+          playerRoot.position.x - aiPrev.x,
+          playerRoot.position.y - aiPrev.y,
+          playerRoot.position.z - aiPrev.z,
+        );
+        elderAfterimage.update(
+          frameDt, hero.group, playerRoot,
+          moved >= view.afterimage.minMove, bodyTypeId,
+        );
+        aiPrev.set(playerRoot.position.x, playerRoot.position.y, playerRoot.position.z);
+      }
+
       // v9s.22：挥击拖尾 —— 取本帧武器的刃根/刃尖世界坐标，只在攻击/冲刺期间记录。
       // 拖尾是「轨迹」而不是「姿势」，是打击感最直接的来源（对应 2D 的 smear frame）。
       playerTrail.update(
@@ -2106,6 +2131,7 @@ export function createSceneView(
       for (const halo of dummyHalos) halo.dispose();
       playerMeter.dispose();
       playerTrail.dispose();
+      elderAfterimage.dispose();
       for (const m of dummyWarns) m.dispose();
       landingPreview.dispose();
       slashGeo.dispose();

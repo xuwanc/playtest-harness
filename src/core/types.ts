@@ -2930,6 +2930,21 @@ export type SpineViewConfig = {
   /** 胸段枢轴高度（相对躯干高度 0..1）；越大，弯折点越靠上 */
   chestPivot: number;
   /**
+   * v9s.72：脊柱链**段数**（2 = 旧的「腰 + 胸」；3 = 腰 + 下胸 + 上胸，缺省 3）。
+   *
+   * 段数不是为了多几个盒子，而是为了让弯折从「两级台阶」变成一条曲线：
+   * 每级折角 ≈ 总角 / 段数，接头的楔形缝按 `sin(折角)` 缩小。
+   * 上限 4 —— 再多只是把同一块方块切得更碎，2.5D 俯视下读不出差别。
+   */
+  segments?: number;
+  /**
+   * v9s.72：各关节高度（相对躯干高度 0..1，自下而上，长度 = 段数 − 1，须递增）。
+   *
+   * 缺省取 `[0.42, 0.72, 0.84]` 的前 N−1 项。第一项沿用 `chestPivot` 的老位置，
+   * 所以两段 → 三段时腰部折点**不会移动**，只有上半身多了一道折。
+   */
+  pivots?: number[];
+  /**
    * v9s.70：**腰段在「髋 → 胸」这条链上吃多少**（0..1，缺省 0.58）。
    *
    * 这里说的不是「总角怎么分」，而是「中间那一节朝哪」——总角一分不改，
@@ -3142,6 +3157,36 @@ export type TrailViewConfig = {
   intensity: number;
   /** 刃尖额外提亮 0..1 */
   tipBoost: number;
+};
+
+/**
+ * 角色移动残影（v9s.56，纯表现层）。
+ *
+ * 不做后处理、不动主渲染循环：老头移动时按节流间隔浅克隆一次 rig 顶层 group
+ * （共享几何体、共享各部件原材质引用），冻结在生成时刻的世界位姿，再统一换成
+ * 半透明材质、按年龄淡出后回收进对象池。只对指定 bodyType（默认 `elder`）生效，
+ * 站着不动不生成，完全贴合「移动的时候后面有前几帧残影」。
+ */
+export type AfterimageViewConfig = {
+  enabled: boolean;
+  /** 对象池容量：最多同时存在的残影数（≈ 残影条数） */
+  maxGhosts: number;
+  /** 生成间隔（秒）：移动时每隔这么久生成一张快照，避免每帧堆残影 */
+  spawnInterval: number;
+  /** 单张残影存活时长（秒，≈ 前几帧） */
+  life: number;
+  /** 触发残影的最低单帧位移（m），低于此值视为静止、不生成 */
+  minMove: number;
+  /** 残影起始不透明度 */
+  baseOpacity: number;
+  /** 衰减指数（>1 表示越老淡出越快） */
+  fadeExp: number;
+  /** 着色：'keep' 保留原部件颜色 / 'tint' 用 color 着色 / 'mono' 单色 */
+  tint: 'keep' | 'tint' | 'mono';
+  /** tint / mono 时的颜色（十六进制） */
+  color: string;
+  /** 仅对该 bodyType id 生效；缺省（空串）则所有角色都生残影 */
+  bodyType: string;
 };
 
 /**
@@ -3518,6 +3563,8 @@ export type ViewConfig = {
   projectiles: ProjectileViewConfig;
   /** v9s.22：挥击拖尾（刀光） */
   weaponTrail: TrailViewConfig;
+  /** v9s.56：角色移动残影（纯表现，克隆浅拷贝 + 半透明淡出，默认仅老头） */
+  afterimage: AfterimageViewConfig;
   /** v9s.22：命中定格（纯表现，只冻角色姿态，不冻 Core） */
   hitstop: HitstopViewConfig;
   /** v9s.37 · 击地冲击（大剑第三击）的尘环 / 震动 */

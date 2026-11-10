@@ -1962,6 +1962,11 @@
         "chest": 0.42,
         "neck": 0.16,
         "chestPivot": 0.42,
+        "segments": 3,
+        "pivots": [
+          0.42,
+          0.72
+        ],
         "chainBlend": 0.58
       }
     },
@@ -2123,6 +2128,18 @@
       "intensity": 0.42,
       "tipBoost": 0.35,
       "pulseDecay": 14
+    },
+    "afterimage": {
+      "enabled": true,
+      "maxGhosts": 6,
+      "spawnInterval": 0.045,
+      "life": 0.28,
+      "minMove": 0.012,
+      "baseOpacity": 0.34,
+      "fadeExp": 1.8,
+      "tint": "keep",
+      "color": "#9fdcff",
+      "bodyType": "elder"
     },
     "hitstop": {
       "enabled": true,
