@@ -66,13 +66,22 @@ export function makeGreatsword(colors: ColorConfig): THREE.Group {
   return g;
 }
 
+/**
+ * 剑盾的盾：以默认体型躯干（bodyWidth 0.46 / bodyHeight 0.40）为参照，
+ * 盾宽与躯干齐、盾高约覆盖躯干到大腿上沿 —— 读起来才像一面盾，而不是手背小牌。
+ * 法线朝 +Z（盾面朝前）：plate / boss 的 z 都相对挂点，放大宽高时不要动 z，
+ * 否则会改变盾与前臂的距离；boss 按「盾面正面 + 半厚 - 少量嵌入」定位，避免陷进盾板。
+ * 按反馈把盾面整体放大约 1.45 倍（旧 plate 0.32×0.38×0.06、boss 0.11）。
+ */
 export function makeShield(colors: ColorConfig): THREE.Group {
   const g = group();
-  const plate = makeBox(0.32, 0.38, 0.06, colors.metal);
+  const plateW = 0.46, plateH = 0.54, plateD = 0.075;
+  const plate = makeBox(plateW, plateH, plateD, colors.metal);
   plate.position.set(0, 0.02, 0.1);
   g.add(plate);
-  const boss = makeBox(0.11, 0.11, 0.045, colors.blade);
-  boss.position.set(0, 0.02, 0.145);
+  const bossW = 0.15, bossD = 0.055;
+  const boss = makeBox(bossW, bossW, bossD, colors.blade);
+  boss.position.set(0, 0.02, 0.1 + plateD / 2 + bossD / 2 - 0.008);
   g.add(boss);
   return g;
 }

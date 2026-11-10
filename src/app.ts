@@ -23,6 +23,7 @@ import { describeSkillIndicators } from './presentation/skill-indicator';
 import { createPanelRow } from './presentation/overlay-fold';
 import { createSceneView } from './presentation/three-scene';
 import { createTelemetryPanel } from './presentation/telemetry-panel';
+import { createWardrobeView } from './presentation/wardrobe';
 
 const EMPTY_FRAME: InputFrame = {
   intents: { ...EMPTY_INTENTS },
@@ -96,6 +97,14 @@ export function startApp(): void {
     },
   });
   const diagPanel = createTelemetryPanel(recorder, badge);
+
+  // v9s.x：装备 / 外观展示界面。纯表现层、惰性创建独立 WebGL 转台，
+  // 不写 World、不进主循环 / 确定性快照；入口胶囊挂在顶部 #panel-row。
+  const wardrobe = createWardrobeView({
+    view: VIEW_CONFIG,
+    moveSpeed: world.config.moveSpeed,
+    toggleButton: document.getElementById('wardrobe-toggle'),
+  });
 
   // v9r：手感调试面板 = 实际位移速度曲线 + 方向罗盘；胶囊与容器由统一胶囊行提供，
   // 纯观测层只读 World / InputFrame；默认收起，点「手感」胶囊或按 V 展开。
@@ -356,6 +365,11 @@ export function startApp(): void {
       revive: d.health.revive,
       kills: d.health.kills,
     })),
+    /** v9s.x：装备展示界面读数（开合 / 转台角 / 视线 / 换装 / 换色 / 分区与占位槽），
+     *  验收「动态站立 / 视线跟随 / 拖动旋转」与数据驱动分区直接读这里。
+     *  wardrobe / wardrobeCtl 同时开放给自动化驱动 open/close/setLook/dragBy，避免只能靠真实指针。 */
+    wardrobe: () => wardrobe.debug(),
+    wardrobeCtl: wardrobe,
     /** v9s.x：操作按钮状态读数（冷却 / 蓄力 / 引导 / 冲刺 / 空中），验收按钮状态层直接读这里。 */
     buttonStatus: () => buttonStatus.update(world),
     /** v9s.x：常驻性能条读数（窗口 FPS / 帧时 / 慢帧 / 尖峰 / 固定步数），验收掉帧判定直接读这里。 */

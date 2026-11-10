@@ -1305,6 +1305,112 @@ def main() -> int:
                 }""")
                 check("淡出结束后回收指示器几何（不残留、不无限累积）", gone, str(gone))
 
+                # ---- v9s.x ⑥ 装备展示界面：动态站立 / 视线跟随 / 拖动旋转 / 换装换色 ----
+                w0 = page.evaluate("() => window.__harness.wardrobe()")
+                check("装备界面默认收起、WebGL 上下文惰性未创建",
+                      w0["open"] is False and w0["rendered"] is False and w0["frames"] == 0,
+                      str(w0))
+
+                ui = page.evaluate("""() => {
+                  const h = window.__harness;
+                  h.wardrobeCtl.open();
+                  const d = h.wardrobe();
+                  return {
+                    open: d.open, rendered: d.rendered, sections: d.sections, slots: d.slots,
+                    stage: document.querySelectorAll('#wardrobe-stage').length,
+                    canvas: document.querySelectorAll('#wardrobe canvas').length,
+                    secEls: document.querySelectorAll('.wardrobe-sec').length,
+                    slotEls: document.querySelectorAll('.wardrobe-slot').length,
+                    wpEls: document.querySelectorAll('[data-wp]').length,
+                    dyeEls: document.querySelectorAll('[data-dye]').length,
+                  };
+                }""")
+                check("点开后角色转台惰性建好、分区/槽位/换装/染色齐全",
+                      ui["open"] and ui["rendered"] and ui["stage"] == 1
+                      and ui["canvas"] == 1 and ui["sections"] == 4 and ui["slots"] >= 10
+                      and ui["secEls"] == 4 and ui["slotEls"] == ui["slots"]
+                      and ui["wpEls"] == 5 and ui["dyeEls"] == 5,
+                      str(ui))
+
+                # 动态站立：rAF 轮询看 frames 真在涨（软件渲染帧率不稳，不用固定等待）
+                growing = page.evaluate("""async () => {
+                  const f = window.__harness.wardrobe();
+                  for (let i = 0; i < 60; i++) {
+                    await new Promise(r => requestAnimationFrame(r));
+                    if (window.__harness.wardrobe().frames > f.frames + 2) return true;
+                  }
+                  return false;
+                }""")
+                check("角色恒待机动态站立（渲染循环持续推进 frames）", growing, str(growing))
+
+                look = page.evaluate("""async () => {
+                  const c = window.__harness.wardrobeCtl;
+                  c.setLook(1, -1);          // 右上：头向右偏 + 抬头
+                  const r = window.__harness.wardrobe().lookTarget;
+                  c.setLook(-1, 1);          // 左下：严格反向
+                  const l = window.__harness.wardrobe().lookTarget;
+                  // 平滑趋近：目标定住后 headYaw 应朝目标单调靠近
+                  c.setLook(1, 0);
+                  const before = window.__harness.wardrobe().headYaw;
+                  for (let i = 0; i < 30; i++) await new Promise(r => requestAnimationFrame(r));
+                  const after = window.__harness.wardrobe().headYaw;
+                  return { r, l, before, after, target: window.__harness.wardrobe().lookTarget.headYaw };
+                }""")
+                check("点击/悬停 → 视线跟随鼠标：右上/左下反向、限幅内、平滑趋近",
+                      look["r"]["headYaw"] > 0 and look["r"]["headPitch"] > 0
+                      and look["l"]["headYaw"] < 0 and look["l"]["headPitch"] < 0
+                      and abs(look["r"]["headYaw"]) < 0.7 and abs(look["r"]["headPitch"]) < 0.7
+                      and look["r"]["bodyPitch"] > 0
+                      and abs(look["after"] - look["target"]) < abs(look["before"] - look["target"]),
+                      str(look))
+
+                spin = page.evaluate("""() => {
+                  const c = window.__harness.wardrobeCtl, d = window.__harness.wardrobe;
+                  const a = d().turntableYaw;
+                  c.dragBy(120);
+                  const b = d().turntableYaw;
+                  let many = 0;
+                  for (let i = 0; i < 200; i++) { c.dragBy(100); many = d().turntableYaw; }
+                  return { a, b, many };
+                }""")
+                check("左右拖动 → 绕 Y 轴旋转：右拖正向、连续多圈角度仍规范有界",
+                      spin["b"] > spin["a"]
+                      and abs(spin["b"] - spin["a"] - 1.2) < 1e-6
+                      and -3.1416 <= spin["many"] <= 3.1416,
+                      str(spin))
+
+                swap = page.evaluate("""() => {
+                  const c = window.__harness.wardrobeCtl, d = window.__harness.wardrobe;
+                  c.setWeapon('greatsword'); c.setPalette('ember');
+                  const x = d();
+                  const activeWp = [...document.querySelectorAll('[data-wp].is-active')].map(e => e.dataset.wp);
+                  const activeDye = [...document.querySelectorAll('[data-dye].is-active')].map(e => e.dataset.dye);
+                  c.setPalette('nope');            // 未知 id 不应改配色
+                  return { weapon: x.weapon, palette: x.palette, activeWp, activeDye,
+                           unknown: d().palette, rendered: d().rendered };
+                }""")
+                check("换装/染色即时生效且高亮同步，未知配色不改状态",
+                      swap["weapon"] == "greatsword" and swap["palette"] == "ember"
+                      and swap["activeWp"] == ["greatsword"] and swap["activeDye"] == ["ember"]
+                      and swap["unknown"] == "ember" and swap["rendered"],
+                      str(swap))
+
+                closed = page.evaluate("""async () => {
+                  const c = window.__harness.wardrobeCtl, d = window.__harness.wardrobe;
+                  c.close();
+                  const f = d().frames;
+                  await new Promise(r => setTimeout(r, 200));
+                  const g = d().frames;
+                  c.open();                        // 重开复用惰性上下文，不重建
+                  const h = d();
+                  c.close();
+                  return { off: !d().open, stopped: g === f,
+                           reopen: h.open, reused: h.rendered };
+                }""")
+                check("关闭即停渲染、再次打开复用惰性上下文、Esc/浮层不残留",
+                      closed["off"] and closed["stopped"] and closed["reopen"] and closed["reused"],
+                      str(closed))
+
                 check("v9s.x 全段无新增页面异常", not errors, str(errors[:2]))
 
                 print("\n采样", len(rows), "帧 @0.25×  朝向滞后峰值",
