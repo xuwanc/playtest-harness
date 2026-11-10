@@ -2129,6 +2129,33 @@
       "tipBoost": 0.35,
       "pulseDecay": 14
     },
+    "afterimage": {
+      "enabled": true,
+      "maxGhosts": 5,
+      "spawnInterval": 0.09,
+      "spacing": 0.22,
+      "life": 0.32,
+      "minMove": 0.012,
+      "baseOpacity": 0.32,
+      "fadeExp": 1.8,
+      "tint": "keep",
+      "color": "#9fdcff",
+      "bodyTypes": ["elder"],
+      "fragment": 0.14,
+      "fragmentExp": 1.6,
+      "fragmentStart": 0.35,
+      "fragmentSpin": 0.6
+    },
+    "rtAfterimage": {
+      "enabled": true,
+      "bodyTypes": ["sentinel"],
+      "decay": 0.86,
+      "scale": 1.012,
+      "intensity": 0.9,
+      "mode": "add",
+      "tint": "keep",
+      "color": "#9fdcff"
+    },
     "hitstop": {
       "enabled": true,
       "duration": 0.07
