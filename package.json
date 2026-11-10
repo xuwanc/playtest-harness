@@ -1,9 +1,9 @@
 {
   "name": "playtest-harness",
   "private": true,
-  "version": "0.9.94",
+  "version": "0.9.95",
   "type": "module",
-  "description": "\u53ef\u79fb\u690d\u6838\u5fc3\u7684 3D \u73a9\u6cd5\u5b9e\u9a8c\u53f0\uff1a\u78b0\u649e\u767d\u76d2\u573a\u666f + \u4f53\u7d20\u89d2\u8272 + 2.5D \u5e73\u6ed1\u8ddf\u968f\u76f8\u673a + \u9690\u5f62\u6447\u6746",
+  "description": "可移植核心的 3D 玩法实验台：碰撞白盒场景 + 体素角色 + 2.5D 平滑跟随相机 + 隐形摇杆",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
