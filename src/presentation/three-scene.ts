@@ -181,7 +181,11 @@ export type SceneView = {
   /** v9s.33：动态平衡读数（COM / 捕获点 / 支撑余量） */
   balanceDebug(): import('./balance').BalanceResult | null;
   /** v9s.33：脊柱分段读数（腰 / 胸 / 颈） */
-  spineDebug(): { enabled: boolean; waistYaw: number; chestYaw: number; totalYaw: number; neckPitch: number } | null;
+  spineDebug(): {
+    enabled: boolean; segments: number; waistYaw: number; midYaw: number;
+    chestYaw: number; totalYaw: number; totalPitch: number; totalLean: number;
+    neckPitch: number; leak: number;
+  } | null;
   /** v9s.64：基础体态读数；没有 posture 的体型返回 null */
   postureDebug(): {
     enabled: boolean; pitch: number; waist: number;

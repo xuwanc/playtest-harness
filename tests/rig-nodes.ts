@@ -47,18 +47,36 @@ export function rigNodes(rig: { group: any }): RigNodes {
 }
 
 /**
- * v9s.33：躯干**总**偏航。脊柱分段后 upper 只承担腰段，读「躯干朝到哪」必须加回 chest。
- * 未开启分段时 chest 为 null，等价于旧的 upper.rotation.y。
+ * v9s.72：脊柱链上的关节（自下而上，`upper` → `spine1` → `spine2` → `chest`）。
+ *
+ * 段数可配（2 ~ 4），所以不能再写死「upper + chest 两段」。这里顺着子节点名字
+ * 走一遍链，段数改了测试不用跟着改。
+ */
+export function spineChain(rig: { group: any }): any[] {
+  const out: any[] = [];
+  let node = rig.group.getObjectByName('upper');
+  if (!node) return out;
+  out.push(node);
+  for (let i = 0; i < 8; i++) {
+    const next = (node.children ?? []).find(
+      (c: any) => c.name === 'chest' || /^spine\d+$/.test(c.name ?? ''),
+    );
+    if (!next) break;
+    out.push(next);
+    node = next;
+  }
+  return out;
+}
+
+/**
+ * v9s.33 / v9s.72：躯干**总**偏航 = 整条脊柱链的局部角之和。
+ * 脊柱分段后 `upper` 只是腰段，读「躯干朝到哪」必须把下游各级加回来。
  */
 export function torsoYawOf(rig: { group: any }): number {
-  const upper = rig.group.getObjectByName('upper');
-  const chest = rig.group.getObjectByName('chest');
-  return (upper?.rotation.y ?? 0) + (chest?.rotation.y ?? 0);
+  return spineChain(rig).reduce((sum, n) => sum + (n.rotation?.y ?? 0), 0);
 }
 
 /** 躯干总俯仰（同上）。 */
 export function torsoPitchOf(rig: { group: any }): number {
-  const upper = rig.group.getObjectByName('upper');
-  const chest = rig.group.getObjectByName('chest');
-  return (upper?.rotation.x ?? 0) + (chest?.rotation.x ?? 0);
+  return spineChain(rig).reduce((sum, n) => sum + (n.rotation?.x ?? 0), 0);
 }
