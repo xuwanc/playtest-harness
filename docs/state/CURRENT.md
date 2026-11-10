@@ -30,7 +30,7 @@ FK 本身穿地时它会忠实地把脚钉进地里；
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 鱼人开局 | <https://xuwanc.github.io/playtest-harness/?hero=murloc> |
 | 哨兵机开局 | <https://xuwanc.github.io/playtest-harness/?hero=sentinel> |
-| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 |
+| 本轮线上核验 | `assets/main-BUfkq_55.js` 本地 / 线上同一份（937627 B），徽标 `v0.9.87` 有 → PASS |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
