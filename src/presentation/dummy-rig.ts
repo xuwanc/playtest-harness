@@ -131,7 +131,7 @@ export function createDummyRig(
   torso.position.y = bodyH / 2;                 // 相对骨盆
   upper.add(torso);
 
-  // v9s.69：髋块（只鱼人有）。假人没有脊柱分段，`upper` 直接就吃满 55° 体态，
+  // v9s.70：髋块（只鱼人有）。假人没有脊柱分段，`upper` 直接就吃满 55° 体态，
   // 骨盆与躯干之间那道楔形缝比主角更宽 —— 补一块跟着吃 45% 的块把背面堵上。
   const hipMesh = murloc ? buildMurlocHip(pelvis, H, bodyW, 0.28, mc) : null;
 
@@ -730,7 +730,7 @@ export function createDummyRig(
         }
       }
 
-      // v9s.69：髋块分担一部分躯干俯仰（与主角同一个旋钮）。放在体态块之外，
+      // v9s.70：髋块分担一部分躯干俯仰（与主角同一个旋钮）。放在体态块之外，
       // 受击 / 挥砍写进 `upper` 的俯仰也一起分掉 —— 否则挨打时髋块会僵在原地。
       if (hipMesh) {
         hipMesh.rotation.x = upper.rotation.x * clamp(posture?.hipShare ?? 0.45, 0, 1);

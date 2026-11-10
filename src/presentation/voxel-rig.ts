@@ -428,7 +428,7 @@ export function createVoxelRig(
   // 更宽的体型同比例加厚，否则正面宽了、侧面还是一块薄板，反而更显扁。
   const torsoD = 0.28 * clamp(bodyW / 0.46, 1, 1.4);
 
-  // ---- v9s.69 髋块 ----
+  // ---- v9s.70 髋块 ----
   // 挂在 `pelvis`（不是 `upper`）：它是「髋」这个位置本身的质量，腿和腰都从它长出去。
   // 只在鱼人身上加 —— 直立体型的腰段只压 10~20°，缺口 2cm 以内，加了反而显胖。
   const hipMesh = murloc ? buildMurlocHip(pelvis, HS, bodyW, torsoD, colors) : null;
@@ -456,7 +456,7 @@ export function createVoxelRig(
   if (spineOn) {
     abdomenH = Math.max(0.05, chestPivotY);
     chestH = Math.max(0.05, bodyH - chestPivotY);
-    // v9s.69：腰块向上多长一截，藏进更宽的胸块里（胸块宽 +8mm，所以看不出来）——
+    // v9s.70：腰块向上多长一截，藏进更宽的胸块里（胸块宽 +8mm，所以看不出来）——
     // 胸段折 17° 时背面会掀开 4.4cm 的楔形缝，靠这一截填上。与髋块同一个思路：
     // 每一级台阶都要被上一级的方块盖住，链才读得连续。
     const torsoPad = murloc ? Math.min(0.06, chestH * 0.3) : 0;
@@ -1904,7 +1904,7 @@ export function createVoxelRig(
   }
 
   /**
-   * v9s.69：把躯干总偏航沿「髋 → 腰 → 胸」这条链重新摊一次。
+   * v9s.70：把躯干总偏航沿「髋 → 腰 → 胸」这条链重新摊一次。
    *
    * 不变量两条：**总角不变**（`upper + chest` 之和）、**胸的世界朝向不变**
    * （`chest` 是 `upper` 的子节点，两者之和就是它的世界角）。变的只有一件事：
@@ -3137,9 +3137,9 @@ export function createVoxelRig(
       // 拆分必须早于腕部与剑身反解 —— 它们读的是「躯干实际朝到哪」。
       splitSpine();
 
-      // 3.01) v9s.66/v9s.69 偏航沿链分配。
+      // 3.01) v9s.66/v9s.70 偏航沿链分配。
       //   v9s.66 的教训：写进 `upper` 再拆分，胸段只吃到 42%，「胸的朝向根本没变」。
-      //   v9s.69 的教训：把总角按 58/42 摊开，腰段是**从 0 起算**的 —— 下盘一转，
+      //   v9s.70 的教训：把总角按 58/42 摊开，腰段是**从 0 起算**的 —— 下盘一转，
       //   链上就出现「髋 40° → 腰 7° → 胸 24°」的先减后增，读起来正是「腿根转了、
       //   腰没转、胸又转了」。偏航必须像真脊柱一样**锚在髋上单调过渡**。
       if (chestYaw !== 0) {
@@ -3157,7 +3157,7 @@ export function createVoxelRig(
         if (intendedTorso) intendedTorso.x += postureAppliedWaist;
       }
 
-      // 3.05) v9s.69 髋块分担俯仰：骨盆 → 腰这一级台阶太陡（0° 对 37°），
+      // 3.05) v9s.70 髋块分担俯仰：骨盆 → 腰这一级台阶太陡（0° 对 37°），
       //   背面裂开的楔形洞有 8.8cm，一块不转的髋块盖不住。让它吃 45%，
       //   台阶变成 0° → 17° → 37°，每级缺口 4cm 以内，上一级顶面就能盖住。
       //   只在有髋块时存在（目前仅鱼人）：直立体型没有这块。
@@ -3442,7 +3442,7 @@ export function createVoxelRig(
         headY: head.y,
         headZ: head.z,
         /**
-         * v9s.69：头的**世界俯仰角**（度，正 = 脸朝上）。判断「抬头够不够」只看这一个数 ——
+         * v9s.70：头的**世界俯仰角**（度，正 = 脸朝上）。判断「抬头够不够」只看这一个数 ——
          * `headLift` 是比例，看不出最终脸朝哪；0.98 时这里恰好 0°（脸水平）。
          */
         headPitchDeg: (() => {

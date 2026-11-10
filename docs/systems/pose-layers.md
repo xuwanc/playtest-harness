@@ -9,7 +9,7 @@
 
 ```
 root（bodyYaw）
-└ pelvis            髋部原点，y = legLength。v9s.69 起挂一块 hipMesh（只鱼人有）
+└ pelvis            髋部原点，y = legLength。v9s.70 起挂一块 hipMesh（只鱼人有）
   ├ hipMesh         髋块：跨在「骨盆 → 腰」夹角上的补块，rotation.x = 腰段角 × hipShare
   ├ lower           下盘：两腿的 hip 挂在这里（rotation.y = hipYaw）
   │ └ hipL/R → knee → ankle → 脚掌
@@ -22,7 +22,7 @@ root（bodyYaw）
 ```
 
 所以：**胸下面那块是腰（`torsoLower`），不是胯**。胯（`pelvis`）是腰段底边所在的那条线，
-v9s.69 之前**完全不可见**（空节点）；腿根 `hipL/R` 挂在 `lower` 上、位置正好在 `pelvis` 原点。
+v9s.70 之前**完全不可见**（空节点）；腿根 `hipL/R` 挂在 `lower` 上、位置正好在 `pelvis` 原点。
 
 由此带来一个必然现象：`lower` 与 `upper` 是**兄弟节点**，两者都在髋高旋转。
 腿根转 `hipYaw` 时腰段不会自动跟着转 —— 躯干的偏航必须由自己这一支补出来。
@@ -41,7 +41,7 @@ v9s.66 的修法是**分账**（`spine.yawChest`，胸拿 70%）。分账解决�
 | | hips（`lower`） | 腰段（`upper`） | 胸段（`chest`） |
 |---|---|---|---|
 | v9s.66 | 8.6° | **7.0°** | 13.9° |
-| v9s.69 | 8.6° | **11.5°** | 13.7° |
+| v9s.70 | 8.6° | **11.5°** | 13.7° |
 
 8.6 → 7.0 → 13.9 是**先减后增**：腿根已经转过去了，腰却「转回来」一点，胸再转出去。
 画面读作腰被拧了一下 —— 这就是用户说的「lower 转了、torsoLower 还朝面朝向、torsoUpper 又转了」。
@@ -60,7 +60,7 @@ v9s.66 的修法是**分账**（`spine.yawChest`，胸拿 70%）。分账解决�
 验收：`tests/v9s33-spine.test.ts`、`tests/v9s66-pose-space.test.ts` 都断言
 「腰段夹在 `[髋, 胸]` 区间内」—— 这就是「连续」的可测形式。
 
-## 3. 俯仰的新问题：楔形缺口（v9s.69）
+## 3. 俯仰的新问题：楔形缺口（v9s.70）
 
 偏航修好之后，同一件事在**俯仰**上还有一半没解决，而且这次是几何问题：
 

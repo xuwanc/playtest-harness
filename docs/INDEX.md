@@ -159,7 +159,7 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（122 文件 / 1250 例） | 提交前 |
+| `npm test` | vitest 全量（122 文件 / 1255 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
 | `npm run smoke` | 起 `dist/`，跑 77 项画面层 + 契约自检 | 发布前 |
@@ -222,7 +222,7 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/grass.md`](systems/grass.md) | 体素草块：压开 / 割断 / 实例化渲染 / 风吹麦浪 / 性能结论 |
 | [`systems/grass-growth-pivot.md`](systems/grass-growth-pivot.md) | v9s.46 缓慢连续生长 + 枢轴顶点动画（每节 box 刚体旋转，实现正本） |
 | [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒、**仙人掌分段 / 碰撞盒 / 多判定轴 / 侧臂几何单一真源（实现正本）** |
-| [`systems/posture.md`](systems/posture.md) | 基础体态层：插入点、八个旋钮、三条硬边界（抬胯 / 屈膝 / 前倾预算）、补偿的坐标系 |
+| [`systems/posture.md`](systems/posture.md) | 基础体态层：插入点、九个旋钮、三条硬边界（抬胯 / 屈膝 / 前倾预算）、补偿的坐标系 |
 | [`systems/pose-layers.md`](systems/pose-layers.md) | 姿态分层：骨架里胸/腰/胯是谁、偏航沿链单调、楔形缺口与髋块、局部 vs 模型空间、脚锁、additive 目标形态（含行业出处） |
 | [`systems/sentinel.md`](systems/sentinel.md) | 哨兵机：大块抓型 + 小块点缀、单眼为什么是一条灯带、两处弯路 |
 | [`systems/murloc.md`](systems/murloc.md) | 鱼人造型：换几何不换骨架、四个辨识点、两种出场、单只假人血量（实现正本） |
