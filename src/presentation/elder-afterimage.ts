@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { AfterimageViewConfig } from '../core/types';
 
 /**
- * 角色移动残影 · 克隆 ghost 池方案（v9s.56 / v9s.57，纯表现层）。
+ * 角色移动残影 · 克隆 ghost 池方案（v9s.56 / v9s.57 / v9s.58，纯表现层）。
  *
  * 做什么：移动时按节流间隔浅克隆一次 rig 顶层 group，冻结在生成时刻的世界位姿，
  * 整体换成半透明材质、按年龄淡出后回收到对象池。作用于 `cfg.bodyTypes`
@@ -13,6 +13,14 @@ import type { AfterimageViewConfig } from '../core/types';
  *  - `fragment` / `fragmentExp` / `fragmentStart` / `fragmentSpin`：残影随年龄沿
  *    固定随机方向散开 + 各自自转，读感即「随时间流逝变碎裂无序化」。散开方向在
  *    生成时定死（确定性 PRNG），只随年龄放大，不会逐帧抖。
+ *
+ * v9s.58 性能修复（掉帧根因）：
+ *  旧实现每次生成都 `target.clone(true)` 把整棵 rig 浅克隆一遍、再为每个 mesh
+ *  `new MeshBasicMaterial`，过期又 dispose —— 体素角色几十上百个 mesh，移动时每
+ *  0.09s 一次，产生海量短命对象 + GC 抖动 → 掉帧。
+ *  新实现：每个对象池槽位**只在首次使用时克隆一次整棵 rig**，之后只把当前角色姿态
+ *  回写进已克隆的树（复制局部 transform，零分配），并复用首次创建的私有材质；
+ *  仅当角色 rig 整体被替换（换 bodyType）时才重新克隆。稳态下生成残影 = 0 分配。
  *
  * 为什么这么做（而不是后处理 / RT 反馈）：
  *  - 纯表现：不碰主渲染循环、不引入 EffectComposer / RenderTarget，降级风险小；
@@ -25,14 +33,6 @@ import type { AfterimageViewConfig } from '../core/types';
 export type Afterimage = {
   /** 所有残影挂在这个空 Group 下，调用方把它加进场景即可 */
   container: THREE.Group;
-  /**
-   * 每帧调用。
-   * @param dt       真实帧时长（秒），用于残影计时与淡出（暂停时传 0 即冻结）
-   * @param target   角色顶层 group（含本帧姿态），残影克隆它
-   * @param root     承载角色世界变换的祖先（一般为 playerRoot），用于算位移 + 刷新世界矩阵
-   * @param moving   本帧是否「移动够了」（位移 ≥ minMove），只有移动才生成残影
-   * @param bodyId   当前 bodyType id，与 cfg.bodyTypes 不匹配时不生成新残影
-   */
   update(dt: number, target: THREE.Object3D, root: THREE.Object3D, moving: boolean, bodyId: string): void;
   /** 立即清空所有残影（换角色 / 关闭时调用，避免旧残影滞留） */
   reset(): void;
@@ -41,14 +41,35 @@ export type Afterimage = {
   dispose(): void;
 };
 
+type Pair = {
+  /** 活动角色侧的对应 mesh（局部 transform 每帧被读取） */
+  live: THREE.Object3D;
+  /** 克隆树里的对应 mesh（局部 transform 被改写为残影姿态） */
+  clone: THREE.Object3D;
+  /** 本次生成时定格的局部位置（碎裂偏移的基准，持久向量、每生成覆写） */
+  basePos: THREE.Vector3;
+  /** 本次生成时定格的局部朝向（自转的基准，持久向量、每生成覆写） */
+  baseQuat: THREE.Quaternion;
+  /** 该槽位固定的随机散开方向（确定性种子，生成间不变） */
+  dir: THREE.Vector3;
+  /** 该槽位固定的随机自转轴（确定性种子，生成间不变） */
+  spin: THREE.Vector3;
+};
+
 type Ghost = {
   holder: THREE.Group;
+  /** 克隆出来的整棵残影树（首次使用时构建，之后复用） */
   snap: THREE.Object3D | null;
+  /** 本槽位私有的半透明材质（首次构建时创建，之后复用） */
   mats: THREE.MeshBasicMaterial[];
+  /** 活动角色 / 克隆 mesh 的并行配对，用于回写变换与碎裂 */
+  pairs: Pair[];
   age: number;
   active: boolean;
-  /** 每个 ghost 一个确定性种子，保证散开方向每次生成稳定、不逐帧抖 */
+  /** 确定性种子，决定本槽位散开 / 自转方向 */
   seed: number;
+  /** 本槽位克隆所基于的活动 rig 引用；变了就重建克隆（换 bodyType 兜底） */
+  builtFor: THREE.Object3D | null;
 };
 
 /** mulberry32：小体积确定性 PRNG，避免依赖 Math.random 的不可复现 */
@@ -70,7 +91,8 @@ function randUnitVec(rnd: () => number, out: THREE.Vector3): THREE.Vector3 {
 }
 
 const _q = new THREE.Quaternion();
-const _axis = new THREE.Vector3();
+const _dir = new THREE.Vector3();
+const _spin = new THREE.Vector3();
 
 export function createAfterimage(cfg: AfterimageViewConfig): Afterimage {
   const container = new THREE.Group();
@@ -82,7 +104,10 @@ export function createAfterimage(cfg: AfterimageViewConfig): Afterimage {
     const holder = new THREE.Group();
     holder.visible = false;
     container.add(holder);
-    ghosts.push({ holder, snap: null, mats: [], age: 0, active: false, seed: (i + 1) * 0x9e37 });
+    ghosts.push({
+      holder, snap: null, mats: [], pairs: [],
+      age: 0, active: false, seed: (i + 1) * 0x9e37, builtFor: null,
+    });
   }
 
   const prevRoot = new THREE.Vector3();
@@ -99,7 +124,7 @@ export function createAfterimage(cfg: AfterimageViewConfig): Afterimage {
     return oldest;
   }
 
-  /** 清空一个槽的旧内容并释放其私有材质 */
+  /** 清空一个槽的旧内容并释放其私有材质（重建前调用） */
   function clearSlot(g: Ghost): void {
     if (g.snap) {
       g.holder.remove(g.snap);
@@ -107,67 +132,106 @@ export function createAfterimage(cfg: AfterimageViewConfig): Afterimage {
     }
     for (const m of g.mats) m.dispose();
     g.mats = [];
+    g.pairs = [];
+    g.builtFor = null;
+  }
+
+  /** 把原材质替换成私有半透明副本（同原材质只建一份），并登记进本槽材质表 */
+  function replaceMeshMaterial(
+    mesh: THREE.Mesh, matMap: Map<THREE.Material, THREE.MeshBasicMaterial>,
+    tintColor: THREE.Color, g: Ghost,
+  ): void {
+    const src = mesh.material;
+    const make = (m: THREE.Material): THREE.MeshBasicMaterial => {
+      const cached = matMap.get(m);
+      if (cached) return cached;
+      const base = cfg.tint === 'keep'
+        ? (m as unknown as { color?: THREE.Color }).color ?? tintColor
+        : tintColor;
+      const mat = new THREE.MeshBasicMaterial({
+        color: base.clone(),
+        transparent: true,
+        opacity: cfg.baseOpacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      matMap.set(m, mat);
+      g.mats.push(mat);
+      return mat;
+    };
+    mesh.material = Array.isArray(src) ? src.map(make) : make(src);
+  }
+
+  /** 首次使用 / rig 被替换时：浅克隆整棵 rig 一次，建好配对与私有材质表 */
+  function buildSnapshot(g: Ghost, target: THREE.Object3D): void {
+    clearSlot(g);
+    const snap = target.clone(true); // 共享几何体与原材质引用，仅复制变换；建一次、长期复用
+    const matMap = new Map<THREE.Material, THREE.MeshBasicMaterial>();
+    const tintColor = new THREE.Color(cfg.color);
+    const rnd = mulberry32(g.seed);
+
+    // 根若是 mesh，也要换私有材质（但不进 pairs：根的世界位姿单独处理）
+    if ((snap as unknown as { isMesh?: boolean }).isMesh) {
+      replaceMeshMaterial(snap as THREE.Mesh, matMap, tintColor, g);
+    }
+
+    const walk = (live: THREE.Object3D, clone: THREE.Object3D): void => {
+      const lm = live as THREE.Mesh;
+      const cm = clone as THREE.Mesh;
+      if (lm.isMesh && cm.isMesh) {
+        replaceMeshMaterial(cm, matMap, tintColor, g);
+        g.pairs.push({
+          live: lm,
+          clone: cm,
+          basePos: cm.position.clone(),
+          baseQuat: cm.quaternion.clone(),
+          dir: randUnitVec(rnd, _dir).clone(),
+          spin: randUnitVec(rnd, _spin).clone(),
+        });
+      }
+      for (let i = 0; i < live.children.length; i++) {
+        const lc = live.children[i];
+        const cc = clone.children[i];
+        if (lc && cc) walk(lc, cc);
+      }
+    };
+    for (let i = 0; i < target.children.length; i++) {
+      const lc = target.children[i];
+      const cc = snap.children[i];
+      if (lc && cc) walk(lc, cc);
+    }
+
+    g.holder.add(snap);
+    g.snap = snap;
+    g.builtFor = target;
+  }
+
+  /** 把当前角色姿态回写进本槽已克隆的树（零分配：只复制 transform + 覆写基准向量） */
+  function resync(g: Ghost, target: THREE.Object3D): void {
+    const snap = g.snap!;
+    target.updateWorldMatrix(true, true);
+    snap.matrixAutoUpdate = false;
+    snap.matrix.copy(target.matrixWorld); // 根固定为世界位姿：残影是冻结在生成时刻的整体外形
+    snap.renderOrder = 1;                 // 角色默认 0，残影叠在角色之后
+    for (const p of g.pairs) {
+      const lm = p.live;
+      const cm = p.clone;
+      cm.position.copy(lm.position);
+      cm.quaternion.copy(lm.quaternion);
+      cm.scale.copy(lm.scale);
+      // 本次生成定格的基准：碎裂偏移从此出发，避免沿用上一轮残留偏移
+      p.basePos.copy(cm.position);
+      p.baseQuat.copy(cm.quaternion);
+    }
   }
 
   function spawn(target: THREE.Object3D): void {
     const g = acquire();
-    clearSlot(g);
-    // 浅克隆：共享几何体与各部件原材质引用，只复制变换 —— 体素 rig 几十上百个 mesh 也很轻。
-    const snap = target.clone(true);
-    // 取本帧世界矩阵：调用方已把 playerRoot 位置 / 朝向、rig 局部姿态写好，
-    // 这里向上刷新整条父链 + 自身 + 子节点，保证 matrixWorld 是最新的。
-    target.updateWorldMatrix(true, true);
-    snap.matrixAutoUpdate = false;
-    snap.matrix.copy(target.matrixWorld);
-    snap.renderOrder = 1; // 角色默认 0，残影叠在角色之后
-
-    const matMap = new Map<THREE.Material, THREE.MeshBasicMaterial>();
-    const tintColor = new THREE.Color(cfg.color);
-    const rnd = mulberry32(g.seed);
-    const dir = new THREE.Vector3();
-    const spinAxis = new THREE.Vector3();
-    const wantFrag = cfg.fragment > 0 || cfg.fragmentSpin > 0;
-
-    snap.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      // 把原材质替换成私有半透明副本（同原材质只建一份，统一 opacity）
-      const src = mesh.material;
-      const make = (m: THREE.Material): THREE.MeshBasicMaterial => {
-        const cached = matMap.get(m);
-        if (cached) return cached;
-        const base = cfg.tint === 'keep'
-          ? (m as unknown as { color?: THREE.Color }).color ?? tintColor
-          : tintColor;
-        const mat = new THREE.MeshBasicMaterial({
-          color: base.clone(),
-          transparent: true,
-          opacity: cfg.baseOpacity,
-          depthWrite: false,
-          side: THREE.DoubleSide,
-        });
-        matMap.set(m, mat);
-        g.mats.push(mat);
-        return mat;
-      };
-      mesh.material = Array.isArray(src) ? src.map(make) : make(src);
-
-      // 碎裂无序化元数据：记录原始局部变换 + 生成时定死的随机方向 / 自转轴
-      mesh.userData._basePos = (mesh.position as THREE.Vector3).clone();
-      mesh.userData._baseQuat = (mesh.quaternion as THREE.Quaternion).clone();
-      if (wantFrag) {
-        mesh.userData._dir = randUnitVec(rnd, dir).clone();
-        mesh.userData._spinAxis = randUnitVec(rnd, spinAxis).clone();
-      }
-    });
-    // 推进种子，下一次生成拿到不同的散开方向
-    g.seed = (g.seed * 1664525 + 1013904223) >>> 0;
-
-    g.holder.add(snap);
-    g.snap = snap;
-    g.holder.visible = true;
+    if (g.builtFor !== target) buildSnapshot(g, target); // 仅首次 / rig 替换时深克隆
+    resync(g, target);
     g.age = 0;
     g.active = true;
+    g.holder.visible = true;
   }
 
   /** 推进所有活动残影的年龄并刷新 opacity / 碎裂；过期则回收 */
@@ -189,25 +253,17 @@ export function createAfterimage(cfg: AfterimageViewConfig): Afterimage {
       const op = cfg.baseOpacity * k;
       for (const m of g.mats) m.opacity = op;
 
-      // 碎裂无序化：超过 fragmentStart 后，子部件沿固定方向散开 + 自转，
+      // 碎裂无序化：超过 fragmentStart 后，子部件沿固定方向散开 + 各自自转，
       // 幅度随年龄按 fragmentExp 增长（越老越碎）。
       if (wantFrag && t > fragStart) {
         const ft = Math.min(1, (t - fragStart) / (1 - fragStart));
         const sf = cfg.fragment * ft ** cfg.fragmentExp;
         const spin = cfg.fragmentSpin * ft ** cfg.fragmentExp;
-        g.snap.traverse((o) => {
-          const mesh = o as THREE.Mesh;
-          if (!mesh.isMesh) return;
-          const bp = mesh.userData._basePos as THREE.Vector3 | undefined;
-          const bq = mesh.userData._baseQuat as THREE.Quaternion | undefined;
-          const dir = mesh.userData._dir as THREE.Vector3 | undefined;
-          const axis = mesh.userData._spinAxis as THREE.Vector3 | undefined;
-          if (bp && dir) (mesh.position as THREE.Vector3).copy(bp).addScaledVector(dir, sf);
-          if (bq && axis) {
-            _q.setFromAxisAngle(axis, spin);
-            (mesh.quaternion as THREE.Quaternion).copy(bq).multiply(_q);
-          }
-        });
+        for (const p of g.pairs) {
+          (p.clone.position as THREE.Vector3).copy(p.basePos).addScaledVector(p.dir, sf);
+          _q.setFromAxisAngle(p.spin, spin);
+          (p.clone.quaternion as THREE.Quaternion).copy(p.baseQuat).multiply(_q);
+        }
       }
     }
   }

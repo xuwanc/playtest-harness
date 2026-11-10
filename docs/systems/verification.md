@@ -12,7 +12,7 @@
 | 命令 | 验证什么 | 期望 |
 |---|---|---|
 | `npm run build` | TypeScript strict 全量类型检查 + Vite 生产构建 | `tsc --noEmit` 无 error，产出 `dist/` |
-| `npm test` | 全量单测 | **126 文件 / 1294 例全绿** |
+| `npm test` | 全量单测 | **125 文件 / 1286 例全绿** |
 | `npm run test:affected` | 按 `git diff` 的 import 闭包只跑相关用例（v9s.33） | 输出命中数 / 总数，必要时自动退回全量 |
 | `npm run verify:portable` | Core 在纯 Node 无头跑 600 步 + 边界守卫（**31 个文件**） | `[boundary] PASS` |
 | `npm run smoke` | 真实浏览器跑 `dist/`：77 项画面层 + 契约断言 | **77/77**，退出码 0 |

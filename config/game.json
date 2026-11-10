@@ -2149,8 +2149,8 @@
     "rtAfterimage": {
       "enabled": true,
       "bodyTypes": ["sentinel"],
-      "decay": 0.86,
-      "scale": 1.012,
+      "decay": 0.9,
+      "scale": 1.01,
       "intensity": 0.9,
       "mode": "add",
       "tint": "keep",

@@ -17,9 +17,14 @@ import type { AfterimageRtViewConfig } from '../core/types';
  *
  * 对主渲染循环的侵入只发生在 `update` 内部（且在本模块内完整 save/restore 渲染器与
  * 相机状态），three-scene 只需在 `renderer.render(scene, cam)` 之后调一次 `update`。
+ *
+ * 关键修复（v9s.58）：
+ *  - 灯光也要 enable(layer 1)，否则 RT 里角色是无光照全黑、叠加后不可见；
+ *  - RT 捕获时临时把 `scene.background` 置空，避免背景被一起叠加进屏幕染色整屏；
+ *  - 首次进入作用角色时清空双缓冲，避免读到未初始化纹理。
  */
 
-/** 隔离角色用的专用 layer（角色 mesh 会额外 enable 这一层，自身 layer 0 保留） */
+/** 隔离角色用的专用 layer（角色 mesh / 灯光会额外 enable 这一层，自身 layer 0 保留） */
 const RT_LAYER = 1;
 
 export type Afterimage = {
@@ -109,7 +114,8 @@ export function createRtAfterimage(ctx: RtCtx, cfg: AfterimageRtViewConfig): Aft
   let next = accB;
 
   const quadScene = new THREE.Scene();
-  const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  // 让 z=0 的满屏面一定落在 [-1,1] 视锥内，避免某些驱动下被近裁剪面吃掉
+  const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
   const tintColor = new THREE.Color(cfg.color);
 
   const matDecay = new THREE.ShaderMaterial({
@@ -154,7 +160,19 @@ export function createRtAfterimage(ctx: RtCtx, cfg: AfterimageRtViewConfig): Aft
   quad.frustumCulled = false;
   quadScene.add(quad);
 
+  // v9s.58：把场景灯光也放进 layer 1，否则 RT 捕获到的角色是无光照全黑，
+  // Additive 叠加后等于没画 → 「看起来没效果」。灯光自身 layer 0 保留，主渲染不受影响。
+  const lights: THREE.Light[] = [];
+  scene.traverse((o) => {
+    const light = o as THREE.Light;
+    if ((light as unknown as { isLight?: boolean }).isLight) {
+      light.layers.enable(RT_LAYER);
+      lights.push(light);
+    }
+  });
+
   let active = false;
+  let firstRun = true;
 
   function ensureSize(): void {
     const s = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -183,21 +201,29 @@ export function createRtAfterimage(ctx: RtCtx, cfg: AfterimageRtViewConfig): Aft
   }
 
   function run(target: THREE.Object3D): void {
-    // —— save 渲染器 / 相机状态，结束时完整还原 ——
+    // —— save 渲染器 / 相机 / 场景状态，结束时完整还原 ——
     const prevTarget = renderer.getRenderTarget();
     const prevAutoClear = renderer.autoClear;
     const prevClear = renderer.getClearColor(new THREE.Color());
     const prevClearA = renderer.getClearAlpha();
     const prevLayerMask = camera.layers.mask;
+    const prevBg = scene.background;
+
+    // 首次进入作用角色：清空双缓冲，避免读到未初始化纹理
+    if (firstRun) {
+      clearAcc();
+      firstRun = false;
+    }
 
     // 全程关闭 autoClear：所有清屏都手动做，避免 quad 叠加时把已累积的残影擦掉
     renderer.autoClear = false;
 
-    // 1) 角色单独渲到 rtCur（只渲 layer 1 的对象）
+    // 1) 角色单独渲到 rtCur（只渲 layer 1 的对象；灯光已 enable(layer1) 故正常受光）
     target.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (mesh.isMesh) mesh.layers.enable(RT_LAYER);
     });
+    scene.background = null; // 屏蔽背景，否则背景会被一起叠加进屏幕染色整屏
     camera.layers.set(RT_LAYER);
     renderer.setRenderTarget(rtCur);
     renderer.setClearColor(0x000000, 0);
@@ -205,6 +231,7 @@ export function createRtAfterimage(ctx: RtCtx, cfg: AfterimageRtViewConfig): Aft
     renderer.render(scene, camera);
     renderer.setRenderTarget(null);
     camera.layers.mask = prevLayerMask; // 还原，下一帧主渲染正常
+    scene.background = prevBg;
 
     // 2) 旧残影（prev）衰减 + 放大 → next（先手动清，再画，不擦后续）
     matDecay.uniforms.uPrev.value = prev.texture;
@@ -239,12 +266,14 @@ export function createRtAfterimage(ctx: RtCtx, cfg: AfterimageRtViewConfig): Aft
       if (!cfg.enabled) {
         clearAcc();
         active = false;
+        firstRun = true;
         return;
       }
       const matched = cfg.bodyTypes.length === 0 || cfg.bodyTypes.includes(bodyId);
       if (!matched) {
         clearAcc();
         active = false;
+        firstRun = true;
         return;
       }
       ensureSize();
@@ -254,6 +283,7 @@ export function createRtAfterimage(ctx: RtCtx, cfg: AfterimageRtViewConfig): Aft
     reset() {
       clearAcc();
       active = false;
+      firstRun = true;
     },
     debug() {
       return { count: 2, active: active ? 1 : 0, spawning: false };
@@ -266,6 +296,8 @@ export function createRtAfterimage(ctx: RtCtx, cfg: AfterimageRtViewConfig): Aft
       matDecay.dispose();
       matAdd.dispose();
       matCompose.dispose();
+      // 还原灯光 layer（不强制，但避免污染后续运行时状态）
+      for (const l of lights) l.layers.disable(RT_LAYER);
       container.clear();
     },
   };
