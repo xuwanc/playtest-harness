@@ -101,6 +101,14 @@ export type SceneView = {
    */
   dummyRenderCount(): number;
   /**
+   * v9s.63：显隐主角。
+   *
+   * 相机跟玩家走，而主角块头大 —— 拍「被砍倒的假人 / 可破坏物」时他就贴在
+   * 画面正中挡住主体。验收脚本里关掉他，构图才对得上。**只影响可见性**，
+   * 位置 / 碰撞 / 相机锚点全部照旧。
+   */
+  setHeroVisible(v: boolean): void;
+  /**
    * v9s.62：GPU / 场景资源读数 —— 诊断移动端「隔一段时间卡几秒」。
    *
    * `geometries` / `textures` / `programs` 是 Three 的累计计数，只增不减就是资源没释放；
@@ -625,6 +633,9 @@ export function createSceneView(
       const d = createDummyRig(
         view.voxel, view.colors, tint, s.id, view.dummies, world.config.dummies.moveSpeed,
         view.gait, view.hurt, view.lean, view.ik,
+        // v9s.63：造型变体按「地块声明的初始位置」取，id 是 1 起的序号。
+        // 陪练（fighters）追加在普通假人之后，取不到就退回 human —— 不需要额外字段。
+        world.config.dummies.spawn[s.id - 1]?.variant ?? 'human',
       );
       rig = {
         group: d.group,
@@ -1928,6 +1939,7 @@ export function createSceneView(
     pickDummy,
     /** v9s.43：渲染对象容量，验收动态生成 / 清除单位时与 Core 的 dummies.length 对齐。 */
     dummyRenderCount: () => dummyRigs.length,
+    setHeroVisible: (v: boolean) => { playerRoot.visible = v; },
     gpuDebug() {
       let objects = 0;
       let meshes = 0;

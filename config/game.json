@@ -1025,6 +1025,30 @@
           "limb": "#5a6878",
           "shoe": "#2a2f38"
         }
+      },
+      "murloc": {
+        "name": "鱼人",
+        "height": 1.16,
+        "radius": 0.33,
+        "moveSpeed": 3.4,
+        "voxel": {
+          "headSize": 0.46,
+          "bodyWidth": 0.48,
+          "bodyHeight": 0.34,
+          "limbThickness": 0.115,
+          "legLength": 0.36,
+          "armLength": 0.52,
+          "style": {
+            "hunch": 0.4,
+            "murloc": true
+          }
+        },
+        "colors": {
+          "body": "#4f9c78",
+          "head": "#5fb692",
+          "limb": "#3d7f61",
+          "shoe": "#2b5d49"
+        }
       }
     },
     "orientation": {

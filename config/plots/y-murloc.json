@@ -1,0 +1,44 @@
+{
+  "id": "y-murloc",
+  "name": "鱼人滩",
+  "hint": "三只鱼人：站桩 / 保持距离 / 跟随。砍头整颗掉下来，侧面砍断手臂，倒下会侧倒",
+  "span": [
+    2,
+    2
+  ],
+  "shape": "circle",
+  "radius": 3.0,
+  "color": "#7fe0b0",
+  "owner": "v9s.63 鱼人造型（rig 变体，只换几何不换骨架）",
+  "spawn": {
+    "dx": 0,
+    "dz": 0
+  },
+  "label": {
+    "dx": 0,
+    "dz": -3.2
+  },
+  "dummies": [
+    {
+      "dx": -1.5,
+      "dz": 0.4,
+      "mode": "idle",
+      "variant": "murloc",
+      "health": 90
+    },
+    {
+      "dx": 1.5,
+      "dz": 0.4,
+      "mode": "keep-distance",
+      "variant": "murloc",
+      "health": 90
+    },
+    {
+      "dx": 0,
+      "dz": 2.1,
+      "mode": "follow",
+      "variant": "murloc",
+      "health": 90
+    }
+  ]
+}

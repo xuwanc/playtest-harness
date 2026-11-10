@@ -30,12 +30,15 @@ function isolate(w: ReturnType<typeof LAB>, keep: number): void {
 }
 
 describe('v9s.38 持械陪练：装配', () => {
-  it('6 个普通假人 + 3 个陪练，id 连续，武器与配置一一对应', () => {
+  it('普通假人 + 3 个陪练，id 连续，武器与配置一一对应', () => {
     const w = LAB();
     const f = w.config.dummies.fighters!;
     expect(w.dummies).toHaveLength(w.config.dummies.count + f.weapons.length);
     const fighters = w.dummies.slice(w.config.dummies.count);
-    expect(fighters.map((s) => s.id)).toEqual([7, 8, 9]);
+    // 不写死 7/8/9：工位数量会随场景增减（v9s.63 加了鱼人滩），
+    // 这里要断言的是「紧跟普通假人之后、连续」，不是某个具体数字。
+    const base = w.config.dummies.count;
+    expect(fighters.map((s) => s.id)).toEqual([base + 1, base + 2, base + 3]);
     expect(fighters.map((s) => s.weapon)).toEqual(['sword-shield', 'dual-swords', 'greatsword']);
     expect(fighters.map((s) => s.mode)).toEqual(['spar', 'spar', 'spar']);
     // combat 时间轴已装配好，且武器与 weapon 字段一致

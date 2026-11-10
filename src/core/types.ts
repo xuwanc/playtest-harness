@@ -204,6 +204,10 @@ export type PlotDummyDef = {
   fighter?: boolean;
   /** 陪练武器（省略则用 `core.dummies.fighters.weapons` 轮转） */
   weapon?: WeaponId;
+  /** v9s.63：造型变体（缺省 human）。只影响表现层骨架，不影响碰撞 / AI / 血量。 */
+  variant?: DummyVariant;
+  /** v9s.63：该假人单独的血量（省略则用 `core.dummies.health`，0 = 打不死的测试桩） */
+  health?: number;
 };
 
 /** 单个地块的声明（对应 `config/plots/*.json` 一个文件）。 */
@@ -338,6 +342,10 @@ export type PlotDummySpawn = {
   mode?: string;
   fighter?: boolean;
   weapon?: WeaponId;
+  /** v9s.63：造型变体，透传到 `DummySpawn.variant` */
+  variant?: DummyVariant;
+  /** v9s.63：单只血量覆盖，透传到 `DummySpawn.health` */
+  health?: number;
 };
 
 export type PlotAssembly = {
@@ -1830,7 +1838,23 @@ export const FIGHTER_MODES: DummyMode[] = [
   'spar', 'wander', 'follow', 'keep-distance', 'attack', 'idle',
 ];
 
-export type DummySpawn = { x: number; z: number };
+/**
+ * v9s.63 · 假人造型变体。
+ *
+ * `human` = 原来的三头身体素人；`murloc` = 鱼人（大头钝吻、凸眼、背鳍、蹼手蹼脚）。
+ * **只换几何，不换骨架** —— 步态、受击、断肢、倒地物理全部复用，所以鱼人天生
+ * 会走会倒、断头时整颗鱼头掉下来。造型在 `presentation/murloc-parts.ts`。
+ */
+export type DummyVariant = 'human' | 'murloc';
+
+export type DummySpawn = {
+  x: number;
+  z: number;
+  /** v9s.63：造型变体，缺省 human */
+  variant?: DummyVariant;
+  /** v9s.63：单只假人的血量覆盖，缺省沿用 `dummies.health` */
+  health?: number;
+};
 
 /**
  * v9s.38 · 持械陪练角色配置（混战调试用）。
@@ -2443,6 +2467,13 @@ export type CharacterStyle = {
   beardColor?: string;
   /** v9s.53 肩甲：每侧一块方块盖住肩关节，补足「窄肩 + 细臂」接头的单薄。 */
   spaulder?: boolean;
+  /**
+   * v9s.63 鱼人造型：换掉头 / 手 / 脚，并在背上加排鳍、胯后加短尾。
+   *
+   * 只换几何，不动骨架 —— 骨骼层级、IK、步态、挥击、断肢映射、倒地物理全部复用，
+   * 所以鱼人天生会跑、会砍、会掉头、会侧倒。造型代码在 `presentation/murloc-parts.ts`。
+   */
+  murloc?: boolean;
   /** v9s.54 静止呼吸：几乎站定时躯干厚度 ±2%，幅度再大就成「喘」。 */
   breath?: boolean;
 };

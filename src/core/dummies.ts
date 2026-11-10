@@ -107,7 +107,9 @@ export function createDummies(cfg: DummyConfig): DummyState[] {
   for (let i = 0; i < cfg.count; i++) {
     const home = cfg.spawn[i] ?? { x: 0, z: 0 };
     const mode = cfg.initialModes[i] ?? 'idle';
-    list.push(createDummyState(i + 1, mode, home.x, home.z, null, 0, baseHp));
+    // v9s.63：单只假人可以自带血量（鱼人这种「有血条的杂兵」需要，否则打不死看不到断肢）
+    const hp = Math.max(0, cfg.spawn[i]?.health ?? baseHp);
+    list.push(createDummyState(i + 1, mode, home.x, home.z, null, 0, hp));
   }
   // v9s.38：持械陪练追加在后面（id 连续）。它们不是另一套实体 —— 就是带武器的假人，
   // 所以点击轮转 / 威胁环 / 受击 / 击退 / 插值全部沿用同一份机制。
