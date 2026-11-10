@@ -3,7 +3,20 @@
 > 约定：每批改动完成并发布后更新本文件，同时在交付说明里给出本轮结论。
 > 只记录**结构性问题**与**可执行建议**，不写「以后再说」的愿望清单。
 
-## 当前活跃风险（v9s.60 更新）
+## 当前活跃风险（v9s.61 更新）
+
+### 沙盒里 `git fetch` 会卡死在 HTTP/2（v9s.61）
+
+现象：`git fetch origin --prune` 稳定卡 134 秒后报
+`Failed to connect to github.com port 443`，但 `git ls-remote` / `git push` 都正常。
+本方连续三次 `npm run feat:finish` 都死在第一步 fetch，看起来像网络抖动，实际是
+https 传输的 HTTP/2 多路复用在这个出口被中断 —— 单次请求（ls-remote）不受影响，
+只有 multiplexed 的长连接会挂。
+
+处置：`git config http.version HTTP/1.1`（只写 `.git/config`，不入库），
+之后 finish 一次跑通（领号 → build → golden → verify → PR #8 → 合并 → 发布）。
+
+**别反复重跑**：症状和「网络抖一下」完全一样，但每次都会固定耗掉 134 秒。
 
 ### 「表现层采样、Core 下一帧消费」的差一帧，会吃掉整批命中（v9s.60）
 
