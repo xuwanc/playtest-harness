@@ -15,7 +15,11 @@ import { createDebugPanel } from './presentation/debug-panel';
 import type { DebugState } from './presentation/debug-panel';
 import { createLabPanel } from './presentation/lab-panel';
 import { createMotionDebug } from './presentation/motion-debug';
-import { createHud } from './presentation/hud';
+import { createHud, hudDebug } from './presentation/hud';
+import { createButtonStatusView } from './presentation/button-status';
+import { createPerfMeter } from './presentation/perf-meter';
+import { SHAKE_PRESETS } from './presentation/shake';
+import { describeSkillIndicators } from './presentation/skill-indicator';
 import { createPanelRow } from './presentation/overlay-fold';
 import { createSceneView } from './presentation/three-scene';
 import { createTelemetryPanel } from './presentation/telemetry-panel';
@@ -52,7 +56,8 @@ const EMPTY_FRAME: InputFrame = {
 export function startApp(): void {
   const container = document.getElementById('app');
   const hudEl = document.getElementById('hud');
-  if (!container || !hudEl) throw new Error('缺少 #app / #hud 容器');
+  const perfEl = document.getElementById('perf-meter');
+  if (!container || !hudEl || !perfEl) throw new Error('缺少 #app / #hud / #perf-meter 容器');
 
   // 组装层是唯一同时认识 Core 与 Web 的地方；换平台时只重写这一层。
   const world = createWorld(CORE_CONFIG, SCENE_CONFIG);
@@ -61,6 +66,12 @@ export function startApp(): void {
   );
   const clock = createClock(world);
   const hud = createHud(hudEl);
+  // v9s.x：常驻性能条（帧率 / 帧时间 / 慢帧 / sparkline）。独立于 HUD 折叠，
+  // 任何面板收起时都能看到是否掉帧；纯观测，不进 Core / 快照。
+  const perfMeter = createPerfMeter(perfEl);
+  // v9s.x：操作按钮状态层（冷却 / 蓄力 / 引导 / 冲刺 / 空中）。只读 World，
+  // 每帧按需写 DOM，不碰 Core 确定性。
+  const buttonStatus = createButtonStatusView();
   // v9r：状态 / 手感 / 调试收成一排胶囊，默认全部收起；v9s：点画布不再自动收起，
   //      展开后持续显示，方便边移动边看读数 / 速度曲线
   const fold = createPanelRow(hudEl);
@@ -345,6 +356,30 @@ export function startApp(): void {
       revive: d.health.revive,
       kills: d.health.kills,
     })),
+    /** v9s.x：操作按钮状态读数（冷却 / 蓄力 / 引导 / 冲刺 / 空中），验收按钮状态层直接读这里。 */
+    buttonStatus: () => buttonStatus.update(world),
+    /** v9s.x：常驻性能条读数（窗口 FPS / 帧时 / 慢帧 / 尖峰 / 固定步数），验收掉帧判定直接读这里。 */
+    perfDebug: () => perfMeter.snapshot(),
+    /** v9s.x：状态面板累计 DOM 写入数，验收「静止帧不写 DOM / 分区不掉帧」。 */
+    hudDebug: () => hudDebug(),
+    /** v9s.x：技能指示器读数（范围 / 形状 / 瞄准方向），验收数据驱动自动适配直接读这里。 */
+    skillIndicatorDebug: () => view.skillIndicatorDebug(),
+    /** v9s.x：指示器进出过渡系数（淡入 / 淡出），验收显示过渡直接读这里。 */
+    skillIndicatorFade: () => view.skillIndicatorFade(),
+    /** v9s.x：即时派生技能指示器描述（不依赖渲染帧），验收数据驱动自动适配。 */
+    skillIndicatorDescribe: (aimX?: number, aimZ?: number) =>
+      describeSkillIndicators(
+        world,
+        aimX !== undefined && aimZ !== undefined ? { x: aimX, z: aimZ } : undefined,
+      ),
+    /** v9s.x：震屏档位 / 预设表读数，验收「按击中类型分档 + 低频主导」直接读这里。 */
+    shakeDebug: () => {
+      const cam = view.diagnostics().camera;
+      return {
+        shake: cam.shake, kind: cam.shakeKind, preset: cam.shakePreset,
+        presets: SHAKE_PRESETS,
+      };
+    },
     /**
      * v9s.x：可破坏物件读数。cuts 给每个已断物件的断面高度 / 倾角 / 法线 / 翻倒角，
      * 验收「高处打从高处断、切口朝攻击方向」直接读这里。
@@ -623,6 +658,7 @@ export function startApp(): void {
     });
     if (steps > 0) pendingDummyClick = 0;
     recorder.sample(world, lastFrame, dt * 1000, steps);
+    perfMeter.update(dt * 1000, steps);
     for (const g of lastFrame.gestures) recorder.gesture(g);
     if (now - lastDiagTick > 250) {
       lastDiagTick = now;
@@ -630,7 +666,12 @@ export function startApp(): void {
     }
 
     syncWeaponButtons(world.combat.weapon);
-    if (!clipHold) view.render(pickRenderWorld(dt), dt);
+    buttonStatus.update(world);
+    // v9s.x：拖拽瞄准方向喂给技能指示器（纯表现，不进 Intents 的确定性路径之外）
+    const aimDir = lastFrame.intents.aimActive
+      ? { x: lastFrame.intents.aimX, z: lastFrame.intents.aimZ }
+      : undefined;
+    if (!clipHold) view.render(pickRenderWorld(dt), dt, aimDir);
     lab.tick();
     motionDebug.update(world, lastFrame, view.getGroundBasis());
     const diag = view.diagnostics();

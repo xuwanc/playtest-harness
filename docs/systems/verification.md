@@ -1,6 +1,7 @@
 # 验收：自动 / 量化 / 移植
 
-> 最后更新：2026-11-08（v9s.38）。
+> 正文写于 v9s.38（2026-11-08）；表格里的文件数 / 用例数 / smoke 项数于 2026-11-10
+> 由 `npm run docs:facts:fix` 现场采集同步，**不要再手写**，`npm run verify` 会校验。
 > 一条命令：`npm run verify`（build → 全量单测 → `verify:portable` → `smoke`，任一失败即停）。
 > 手动步骤见 [`../checklists/manual-acceptance.md`](../checklists/manual-acceptance.md)。
 
@@ -11,10 +12,10 @@
 | 命令 | 验证什么 | 期望 |
 |---|---|---|
 | `npm run build` | TypeScript strict 全量类型检查 + Vite 生产构建 | `tsc --noEmit` 无 error，产出 `dist/` |
-| `npm test` | 全量单测 | **88 文件 / 876 例全绿** |
+| `npm test` | 全量单测 | **118 文件 / 1210 例全绿** |
 | `npm run test:affected` | 按 `git diff` 的 import 闭包只跑相关用例（v9s.33） | 输出命中数 / 总数，必要时自动退回全量 |
-| `npm run verify:portable` | Core 在纯 Node 无头跑 600 步 + 边界守卫（**25 个文件**） | `[boundary] PASS` |
-| `npm run smoke` | 真实浏览器跑 `dist/`：16 项画面层 + 契约断言 | **16/16**，退出码 0 |
+| `npm run verify:portable` | Core 在纯 Node 无头跑 600 步 + 边界守卫（**31 个文件**） | `[boundary] PASS` |
+| `npm run smoke` | 真实浏览器跑 `dist/`：70 项画面层 + 契约断言 | **70/70**，退出码 0 |
 | `npm run docs:check` | 文档规范：README 行数 / INDEX 链接 / 单文件 300 行 | 0 error |
 
 覆盖范围（细节在各系统文档，不在这里堆用例名）：
@@ -81,7 +82,7 @@
 ## D. 移植验收（P3：证明「核心真的可移植」）
 
 1. `npm run verify:portable` 通过 → Core 在**无 DOM、无 WebGL、无 Vite** 的纯 Node 里跑完 600 步。
-2. `scripts/check-boundary.mjs` 通过 → Core 目录（**25 个文件**，v9a 新增 `links.ts`）内不存在 `three` / `lil-gui` / DOM 全局 / `Math.random` / 外部时间源 / `class` / `enum` / 上层相对依赖。
+2. `scripts/check-boundary.mjs` 通过 → Core 目录（**31 个文件**，v9a 新增 `links.ts`）内不存在 `three` / `lil-gui` / DOM 全局 / `Math.random` / 外部时间源 / `class` / `enum` / 上层相对依赖。
 3. 对照下方《Core 契约规格表》，在 Unity / Godot 里逐函数重写；把同一串 `Intents` 序列喂进去，比对状态哈希与 `tests/__snapshots__` 的黄金基线。
 4. `config/game.json` 的 `core`（含 `orientation / combat / targeting / hits / separation / dash / dummies`）段可直接导成 ScriptableObject / Resource，数值 100% 复用。
 

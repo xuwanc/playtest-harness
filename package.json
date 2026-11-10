@@ -1,7 +1,7 @@
 {
   "name": "playtest-harness",
   "private": true,
-  "version": "0.9.84",
+  "version": "0.9.85",
   "type": "module",
   "description": "可移植核心的 3D 玩法实验台：碰撞白盒场景 + 体素角色 + 2.5D 平滑跟随相机 + 隐形摇杆",
   "scripts": {
@@ -26,7 +26,9 @@
     "feat:finish": "python3.11 tools/agent-sync.py finish",
     "feat:status": "python3.11 tools/agent-sync.py status",
     "sweep": "python3 tools/sweep_sample.py",
-    "docs:check": "node scripts/check-docs.mjs",
+    "docs:check": "node scripts/check-docs.mjs && node scripts/check-facts.mjs",
+    "docs:facts": "node scripts/check-facts.mjs",
+    "docs:facts:fix": "node scripts/check-facts.mjs --fix",
     "feat:prune": "python3.11 tools/agent-sync.py prune"
   },
   "dependencies": {

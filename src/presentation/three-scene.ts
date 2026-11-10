@@ -46,6 +46,9 @@ import type { GrassDebug } from './grass-layer';
 import { createDestructibleLayer } from './destructible-layer';
 import type { BladePair, DestructibleDebug } from './destructible-layer';
 import { FX_ORDER, setFxOrder } from './fx-layer';
+import { classifyImpact, impactTrauma } from './shake';
+import { createSkillIndicatorView } from './skill-indicator';
+import type { AimHint, SkillIndicatorSpec } from './skill-indicator';
 import type { HurtPose } from './hurt-pose';
 import { emptyHurtPose } from './hurt-pose';
 
@@ -77,7 +80,8 @@ function isMobileWebView(): boolean {
 }
 
 export type SceneView = {
-  render(world: World, frameDt: number): void;
+  /** aim：可选的拖拽瞄准方向（世界 XZ），驱动技能指示器的指向 */
+  render(world: World, frameDt: number, aim?: AimHint): void;
   resize(): void;
   getGroundBasis(): GroundBasis;
   setCollidersVisible(v: boolean): void;
@@ -234,6 +238,9 @@ export type SceneView = {
       zoom: number;
       /** v9s.31：镜头震动能量 0..1（关键帧事件 / 命中共用），用于验收 notify 是否真的被消费 */
       shake: number;
+      /** v9s.x：当前震动档位 / 波形参数，验收「按击中类型分档」直接读这里 */
+      shakeKind: string;
+      shakePreset: { amplitude: number; decay: number; freq: number; power: number };
       /** v9s.33：方向性微推能量 0..1（命中方向） */
       kick: number;
     };
@@ -244,6 +251,10 @@ export type SceneView = {
   setLabLabelsVisible(v: boolean): void;
   /** v9s.22：挥击拖尾读数（采样点数 / 是否可见），供验收与调试面板 */
   trailDebug(): { count: number; visible: boolean; pulse?: number };
+  /** v9s.x：技能脚底指示器描述（范围 / 形状 / 朝向），验收「数据驱动自动适配」直接读这里。 */
+  skillIndicatorDebug(): SkillIndicatorSpec[];
+  /** v9s.x：指示器进出过渡系数，验收「淡入 / 淡出」直接读这里。 */
+  skillIndicatorFade(): { id: string; alpha: number }[];
   /** v9s.22：角色本帧四肢形变读数（1 = 原长） */
   stretchDebug(): { arm: number; leg: number; torso: number; impact: number };
   /** v9s.24：腕部滞后读数（武器相对手的自由度），验收「剑不再焊在手上」 */
@@ -370,6 +381,8 @@ export function createSceneView(
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#12161d');
+  // v9s.x：技能脚底指示器（范围 + 瞄准方向），形状 / 半径全部由技能数据派生
+  const skillIndicator = createSkillIndicatorView(scene);
 
   scene.add(new THREE.HemisphereLight(0xa8c8ee, 0x2a2f38, 1.15));
   // v9s.49：底板拼合后不再是 32×32，阴影相机跟着包围盒走 —— 否则地图远端没有影子。
@@ -1260,6 +1273,8 @@ export function createSceneView(
 
     if (h.dead) {
       if (!st.dead) {
+        // 刚倒下那一下：镜头轻震 + 在读数量里留个标记（fatal 血花由 Core 的 hitMark 驱动）
+        cam.addShake(0.42, 'death');
         // 死亡瞬间：按最后一击的方向定倒向；没有断肢记录时退回受击方向
         const sev = h.sever;
         let dx = sev ? sev.dx : s.hurt.dirX;
@@ -1396,6 +1411,12 @@ export function createSceneView(
         legTakeover: 0, phase: 0, dirF: 0, dirR: 0, hipYawTarget: 0, spin: 0,
       };
     },
+    skillIndicatorDebug() {
+      return skillIndicator.debug();
+    },
+    skillIndicatorFade() {
+      return skillIndicator.fadeDebug();
+    },
     trailDebug() {
       return playerTrail.debug();
     },
@@ -1510,13 +1531,16 @@ export function createSceneView(
     gripDebug() {
       return hero.gripDebug?.() ?? { active: false, dist: 0, gy: 0, pitch: 0, joint: 0, grip: 0 };
     },
-    render(w, frameDt): void {
+    render(w, frameDt, aim): void {
       // WebGL 上下文丢失期间跳过渲染：避免向已死的上下文发指令导致 webview 假死。
       if (contextLost) return;
       // v9s.43：测试按钮会动态增减 world.dummies，先对齐渲染对象容量再画。
       syncDummyCapacity(w);
       const c = w.character;
       const cb = w.combat;
+
+      // v9s.x：技能脚底指示器 —— 每帧只读 World 派生范围 / 瞄准方向，纯表现层
+      skillIndicator.update(w, aim, frameDt);
 
       // 卡肉完全由 Core 计时：这里只读状态，不再自建冻结时长（两边计时不一致会互相打架）。
       const stopping = view.hitstop.enabled && w.combat.hitstop > 0;
@@ -1530,7 +1554,9 @@ export function createSceneView(
         // 这里直接用时长反推震感 —— 停得越久，震得越重，两个通道天然同步。
         const dur = Math.max(0, w.combat.hitstop);
         const tier = Math.max(0, Math.min(1, dur / 0.1));   // 45ms ≈ 0.45、100ms = 1
-        cam.addShake(0.34 + tier * 0.48);
+        // v9s.x：按「受击类型 × 武器 × 连击段」分档 —— 轻击短促、重击低频长余震，
+        // 不再是所有命中同一个高频正弦（旧版「震得太碎 / 像掉帧」的根因）。
+        cam.addShake(impactTrauma(tier), classifyImpact(w, tier));
         // 方向性微推：从玩家指向受击者。取本帧第一条 hit 事件（同一帧多目标时取首个）。
         let hit: { x: number; z: number } | null = null;
         for (let i = 0; i < w.events.length; i++) {
@@ -1749,7 +1775,7 @@ export function createSceneView(
 
       // 一次性贴地光环（冲刺尘环 / 派生招 / 击地冲击）：触发读 Core 的持久 id，
       // 池化与生命周期在 scene-burst-fx 内推进；shake 回调只用于击地那一下的镜头下压。
-      burstFx.update(w, frameDt, (amount) => cam.addShake(amount));
+      burstFx.update(w, frameDt, (amount) => cam.addShake(amount, 'slam'));
       // 飙血用真实帧时长：卡肉只冻结角色姿态，血已经溅出去了，跟着冻反而读作「时间停了」
       bloodFx.update(w, frameDt);
       // 血条跟着相机投影，用同一帧相机（渲染前更新，避免比画面晚一帧）
@@ -2004,6 +2030,9 @@ export function createSceneView(
         zoom: number;
         /** v9s.31：镜头震动能量 0..1（关键帧事件 / 命中共用） */
         shake: number;
+        /** v9s.x：当前震动档位 / 波形参数，验收「按击中类型分档」直接读这里 */
+        shakeKind: string;
+        shakePreset: { amplitude: number; decay: number; freq: number; power: number };
         /** v9s.33：方向性微推能量 0..1（命中方向） */
         kick: number;
         /** v9s.33：累计触发的微推次数（确认命中上升沿确实调到了 addKick） */
@@ -2048,12 +2077,15 @@ export function createSceneView(
           threatCount: world.camera.threatCount,
           ...cam.smart(),
           shake: cam.shakeLevel(),
+          shakeKind: cam.shakeKind(),
+          shakePreset: cam.shakePreset(),
           kick: cam.kickLevel(),
           kickCount: cam.kickCount(),
         },
       };
     },
     dispose(): void {
+      skillIndicator.dispose();
       hero.dispose();
       lab.dispose();
       grassLayer.dispose();

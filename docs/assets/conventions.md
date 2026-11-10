@@ -48,7 +48,7 @@
 | `tools/clip-lab/` | 动作剪辑验证台（定格 / 扫角度 / 自动判定） |
 | `tools/v9s38-shot.py` | v9s.38 的 5 张验收截图脚本（特效层级 / 陪练） |
 | `tools/v9s39-shot.py` | v9s.39：混战全景 + 同一轮连击的第 1/2/3 段 |
-| `tools/sweep.py` | 刃身扫掠采样，写回 `config.hitSweep.pts` |
+| `tools/sweep_sample.py` | 刃身扫掠采样，写回 `config.hitSweep.pts` |
 | `scripts/check-boundary.mjs` | Core 可移植边界守卫 |
 | `scripts/check-docs.mjs` | 文档规范守卫（README 行数 / INDEX 链接 / 单文件 300 行） |
 
