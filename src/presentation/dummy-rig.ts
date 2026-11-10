@@ -15,7 +15,7 @@ import type {
   HurtViewConfig, IKViewConfig, LeanViewConfig, VoxelConfig,
 } from '../core';
 import {
-  buildMurlocBelly, buildMurlocDorsalFin, buildMurlocFoot, buildMurlocHead,
+  buildMurlocBelly, buildMurlocDorsalFin, buildMurlocFoot, buildMurlocHead, buildMurlocHip,
   buildMurlocShoulderFin, buildMurlocTail, MURLOC_HEAD_SPIN, MURLOC_POSTURE,
 } from './murloc-parts';
 import {
@@ -130,6 +130,10 @@ export function createDummyRig(
   const torso = mk(bodyW, bodyH, 0.28, murloc ? mc.body : tint);
   torso.position.y = bodyH / 2;                 // 相对骨盆
   upper.add(torso);
+
+  // v9s.70：髋块（只鱼人有）。假人没有脊柱分段，`upper` 直接就吃满 55° 体态，
+  // 骨盆与躯干之间那道楔形缝比主角更宽 —— 补一块跟着吃 45% 的块把背面堵上。
+  const hipMesh = murloc ? buildMurlocHip(pelvis, H, bodyW, 0.28, mc) : null;
 
   // 头部独立枢轴：绕脖子旋转，实现「头先于身体转向目标」（与主角一致，v7b#9）
   const headPivot = new THREE.Group();
@@ -724,6 +728,12 @@ export function createDummyRig(
           pitchInModelSpace(armL.root, root, -back);
           pitchInModelSpace(armR.root, root, -back);
         }
+      }
+
+      // v9s.70：髋块分担一部分躯干俯仰（与主角同一个旋钮）。放在体态块之外，
+      // 受击 / 挥砍写进 `upper` 的俯仰也一起分掉 —— 否则挨打时髋块会僵在原地。
+      if (hipMesh) {
+        hipMesh.rotation.x = upper.rotation.x * clamp(posture?.hipShare ?? 0.45, 0, 1);
       }
 
       // 受击僵直时压过挥砍姿态：后仰 + 红闪优先，攻击弧隐藏

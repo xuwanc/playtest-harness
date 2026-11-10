@@ -54,14 +54,20 @@ describe('v9s.33 脊柱分段', () => {
       off.rig.update(off.w.character, off.w.combat, off.w.playerHurt, off.w.config.fixedDt, false);
       const upper = on.rig.group.getObjectByName('upper')!;
       const chest = on.rig.group.getObjectByName('chest')!;
+      const lower = on.rig.group.getObjectByName('lower')!;
       const total = upper.rotation.y + chest.rotation.y;
-      // v9s.66：偏航不再整块按 42/58 摊 —— 「胸随下盘带转」那一份单独分账（默认胸 70%），
-      // 否则 40° 下盘偏转时胸只转 10°，看起来「胸根本没动」而腿根转满。
-      // 剩下不属于 chestYaw 的偏航（攻击旋身 / 站姿）仍走 spine.waist/chest。
-      const cy = on.rig.gaitDebug().chestYaw;
-      const share = raw.view.animation.spine!.yawChest ?? 0.7;
-      expect(chest.rotation.y).toBeCloseTo((total - cy) * 0.42 + cy * share, 5);
-      expect(upper.rotation.y).toBeCloseTo((total - cy) * 0.58 + cy * (1 - share), 5);
+      // v9s.69：偏航沿链「髋 → 腰 → 胸」**单调**过渡，腰段锚在髋上。
+      // v9s.66 那版让腰段从 0 起算（总角 × 0.58），下盘一转链上就是 40° → 7° → 24°，
+      // 先减后增 —— 画面读作「腿根转了、腰没转、胸又转了」。锚在髋上之后恒为单调。
+      const hipYaw = lower.rotation.y;
+      const b = raw.view.animation.spine!.chainBlend ?? 0.58;
+      expect(upper.rotation.y).toBeCloseTo(hipYaw + (total - hipYaw) * b, 5);
+      expect(chest.rotation.y).toBeCloseTo(total - upper.rotation.y, 5);
+      // 腰段必须落在髋与胸之间（这就是「连续」的可测形式）
+      const lo = Math.min(hipYaw, total);
+      const hi = Math.max(hipYaw, total);
+      expect(upper.rotation.y).toBeGreaterThanOrEqual(lo - 1e-9);
+      expect(upper.rotation.y).toBeLessThanOrEqual(hi + 1e-9);
       // 总角与旧骨架（无拆分）逐帧一致 —— 分账只改「谁吃」，不改「吃多少」。
       const oldUpper = off.rig.group.getObjectByName('upper')!;
       expect(total).toBeCloseTo(oldUpper.rotation.y, 6);
