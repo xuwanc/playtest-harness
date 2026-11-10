@@ -855,9 +855,17 @@
         "offset": 0.55
       },
       "fighters": {
-        "weapons": ["sword-shield", "dual-swords", "greatsword"],
+        "weapons": [
+          "sword-shield",
+          "dual-swords",
+          "greatsword"
+        ],
         "spawn": [],
-        "initialModes": ["spar", "spar", "spar"],
+        "initialModes": [
+          "spar",
+          "spar",
+          "spar"
+        ],
         "moveSpeed": 2.1,
         "attackInterval": 3.4,
         "attackRangeScale": 0.9,
@@ -888,8 +896,15 @@
         "speed": 1.35,
         "amplitude": 0.19,
         "wavelength": 4.2,
-        "secondWave": { "wavelength": 1.7, "amplitude": 0.055, "speedScale": 1.55 },
-        "gust": { "periodSec": 7.5, "depth": 0.35 },
+        "secondWave": {
+          "wavelength": 1.7,
+          "amplitude": 0.055,
+          "speedScale": 1.55
+        },
+        "gust": {
+          "periodSec": 7.5,
+          "depth": 0.35
+        },
         "jitter": 0.16,
         "shadeAmount": 0.26
       }
@@ -916,7 +931,10 @@
       "minCellZ": 0,
       "maxCellZ": 0,
       "density": 0.72,
-      "bladesPerPatch": [3, 6],
+      "bladesPerPatch": [
+        3,
+        6
+      ],
       "avoidMargin": 0.45,
       "seed": 20261108
     }
@@ -1032,7 +1050,7 @@
         "radius": 0.38,
         "moveSpeed": 3.1,
         "voxel": {
-          "headSize": 0.40,
+          "headSize": 0.4,
           "bodyWidth": 0.52,
           "bodyHeight": 0.42,
           "limbThickness": 0.14,
@@ -1040,7 +1058,10 @@
           "armLength": 0.56,
           "style": {
             "sentinel": true,
-            "posture": { "pitch": 0.14, "headLift": 0.6 }
+            "posture": {
+              "pitch": 0.14,
+              "headLift": 0.6
+            }
           }
         },
         "colors": {
@@ -1950,7 +1971,7 @@
       "greatswordPitchDeg": 58,
       "greatswordYawDeg": 10,
       "staffPitchDeg": 16,
-      "shieldPitchDeg": 8,
+      "shieldPitchDeg": 70,
       "bowPitchDeg": 6,
       "twoHandInsetX": 0.15,
       "twoHandGripY": -0.1,
@@ -2138,9 +2159,21 @@
       ],
       "attackArcColor": "#ff6b5e",
       "fighterColors": [
-        { "body": "#c85a4a", "limb": "#8d3a30", "head": "#f0c9a0" },
-        { "body": "#c9a03c", "limb": "#8a6b22", "head": "#f0d6a0" },
-        { "body": "#7d6ec4", "limb": "#4f4488", "head": "#e6d2b0" }
+        {
+          "body": "#c85a4a",
+          "limb": "#8d3a30",
+          "head": "#f0c9a0"
+        },
+        {
+          "body": "#c9a03c",
+          "limb": "#8a6b22",
+          "head": "#f0d6a0"
+        },
+        {
+          "body": "#7d6ec4",
+          "limb": "#4f4488",
+          "head": "#e6d2b0"
+        }
       ],
       "death": {
         "fallSec": 0.42,
@@ -2234,10 +2267,20 @@
       "enabled": true,
       "bladeWidth": 0.13,
       "segmentHeight": 0.5,
-      "palette": ["#3f7d4f", "#569a5c", "#6fb56a", "#8ccb78", "#a9dc86"],
+      "palette": [
+        "#3f7d4f",
+        "#569a5c",
+        "#6fb56a",
+        "#8ccb78",
+        "#a9dc86"
+      ],
       "stumpColor": "#6b7a48",
       "maxInstances": 6000,
-      "debris": { "max": 220, "life": 0.85, "color": "#a9dc86" }
+      "debris": {
+        "max": 220,
+        "life": 0.85,
+        "color": "#a9dc86"
+      }
     }
   }
 }
