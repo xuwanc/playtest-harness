@@ -14,7 +14,7 @@
  */
 
 import * as THREE from 'three';
-import { cutBoxHeights, MIN_STAND } from '../core';
+import { CACTUS_VIS_RATIO, cactusArmBoxes, clipArmBox, cutBoxHeights, MIN_STAND } from '../core';
 import type { BreakHit, DestructibleState } from '../core';
 
 /** 刀刃与物件的相交容差（米）。 */
@@ -245,7 +245,7 @@ function buildCactusStanding(
   const N = 4;
   const segH = standH / N;
   // 视觉半径略小于碰撞半径（碰撞盒按 R 建）：柱身太粗就读成「绿柱子」，不是仙人掌
-  const VR = R * 0.82;
+  const VR = R * CACTUS_VIS_RATIO;
   // 只有被砍过才显示浅色斜切面；完整站立时顶端是同色的（仙人掌的顶是长出来的，不是切出来的）
   const cut = st.standU < 0.999;
 
@@ -283,41 +283,21 @@ function buildCactusStanding(
     group.add(crown);
   }
 
-  // 侧臂：伸出 → 上扬 → 方头。两段直角，不加过渡 —— 方块风格里直角反而干净。
+  // 侧臂：几何来自 Core 的 `cactusArmBoxes`（与断块 `Fragment.parts` 同一份），
+  // 再按断口高度裁剪 —— 砍掉的上半段随断块飞走，桩上只留断口以下那一截。
+  // 旧版这里自己写了一套尺寸，和断块差一倍；而且整条叉都画在桩上，
+  // 断口以上还长着一根完整的叉，读作「砍了没砍断」。
+  const topY = st.standU * st.height;
   for (const a of st.arms) {
-    if (a.atU > st.standU + 1e-4) continue;
     const baseY = a.atU * st.height;
-    const alongX = Math.abs(a.dx) > 0.5;
-    const thick = a.rad * 1.55;
-    const outLen = alongX ? a.outLen : thick;
-    const outDep = alongX ? thick : a.outLen;
-    const cx = a.dx * (VR + a.outLen / 2);
-    const cz = a.dz * (VR + a.outLen / 2);
-
-    const out = new THREE.Mesh(unit, bodyMat);
-    out.scale.set(outLen, thick, outDep);
-    out.position.set(cx, baseY, cz);
-    group.add(out);
-
-    // 上扬段：从伸出段末端往上，略细（真实萨瓜罗的手臂就是这么折的）
-    const up = new THREE.Mesh(unit, bodyMat);
-    up.scale.set(a.rad * 1.3, a.upLen, a.rad * 1.3);
-    up.position.set(
-      a.dx * (VR + a.outLen * 0.9),
-      baseY + a.upLen * 0.5,
-      a.dz * (VR + a.outLen * 0.9),
-    );
-    group.add(up);
-
-    // 方头：把上扬段顶端加宽一点，收住方角
-    const tip = new THREE.Mesh(unit, bodyMat);
-    tip.scale.set(a.rad * 1.15, a.rad * 1.15, a.rad * 1.15);
-    tip.position.set(
-      a.dx * (VR + a.outLen * 0.9),
-      baseY + a.upLen,
-      a.dz * (VR + a.outLen * 0.9),
-    );
-    group.add(tip);
+    for (const box of cactusArmBoxes(a, R)) {
+      const b = clipArmBox(box, baseY, 0, topY);
+      if (!b) continue;
+      const m = new THREE.Mesh(unit, bodyMat);
+      m.scale.set(b.hx * 2, b.hy * 2, b.hz * 2);
+      m.position.set(b.cx, baseY + b.cy, b.cz);
+      group.add(m);
+    }
   }
 }
 
@@ -351,8 +331,14 @@ function buildStanding(
   p.standingMesh = null;
   if (st.kind === 'pole' || st.kind === 'cactus') {
     if (st.kind === 'pole') {
+      // v9s.62：顶面高度必须跟 `standU` 走。旧版写死 `st.height`，砍掉几段后
+      // 桩还是整根 —— 现场就是「砍完还有一个柱子」，断块还插在桩里。
+      // 顺带给旗杆补上斜切面（`cutBoxHeights` 与仙人掌同一套，法线 = sn）。
       p.standingMesh = new THREE.Mesh(
-        boxPieceGeometry(st.radius, [st.height, st.height, st.height, st.height]),
+        boxPieceGeometry(
+          st.radius,
+          cutBoxHeights(st.radius, st.standU, st.height, st.snx, st.sny, st.snz),
+        ),
         [p.bodyMat, p.capMat],
       );
       p.standing.add(p.standingMesh);

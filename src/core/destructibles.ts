@@ -29,6 +29,11 @@ const DEG = Math.PI / 180;
 
 /** 站立段保留的最小相对高度：低于此不再砍，留一小截底座。 */
 export const MIN_STAND = 0.08;
+/**
+ * 仙人掌的**视觉半径比例**：碰撞与判定轴按 `radius`，造型按 `radius × 此值`。
+ * 柱身画得和碰撞一样粗，远看就读成「一根绿柱子」而不是仙人掌。
+ */
+export const CACTUS_VIS_RATIO = 0.82;
 /** 旧版单段翻倒角常量保留导出，单测仍引用；新物理已不依赖它。 */
 export const BREAK_FALL_TARGET = 1.47;
 
@@ -246,40 +251,87 @@ function makeCactusArms(height: number, radius: number, _seed: number): CactusAr
 }
 
 /**
- * 把「高于断口（atU > cutU）」的侧臂转成碎片上的视觉子盒（Fragment.parts）。
- * 每个侧臂 = 水平伸出盒 + 末端向上盒，坐标相对碎片中心（碎片未旋转盒系）。
- * 物理只算主盒，侧臂随碎片四元数一起翻滚，保证「断块带侧臂飞出」且可序列化。
+ * 侧臂的一段盒子：`cx/cy/cz` 相对「主干轴心 + 分支基点高度」，`h*` 是半长。
+ * 上升高度落在 `cy` 上，竖直裁剪只改 `cy` 与 `hy`。
+ */
+export type CactusArmBox = {
+  cx: number; cy: number; cz: number;
+  hx: number; hy: number; hz: number;
+};
+
+/**
+ * 侧臂的盒子分解：**伸出段 → 上扬段 → 方头**。
+ *
+ * v9s.62：站立造型与断块 `Fragment.parts` **共用这一份**。以前两边各写一套尺寸：
+ * 站立按 `full = outLen`，断块按 `half = outLen`（也就是画出来是站立的两倍大），
+ * 于是「砍下来的叉比长在上面的叉大一号」，玩家一眼就读出「掉下来的形状变了」。
+ * 顺带把「视觉半径 0.82R」也收进来，避免两边各减一次。
+ */
+export function cactusArmBoxes(a: CactusArm, radius: number): CactusArmBox[] {
+  const vr = radius * CACTUS_VIS_RATIO;
+  const alongX = Math.abs(a.dx) > 0.5;
+  const thick = a.rad * 1.55;   // 伸出段厚度（full）
+  const upT = a.rad * 1.3;      // 上扬段厚度（full）
+  const tipT = a.rad * 1.15;    // 方头边长（full）
+  const cxOut = a.dx * (vr + a.outLen / 2);
+  const czOut = a.dz * (vr + a.outLen / 2);
+  const cxUp = a.dx * (vr + a.outLen * 0.9);
+  const czUp = a.dz * (vr + a.outLen * 0.9);
+  return [
+    {
+      cx: cxOut, cy: 0, cz: czOut,
+      hx: (alongX ? a.outLen : thick) / 2, hy: thick / 2,
+      hz: (alongX ? thick : a.outLen) / 2,
+    },
+    { cx: cxUp, cy: a.upLen * 0.5, cz: czUp, hx: upT / 2, hy: a.upLen / 2, hz: upT / 2 },
+    { cx: cxUp, cy: a.upLen, cz: czUp, hx: tipT / 2, hy: tipT / 2, hz: tipT / 2 },
+  ];
+}
+
+/**
+ * 把侧臂盒按**世界高度区间** `[loY, hiY]` 竖直裁剪；完全落在区间外返回 null。
+ *
+ * 断口把一条侧臂切成两半：下半留在桩上（`[0, cutY]`），上半随断块飞走
+ * （`[cutY, 上次站立顶]`）。两边用同一个函数、同一套盒子，接缝才对得上。
+ */
+export function clipArmBox(
+  b: CactusArmBox, baseY: number, loY: number, hiY: number,
+): CactusArmBox | null {
+  const lo = Math.max(baseY + b.cy - b.hy, loY);
+  const hi = Math.min(baseY + b.cy + b.hy, hiY);
+  if (hi - lo <= 1e-4) return null;
+  return {
+    cx: b.cx, cy: (lo + hi) / 2 - baseY, cz: b.cz,
+    hx: b.hx, hy: (hi - lo) / 2, hz: b.hz,
+  };
+}
+
+/**
+ * 把「本次被切走那一段」里的侧臂转成断块的视觉子盒（`Fragment.parts`）。
+ *
+ * 判据是 **`cutU < atU ≤ prevStandU`**，不是旧的 `atU > cutU`：
+ * 旧判据在第二次砍更低位置时，会把**上一次已经随断块飞走**的侧臂再打包一次 ——
+ * 现场就是「砍下来的根再砍一刀，又掉出来一个叉」。
  */
 function armParts(
-  st: DestructibleState, arms: CactusArm[], cutU: number, cy: number,
+  st: DestructibleState, arms: CactusArm[], cutY: number, prevStandU: number, cy: number,
 ): Fragment['parts'] {
-  const parts: NonNullable<Fragment['parts']> = [];
+  const prevTopY = st.y + prevStandU * st.height;
+  const out: NonNullable<Fragment['parts']> = [];
   for (const a of arms) {
-    if (a.atU <= cutU) continue; // 低于断口的侧臂留在站立桩上
     const baseY = st.y + a.atU * st.height;
-    const alongX = Math.abs(a.dx) > 0.5;
-    // 水平伸出盒（half-extent 与站立侧臂一致；表现层会再 ×2 成 full 尺寸）
-    const hxOut = alongX ? a.outLen : a.rad;
-    const hzOut = alongX ? a.rad : a.outLen;
-    parts.push({
-      x: a.dx * (st.radius + a.outLen / 2),
-      y: baseY - cy,
-      z: a.dz * (st.radius + a.outLen / 2),
-      hx: hxOut,
-      hy: a.rad,
-      hz: hzOut,
-    });
-    // 末端向上盒
-    parts.push({
-      x: a.dx * (st.radius + a.outLen),
-      y: baseY + a.upLen / 2 - cy,
-      z: a.dz * (st.radius + a.outLen),
-      hx: a.rad,
-      hy: a.upLen,
-      hz: a.rad,
-    });
+    for (const box of cactusArmBoxes(a, st.radius)) {
+      const clipped = clipArmBox(box, baseY, cutY, prevTopY);
+      if (!clipped) continue;
+      out.push({
+        x: clipped.cx,
+        y: baseY + clipped.cy - cy,
+        z: clipped.cz,
+        hx: clipped.hx, hy: clipped.hy, hz: clipped.hz,
+      });
+    }
   }
-  return parts.length > 0 ? parts : undefined;
+  return out.length > 0 ? out : undefined;
 }
 
 /** 把一次砍断写入状态并发一条一次性 break 事件。 */
@@ -320,7 +372,9 @@ function severVertical(
   const dirx = hl > EPS ? dx / hl : 1;
   const dirz = hl > EPS ? dz / hl : 0;
 
-  const parts = st.kind === 'cactus' ? armParts(st, st.arms, cutU, cy) : undefined;
+  const parts = st.kind === 'cactus'
+    ? armParts(st, st.arms, cutY, st.standU, cy)
+    : undefined;
 
   const frag: Fragment = {
     x: st.x, y: cy, z: st.z,

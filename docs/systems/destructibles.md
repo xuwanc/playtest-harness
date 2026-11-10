@@ -251,12 +251,36 @@ maxY = (standU <= MIN_STAND || 坛子已碎) ? minY : y + standU * height
 `span` 保持 `[2, 2]` —— span 会影响 auto 布局的槽位分配，改大会把别的工位挤到
 假人测试位置上（v9s.60 第一次尝试 `[3,3]` 时 smoke 的踱步 / 命中测试就是被这个撞挂的）。
 
-## 12. 验证基线
+## 12. 侧臂几何只有一份真源（v9s.62）
+
+四条症状、两个根因，都不是「调参能救」的：
+
+| 症状 | 根因 | 修法 |
+|---|---|---|
+| 砍下来的叉比长在上面的大一号 | 站立写 `full = outLen`，断块 `Fragment.parts` 写 `half = outLen`（画出来正好 2 倍） | `cactusArmBoxes()` 成为唯一真源，两边都读它 |
+| 砍下来的**根**再砍一刀，又掉出一个叉 | `armParts` 判据是 `atU > cutU`，把上一次**已经随断块飞走**的臂再打包一次 | 判据改成 `cutU < atU ≤ prevStandU`（只打包本次切走的那一段） |
+| 断口以上还长着一根完整的叉 | 站立只判 `atU <= standU`，不看臂的**顶端** | `clipArmBox()` 按 `[0, topY]` 竖直裁剪 |
+| 旗杆砍完还剩一整根柱子 | 站立 mesh 高度**写死 `st.height`** | 改用 `cutBoxHeights(R, standU, H, sn)`，桩高与斜切面都跟着 `standU` |
+
+核心是**一条侧臂被断口切成两半**要有唯一定义：下半留桩 = `clipArmBox(box, baseY, 0, topY)`，
+上半随断块 = `clipArmBox(box, baseY, cutY, prevTopY)`。两边用同一个函数，接缝才严丝合缝；
+各自写一套必然错位。`CACTUS_VIS_RATIO`（0.82）也收进 Core —— 以前表现层乘一次、
+`armParts` 又按 1.0R 算，侧臂根部会凭空多出 0.06m 的缝。
+
+回归断言在 `tests/destructibles.test.ts`：
+
+| 断言 | 防的是 |
+|---|---|
+| 断块上每个侧臂盒与 `cactusArmBoxes` **逐个对上**（尺寸 + 世界位置） | 「掉下来样子变了」 |
+| 多段砍断后，同类侧臂盒在「桩 + 各断块」上的高度区间**两两不重叠** | 「同一个叉出现两次」 |
+| 「砍下来的根再砍」时，新断块 parts **不含已经飞走那一侧** | 「越砍越多叉」 |
+
+## 13. 验证基线
 
 | 命令 | 结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 1115 通过（含 destructibles 32 例 + 碰撞 5 例：断面数学 / 方盒顶角 / 多段砍断 / 坛子碎裂 / 刚体物理 / 玩家被挡 / 断完可通行） |
+| `npx vitest run` | 1116 通过（含 destructibles 33 例 + 碰撞 5 例：断面数学 / 方盒顶角 / 多段砍断 / 侧臂守恒 / 坛子碎裂 / 刚体物理 / 玩家被挡 / 断完可通行） |
 | `npm run verify:portable` | PASS（Core 无 three / DOM / 外部时间 / class） |
 | `npm run docs:check` | PASS |
 | `npm run smoke` | **53/53**，含「真机挥刀能打断」「打哪从哪断」「切口朝攻击方向」 |
