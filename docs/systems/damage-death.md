@@ -169,9 +169,60 @@ DOM 覆盖层（`presentation/healthbar-layer.ts`），不是 3D 精灵：
 
 读数：`__harness.healthBarDebug()` → `{ total, shown }`。
 
+## 九、断肢：最后一击决定断哪（v9s.60）
+
+判定在 Core，是**规则**不是特效 —— 要能写断言、要能随快照回放。纯函数
+`decideSever(type, u, dx, dz, bodyYaw, weapon)`，无随机：
+
+| 受击类型 | 高位（≥0.78） | 中位 | 低位 |
+|---|---|---|---|
+| `light` 轻击 | — | ≥0.52 断持械臂，否则**不断** | 不断 |
+| `heavy` 重击 | ≥0.80 断头 | ≥0.56 断臂 | 腰斩 |
+| `knock` 击飞 / 击地 | ≥0.78 断头 | ≥0.36 腰斩 | 断腿 |
+
+补充两条：
+
+1. **大剑 +0.06**：刃更长，同高度更容易够到高位（0.78 的重击只有大剑能劈头）。
+2. **左右由攻击方向的右向分量决定**：`side = dx·cos(yaw) − dz·sin(yaw)`
+   → 从另一侧砍断另一条腿，不是随机选。
+
+轻击只在手臂高度才断，是刻意的：匕首削手合理，一刀砍掉头不合理；而且每一刀都肢解
+很快就没有信息量了。
+
+**表现层只负责「哪一段消失、掉哪一块」**：把骨架上的对应节点 `clone()` 下来，
+`matrix` 直接搬 `matrixWorld`，`scene.attach` 到世界坐标做自由落体；原节点
+`visible = false`（不摘走 —— 摘走之后重生就得重建整套骨架）。重生时 `sever` 清空，
+节点恢复可见、残块移除。
+
+段名两条骨架一致：`headPivot` / `shoulderR` / `shoulderL` / `hipR` / `hipL` / `upper`
+（腰斩取 `upper` = 上半身连头带臂一起掉）。
+
+## 十、倒下是「倒杆」不是插值（v9s.60）
+
+旧版是 `fallSec` 上的固定 smoothstep：每个人、每次死都倒在同一角度、同一节奏，
+被大剑劈飞和蹭到一下就死看起来一模一样。
+
+现在按物理积分：
+
+```
+θ'' = gravity · sin θ − damping · θ'
+θ  ≥ fallDeg 时触地：θ = fallDeg，θ' = −θ' · bounce
+|θ'| < restVel 且 θ ≈ fallDeg → settled = true（物理彻底关掉）
+```
+
+死亡瞬间的初角速度按 `kickBase + kickGain × power` 给（越重倒得越快），倒向由
+最后一击的方向决定：绕水平轴 `(dz, 0, −dx)` 旋转 —— 这个轴不是身体局部 X，
+所以「从侧面砍」会往侧面倒，而不是永远往后倒。
+
+**到位后关掉**是硬要求：`settled` 之后不再积分，只保留四元数（避免躺在地上抖）。
+另有一条 `slide` 沿击打方向滑一小段（`slideDamp` 衰减），让「被打飞出去」读得出来。
+
+配置：`view.dummies.death.physics`（`gravity / damping / kickBase / kickGain /
+bounce / restVel / slide / slideDamp`）。`enabled: false` 时退回老的插值路径。
+
 ---
 
-## 九、验收
+## 十一、验收
 
 | 看什么 | 怎么量 |
 |---|---|
@@ -184,3 +235,5 @@ DOM 覆盖层（`presentation/healthbar-layer.ts`），不是 3D 精灵：
 | 血位跟招式走 | `__harness.world.hitMarks` 最后一条的 `u`：剑盾 0.60 / 大剑 0.35 / 击地 0.26 |
 | 尸体挡不挡路 | `tests/v9s57-death-polish.test.ts`「一路朝尸体走 3 秒也不会穿模」 |
 | 血条显不显示 | `__harness.healthBarDebug()`；`python3 tools/death-polish-shot.py`（7 张） |
+| 断肢判定 | `tests/v9s60-sever.test.ts`（9 例：规则表 / 大剑加成 / 左右 / 复活清空） |
+| 断肢 + 倒地物理 | `__harness.deathDebug(id)` → `sever / pieces / angle / settled / slide`；`python3 tools/sever-shot.py`（7 张：断臂 / 断头 / 腰斩 / 断腿 / 倒下中 / 躺平） |

@@ -1,4 +1,4 @@
-import { damageDummy, pushHitMark } from './health';
+import { damageDummy, decideSever, pushHitMark } from './health';
 import type { EventType, HitTarget, HurtState, HurtType, MeleeShape, Vec3, World } from './types';
 
 /** 一次命中结算的完整描述（近战与法杖技能共用）。 */
@@ -100,18 +100,24 @@ export function applyHit(world: World, target: HitTarget, spec: HitSpec): void {
   // 伤害点按「受击类型查表 × 当前武器倍率」，四条命中链路（近战 / 击地 / 派生招 / 远程）
   // 共用同一处，不会出现「箭能射死、刀不能」。
   const dmg = hitDamage(world, spec);
-  const fatal = damageDummy(world, s, dmg);
+  // v9s.57：部位按「显式指定 → 受击类型表 → 旧默认」三级取，再夹到 [0.05, 0.98]。
+  // 夹紧是因为表现层要拿它乘骨架身高再吸骨骼，u = 0 会落到脚底、u = 1 会出头顶。
+  const hh = world.config.hits.hitHeight;
+  const tableU = hh && spec.type !== 'none' ? hh[spec.type] : undefined;
+  const u = clamp(
+    spec.hitU ?? tableU ?? (spec.type === 'knock' ? 0.42 : 0.56),
+    0.05, 0.98,
+  );
+  const power = clamp(0.3 + dmg / 30, 0.3, 1.5);
+  // v9s.60：断肢判定只看「这一击是怎么打的」。非致命时 decideSever 的结果不会被用到
+  // （killDummy 才写 sever），所以这里不必先判断是否致命。
+  const severPart = decideSever(spec.type, u, spec.dirX, spec.dirZ, s.bodyYaw, world.combat.weapon);
+  const fatal = damageDummy(world, s, dmg, severPart
+    ? { part: severPart, u, dx: spec.dirX, dz: spec.dirZ, power }
+    : null);
   // v9s.56：只有「有血可流」的单位才记命中（maxHp = 0 的测试桩是被砍的木桩，
   // 喷血反而读错）。卡肉 / 命中计数 / 受击动画仍照旧 —— 所以不能在这里提前 return。
   if (s.health.maxHp > EPS) {
-    // v9s.57：部位按「显式指定 → 受击类型表 → 旧默认」三级取，再夹到 [0.05, 0.98]。
-    // 夹紧是因为表现层要拿它乘骨架身高再吸骨骼，u = 0 会落到脚底、u = 1 会出头顶。
-    const hh = world.config.hits.hitHeight;
-    const tableU = hh && spec.type !== 'none' ? hh[spec.type] : undefined;
-    const u = clamp(
-      spec.hitU ?? tableU ?? (spec.type === 'knock' ? 0.42 : 0.56),
-      0.05, 0.98,
-    );
     pushHitMark(world, {
       x: s.position.x,
       y: s.position.y + world.config.dummies.height * u,
@@ -119,7 +125,7 @@ export function applyHit(world: World, target: HitTarget, spec: HitSpec): void {
       u,
       dx: spec.dirX,
       dz: spec.dirZ,
-      power: clamp(0.3 + dmg / 30 + (fatal ? 0.35 : 0), 0.3, 1.5),
+      power: clamp(power + (fatal ? 0.35 : 0), 0.3, 1.5),
       id: s.id,
       fatal,
     });

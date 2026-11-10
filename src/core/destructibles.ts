@@ -1,7 +1,7 @@
 import { currentMeleeShape } from './hits';
 import { nextRandom } from './random';
 import type {
-  BreakHit, CactusArm, DestructibleSpec, DestructibleState, Fragment, Intents, World,
+  Box, BreakHit, CactusArm, DestructibleSpec, DestructibleState, Fragment, Intents, World,
 } from './types';
 import { stepRigid, type RigidBody } from './fragments';
 
@@ -461,6 +461,61 @@ export function resetDestructible(world: World, id: string): void {
   st.hitArmed = false;
 }
 
+/** v9s.60 · 站立段的碰撞盒 id 前缀（`world.boxes` 里用它反查）。 */
+export const DEST_BOX_PREFIX = 'dest-';
+
+/**
+ * v9s.60 · 可破坏物件的碰撞盒。
+ *
+ * 之前这些东西**没有任何碰撞**：玩家能直接从仙人掌 / 旗杆中间穿过去，
+ * 砍断之后也没有「东西没了、路通了」的反馈 —— 读起来像贴在场景上的贴纸。
+ *
+ * 用 `kind: 'obstacle'` 复用既有白盒：`resolveHorizontal` 只看 AABB，
+ * 不需要为可破坏物新增一套碰撞路径；断到只剩底座时把 `maxY` 压到地面，
+ * AABB 高度退化为 0，玩家自然就穿得过去了。
+ */
+export function destructibleColliders(
+  states: readonly DestructibleState[],
+): Box[] {
+  const out: Box[] = [];
+  for (const s of states) {
+    out.push({
+      id: `${DEST_BOX_PREFIX}${s.id}`,
+      kind: 'obstacle',
+      minX: s.x - s.radius,
+      maxX: s.x + s.radius,
+      minY: s.y,
+      maxY: s.y + s.height * (s.standU > 0 ? s.standU : 1),
+      minZ: s.z - s.radius,
+      maxZ: s.z + s.radius,
+    });
+  }
+  return out;
+}
+
+/**
+ * 每帧把碰撞盒顶面同步到当前站立段高度。
+ *
+ * 不重建 boxes：数组会被移动 / 相机 / 贴地特效用同一个引用读，
+ * 替换数组会让它们读到上一帧的旧引用。原地改 `maxY` 是零分配且安全的。
+ */
+export function syncDestructibleBoxes(world: World): void {
+  const list = world.destructibles;
+  if (!list || list.length === 0 || world.boxes.length === 0) return;
+  for (let i = 0; i < list.length; i++) {
+    const st = list[i];
+    const id = `${DEST_BOX_PREFIX}${st.id}`;
+    let box: Box | undefined;
+    for (let j = 0; j < world.boxes.length; j++) {
+      if (world.boxes[j].id === id) { box = world.boxes[j]; break; }
+    }
+    if (!box) continue;
+    // 断到只剩底座 / 坛子碎了 → 顶面压回地面：AABB 高度为 0，碰撞自动失效
+    const gone = st.standU <= MIN_STAND || (st.kind === 'jar' && st.broken !== 0);
+    box.maxY = gone ? box.minY : st.y + st.standU * st.height;
+  }
+}
+
 export function forceBreak(
   world: World, id: string, hitY: number,
   dx: number, dy: number, dz: number,
@@ -498,7 +553,11 @@ export function destructiblesUpdate(world: World, dt: number, intents: Intents):
 
   const hits: readonly BreakHit[] = intents.breakHits ?? [];
   const shape = hits.length > 0 ? currentMeleeShape(world) : null;
-  const gate = !!shape && (shape.active || shape.slamRadius > 0);
+  const shapeOn = !!shape && (shape.active || shape.slamRadius > 0);
+  // v9s.60：命中候选是**上一帧**渲染时采样、这一帧才进 Core 的。如果挥砍正好在
+  // 这一步结束，`shape` 已经关闭，这批候选会被整条丢掉 —— 表现就是「明明砍到了却没断」。
+  // 允许「上一帧还在刀风窗口内」再收一批，只放一个 tick，靠 hitArmed 去重。
+  const gate = shapeOn || (hits.length > 0 && world.meleeGatePrev);
 
   // 本帧被刀刃命中的物件 id 集合（用于挥砍闸门：一次连续挥砍只破坏一次）
   const hitIds = gate ? new Set<string>() : null;
@@ -528,6 +587,8 @@ export function destructiblesUpdate(world: World, dt: number, intents: Intents):
     }
   }
 
+  world.meleeGatePrev = shapeOn;
+
   // 挥砍闸门清除：刀刃本帧未命中的物件，解除武装以便下次挥砍重新触发。
   // 不在命中窗口内时也全部解除（意味刀刃已离开）。
   for (let i = 0; i < list.length; i++) {
@@ -535,6 +596,9 @@ export function destructiblesUpdate(world: World, dt: number, intents: Intents):
     if (hitIds && hitIds.has(st.id)) continue;
     st.hitArmed = false;
   }
+
+  // v9s.60：碰撞盒跟着站立段走（断一段，路就矮一段 / 断完就通了）
+  syncDestructibleBoxes(world);
 
   // 物理推进：每个有片段的物件，把站立段当静止碰撞体并入求解。
   const gravity = world.config.gravity;

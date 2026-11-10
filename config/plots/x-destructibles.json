@@ -1,20 +1,20 @@
 {
   "id": "x-destructibles",
-  "name": "可破坏物件 · 斜切断口",
-  "hint": "站高台打=高处断，平地打=低处断；切口朝挥刀方向斜切 · 瓶罐只断预设带",
+  "name": "可破坏物件 · 旗杆 / 罐子 / 仙人掌",
+  "hint": "站高台打=高处断，平地打=低处断；切口朝挥刀方向斜切。罐子一碰碎成块，仙人掌侧臂也能砍断，红色按钮=对应仙人掌整体掉落 / 复位",
   "span": [
     2,
     2
   ],
-  "radius": 2.0,
+  "radius": 3.0,
   "color": "#e8a05c",
-  "owner": "可破坏物件（auto 地块，只写相对偏移；id 不带版本代号，由合并闸门统一领号；排在 sparring-demo 之后不抢槽位）",
+  "owner": "可破坏物件（auto 地块，只写相对偏移；id 不带版本代号，由合并闸门统一领号）",
   "destructibles": [
     {
       "id": "pole-a",
       "kind": "pole",
-      "dx": -1.25,
-      "dz": -1.0,
+      "dx": -1.9,
+      "dz": -1.6,
       "height": 2.4,
       "radius": 0.11,
       "tiltDeg": 20,
@@ -25,7 +25,7 @@
       "id": "pole-b",
       "kind": "pole",
       "dx": 0,
-      "dz": -1.0,
+      "dz": -2.05,
       "height": 2.8,
       "radius": 0.11,
       "tiltDeg": 20,
@@ -35,8 +35,8 @@
     {
       "id": "pole-c",
       "kind": "pole",
-      "dx": 1.25,
-      "dz": -1.0,
+      "dx": 1.9,
+      "dz": -1.6,
       "height": 2.0,
       "radius": 0.11,
       "tiltDeg": 20,
@@ -46,8 +46,8 @@
     {
       "id": "jar-a",
       "kind": "jar",
-      "dx": -0.7,
-      "dz": -1.8,
+      "dx": -0.95,
+      "dz": -0.1,
       "height": 0.9,
       "radius": 0.28,
       "tiltDeg": 14,
@@ -61,17 +61,61 @@
     {
       "id": "jar-b",
       "kind": "jar",
-      "dx": 0.7,
-      "dz": -1.8,
+      "dx": 0.95,
+      "dz": -0.1,
       "height": 0.8,
       "radius": 0.26,
       "tiltDeg": 14,
       "bands": [
-        0.4,
-        0.68
+        0.35,
+        0.62
       ],
-      "color": "#b87f6f",
-      "cutColor": "#f0d8c8"
+      "color": "#6f8fb8",
+      "cutColor": "#d8e4f0"
+    },
+    {
+      "id": "cac-a",
+      "kind": "cactus",
+      "dx": -2.15,
+      "dz": 1.0,
+      "height": 2.3,
+      "radius": 0.32,
+      "seed": 7,
+      "color": "#3f8f4f",
+      "cutColor": "#bfe8b0"
+    },
+    {
+      "id": "cac-b",
+      "kind": "cactus",
+      "dx": 2.15,
+      "dz": 1.0,
+      "height": 1.85,
+      "radius": 0.27,
+      "seed": 23,
+      "color": "#4f9f5f",
+      "cutColor": "#c8f0b8"
+    },
+    {
+      "id": "btn-a",
+      "kind": "button",
+      "dx": -2.15,
+      "dz": 2.0,
+      "height": 0.42,
+      "radius": 0.18,
+      "targetId": "cac-a",
+      "color": "#7a7a7a",
+      "cutColor": "#ff5a5a"
+    },
+    {
+      "id": "btn-b",
+      "kind": "button",
+      "dx": 2.15,
+      "dz": 2.0,
+      "height": 0.42,
+      "radius": 0.18,
+      "targetId": "cac-b",
+      "color": "#7a7a7a",
+      "cutColor": "#ff5a5a"
     }
   ]
 }

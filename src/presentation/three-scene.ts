@@ -18,7 +18,7 @@
 import * as THREE from 'three';
 import type { GroundBasis } from '../adapters/input';
 import type {
-  BodyTypeConfig, Box, BreakHit, DummyState, SlabSpec, StationSpec, ViewConfig, World,
+  BodyTypeConfig, Box, BreakHit, DummyState, SeverPart, SlabSpec, StationSpec, ViewConfig, World,
 } from '../core';
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
@@ -109,7 +109,14 @@ export type SceneView = {
    * v9s.56：假人死亡的渲染读数（倒地角 / 下沉量 / 是否已沉入地面）。
    * 验收「打死后是不是真躺下了、重生是不是从地里升起来」直接读这里，不靠肉眼猜。
    */
-  deathDebug(id: number): { dead: boolean; fall: number; sink: number; rise: number; y: number } | null;
+  deathDebug(id: number): {
+    dead: boolean; fall: number; sink: number; rise: number; y: number;
+    /** v9s.60：倒杆物理（倾角 / 角速度 / 是否已关掉 / 倒向 / 滑行距离）+ 断肢部位与残块数 */
+    angle: number; angVel: number; settled: boolean;
+    dirX: number; dirZ: number; slide: number;
+    sever: string | null; pieces: number;
+    pieceY: number | null;
+  } | null;
   /** v9s.57：头顶血条读数（总条数 / 当前可见条数）。 */
   healthBarDebug(): { total: number; shown: number };
   /**
@@ -960,6 +967,12 @@ export function createSceneView(
       selMix.pop();
       haloMix.pop();
       deathState.pop();
+      // 断肢残块挂在 scene 上（不在 rig 里），缩容时必须一起收走，否则尸体没了胳膊还在
+      const sf = severFx.pop();
+      if (sf) {
+        clearSeverPieces(sf);
+        if (sf.node) sf.node.visible = true;
+      }
     }
     if (shrunk) {
       for (let i = 0; i < n; i++) {
@@ -972,29 +985,177 @@ export function createSceneView(
 
   // ---- v9s.56：假人死亡 / 重生的整体变换 ----
   const deathCfg = view.dummies.death;
-  const deathState: Array<{ dead: boolean; fall: number; sink: number; rise: number; y: number }> = [];
+  const severCfg = view.dummies.sever;
+
+  type FallState = {
+    dead: boolean; fall: number; sink: number; rise: number; y: number;
+    /** v9s.60 物理：当前倾角（rad）/ 角速度 / 世界倒向（单位 XZ） */
+    angle: number; angVel: number; dirX: number; dirZ: number;
+    /** 沿击打方向的滑行位移与当前速度 */
+    slideX: number; slideZ: number; slideV: number;
+    /** 到位后关掉物理：之后只保留四元数，不再积分 */
+    settled: boolean;
+  };
+  const deathState: FallState[] = [];
+
+  // 每帧复用的临时量（3 个陪练 × 60fps，不为姿态分配）
+  const UP = new THREE.Vector3(0, 1, 0);
+  const axisV = new THREE.Vector3();
+  const qFall = new THREE.Quaternion();
+  const qYaw = new THREE.Quaternion();
+
+  // ---- v9s.60：断肢 ----
+  // 段名两条骨架一致（dummy-rig 与 voxel-rig 都用这套命名）；腰斩取 upper 整块，
+  // 也就是「上半身连着胳膊和头一起掉下来」—— 这正是腰斩该有的样子。
+  const SEVER_NODE: Record<SeverPart, string> = {
+    head: 'headPivot',
+    armR: 'shoulderR',
+    armL: 'shoulderL',
+    legR: 'hipR',
+    legL: 'hipL',
+    waist: 'upper',
+  };
+
+  type SeverPiece = {
+    obj: THREE.Object3D;
+    vx: number; vy: number; vz: number;
+    wx: number; wz: number;
+    t: number; settled: boolean;
+  };
+  type SeverRec = { part: SeverPart | null; node: THREE.Object3D | null; pieces: SeverPiece[] };
+  const severFx: SeverRec[] = [];
+
+  /** 清掉某个假人的全部残块（重生 / 换死法 / 缩容）。 */
+  function clearSeverPieces(rec: SeverRec): void {
+    for (const pc of rec.pieces) {
+      pc.obj.removeFromParent();
+      // 不 dispose：几何与材质都是从骨架 clone 出来共享的，释放权在骨架
+    }
+    rec.pieces.length = 0;
+  }
+
+  /**
+   * 断肢：把骨架上的那一段**克隆**下来扔到世界里，原节点隐藏。
+   *
+   * 为什么克隆而不是把节点摘走：节点摘走之后骨架就真的缺一块，重生时得重建整套骨架；
+   * 克隆 + 隐藏的代价是每次死亡多几个 mesh 引用（共享几何 / 材质），重生时把 visible 改回来即可。
+   */
+  function applySever(i: number, s: DummyState, frameDt: number): void {
+    let rec = severFx[i];
+    if (!rec) rec = severFx[i] = { part: null, node: null, pieces: [] };
+    const h = s.health;
+    const want = severCfg?.enabled === false ? null : (h.sever?.part ?? null);
+
+    if (want !== rec.part) {
+      // 先把上一轮的东西收干净：残块移除、被隐藏的节点恢复
+      clearSeverPieces(rec);
+      if (rec.node) { rec.node.visible = true; rec.node = null; }
+      rec.part = want;
+      if (want && h.sever) {
+        const node = dummyRigs[i].group.getObjectByName(SEVER_NODE[want]);
+        if (node) {
+          node.updateWorldMatrix(true, false);
+          const clone = node.clone(true);
+          // 世界矩阵直接搬过来：断肢必须从「它刚才所在的位置」开始掉，
+          // 用局部坐标会让它先跳到原点再飞回来。
+          clone.matrix.copy(node.matrixWorld);
+          clone.matrix.decompose(clone.position, clone.quaternion, clone.scale);
+          clone.matrixAutoUpdate = true;
+          // 残块不再参与拾取（点尸体不该点到一块飞出去的胳膊）
+          clone.traverse((o) => { o.userData.dummyId = 0; });
+          scene.add(clone);
+          node.visible = false;
+          rec.node = node;
+
+          const sev = h.sever;
+          const k = (severCfg?.kickBase ?? 1.4) + (severCfg?.kick ?? 1.5) * sev.power;
+          const side = Math.hypot(sev.dx, sev.dz) > 1e-3 ? 1 : 0;
+          rec.pieces.push({
+            obj: clone,
+            vx: sev.dx * k * 0.75,
+            vy: 1.4 + sev.power * 1.1,
+            vz: sev.dz * k * 0.75,
+            // 翻滚：绕攻击方向的垂直轴翻转，看起来像被削下来的
+            wx: (side ? sev.dz : 1) * (2.2 + sev.power * 2.4),
+            wz: (side ? -sev.dx : 0) * (2.2 + sev.power * 2.4),
+            t: 0,
+            settled: false,
+          });
+        }
+      }
+    }
+
+    // 残块自由落体：重力 + 地面反弹 + 摩擦，静止后不再推进（一次死亡最多算 1.2s）
+    if (rec.pieces.length === 0) return;
+    const dt = Math.min(0.05, Math.max(0, frameDt));
+    const g = severCfg?.gravity ?? 11;
+    const bounce = severCfg?.bounce ?? 0.3;
+    const fric = severCfg?.friction ?? 0.86;
+    const life = severCfg?.lifeSec ?? 2.5;
+    for (const pc of rec.pieces) {
+      if (pc.settled) continue;
+      pc.t += dt;
+      const o = pc.obj;
+      pc.vy -= g * dt;
+      o.position.x += pc.vx * dt;
+      o.position.y += pc.vy * dt;
+      o.position.z += pc.vz * dt;
+
+      const gy = groundFxY(o.position.x, o.position.z, o.position.y) + 0.05;
+      if (o.position.y <= gy) {
+        o.position.y = gy;
+        // 竖直速度足够大才回弹，否则直接趴住（避免落地后原地微抖）
+        pc.vy = Math.abs(pc.vy) > 0.7 ? -pc.vy * bounce : 0;
+        pc.vx *= fric;
+        pc.vz *= fric;
+        pc.wx *= fric;
+        pc.wz *= fric;
+        if (Math.abs(pc.vy) < 0.35 && Math.hypot(pc.vx, pc.vz) < 0.25) pc.settled = true;
+      }
+      const w = Math.hypot(pc.wx, pc.wz);
+      if (w > 1e-3) {
+        axisV.set(pc.wz / w, 0, -pc.wx / w);
+        qFall.setFromAxisAngle(axisV, w * dt);
+        o.quaternion.premultiply(qFall);
+      }
+      // 兜底：到寿命就冻结，不留一块永远在抖的残肢
+      if (pc.t >= life) pc.settled = true;
+    }
+  }
 
   /**
    * 把「死亡曲线」叠到假人根节点上（两条骨架共用）。
    *
-   * 曲线由 Core 的三个字段完全决定，表现层不自己计时：
-   *   - `deadT`  → 倒下进度（0..fallSec）
-   *   - `respawn` → 沉入进度（最后 sinkSec 内从 0 沉到 sinkDepth）
-   *   - `revive`  → 升起进度（重生后 riseSec 内从地里升回来）
-   * 三段首尾相接，所以「躺下 → 沉掉 → 升起来」是连续的，中间没有跳帧。
+   * v9s.60 起，倒下不再是一条固定曲线，而是**倒杆模型**：
+   *
+   *   θ'' = g·sin θ − damping·θ'
+   *
+   * 死亡瞬间按击打方向给初角速度（越重越快），之后由重力加速、阻尼衰减、触地回弹，
+   * 角速度足够小且已躺平 → `settled = true`，物理**彻底关掉**（此后只保留四元数）。
+   *
+   * 为什么值得：旧版每个人、每次死都倒在同一角度、同一节奏 —— 被大剑劈飞和蹭到一下就死
+   * 看起来一模一样。现在同一刀在不同力度 / 不同方向上倒地姿态都不同，而代价只有
+   * 两个 float 的积分。沉入 / 升起仍由 Core 的 respawn / revive 完全决定。
    */
-  function applyDeathPose(i: number, s: DummyState): void {
+  function applyDeathPose(i: number, s: DummyState, frameDt: number): void {
     const rig = dummyRigs[i];
     let st = deathState[i];
     if (!st) {
-      st = { dead: false, fall: 0, sink: 0, rise: 1, y: s.position.y };
+      st = {
+        dead: false, fall: 0, sink: 0, rise: 1, y: s.position.y,
+        angle: 0, angVel: 0, dirX: 0, dirZ: 1,
+        slideX: 0, slideZ: 0, slideV: 0, settled: true,
+      };
       deathState[i] = st;
     }
     const h = s.health;
     if (!deathCfg || !h || h.maxHp <= 0) {
       // 打不死的测试桩：清掉可能残留的变换（配了死亡参数之后又改回 0 血量）
       st.dead = false; st.fall = 0; st.sink = 0; st.rise = 1; st.y = s.position.y;
-      rig.group.rotation.x = 0;
+      st.angle = 0; st.angVel = 0; st.settled = true;
+      st.slideX = 0; st.slideZ = 0; st.slideV = 0;
+      rig.group.quaternion.setFromAxisAngle(UP, s.bodyYaw);
+      rig.group.position.set(s.position.x, s.position.y, s.position.z);
       return;
     }
     const fallRad = (deathCfg.fallDeg * Math.PI) / 180;
@@ -1002,29 +1163,93 @@ export function createSceneView(
       const t = x < 0 ? 0 : x > 1 ? 1 : x;
       return t * t * (3 - 2 * t);
     };
+    const ph = deathCfg.physics;
+
     if (h.dead) {
-      const fall = smooth(h.deadT / Math.max(deathCfg.fallSec, 1e-3));
-      const sink = smooth(1 - h.respawn / Math.max(deathCfg.sinkSec, 1e-3));
       if (!st.dead) {
-        // 刚倒下那一下：镜头轻震 + 在读数量里留个标记（fatal 血花由 Core 的 hitMark 驱动）
-        cam.addShake(0.42);
+        // 死亡瞬间：按最后一击的方向定倒向；没有断肢记录时退回受击方向
+        const sev = h.sever;
+        let dx = sev ? sev.dx : s.hurt.dirX;
+        let dz = sev ? sev.dz : s.hurt.dirZ;
+        const l = Math.hypot(dx, dz);
+        if (l < 1e-3) {
+          // 纯垂直命中（击地）：朝身体背后倒，别原地立着
+          dx = -Math.sin(s.bodyYaw);
+          dz = -Math.cos(s.bodyYaw);
+        } else {
+          dx /= l; dz /= l;
+        }
+        st.dirX = dx; st.dirZ = dz;
+        st.angle = 0.05;
+        const power = sev?.power ?? 0.6;
+        st.angVel = (ph?.kickBase ?? 3) + (ph?.kickGain ?? 2.4) * power;
+        st.slideV = (ph?.slide ?? 1) * (0.5 + power);
+        st.slideX = 0; st.slideZ = 0;
+        st.settled = !(ph && ph.enabled);
+        st.fall = 0;
+        st.rise = 0;
       }
-      st.dead = true;
-      st.fall = fall;
-      st.sink = sink;
+      if (ph && ph.enabled && !st.settled) {
+        const dt = Math.min(0.05, Math.max(0, frameDt));
+        if (dt > 0) {
+          st.angVel += ph.gravity * Math.sin(Math.max(0.16, st.angle)) * dt;
+          st.angVel *= Math.exp(-ph.damping * dt);
+          st.angle += st.angVel * dt;
+          if (st.angle >= fallRad && st.angVel > 0) {
+            // 触地：回到躺平角 + 小幅回弹（bounce 为 0 时直接趴住）
+            st.angle = fallRad;
+            st.angVel = -st.angVel * Math.max(0, ph.bounce);
+            if (Math.abs(st.angVel) < 0.5) st.angVel = 0;
+          }
+          st.slideV *= Math.exp(-ph.slideDamp * dt);
+          st.slideX += st.dirX * st.slideV * dt;
+          st.slideZ += st.dirZ * st.slideV * dt;
+          // 到位判定：躺平 + 角速度足够小 → 关掉物理
+          if (st.angle >= fallRad * 0.985 && Math.abs(st.angVel) < ph.restVel) {
+            st.angle = fallRad;
+            st.angVel = 0;
+            st.settled = true;
+          }
+        }
+      } else if (!ph || !ph.enabled) {
+        // 降级：配置没给物理时回到旧的固定插值（A/B 与老夹具路径）
+        st.angle = fallRad * smooth(h.deadT / Math.max(deathCfg.fallSec, 1e-3));
+      }
+      st.fall = st.angle / Math.max(1e-6, fallRad);
+      st.sink = smooth(1 - h.respawn / Math.max(deathCfg.sinkSec, 1e-3));
       st.rise = 0;
+      st.dead = true;
     } else if (h.revive > 0) {
       const rise = smooth(1 - h.revive / Math.max(deathCfg.riseSec, 1e-3));
       st.dead = false;
+      // 升起过程中身体从躺平角度回正，并沿原滑行方向收回
+      st.angle = fallRad * (1 - rise);
+      st.angVel = 0;
+      st.settled = true;
+      st.slideX *= 1 - rise;
+      st.slideZ *= 1 - rise;
+      st.slideV = 0;
       st.fall = 1 - rise;
       st.sink = 1 - rise;
       st.rise = rise;
     } else {
       st.dead = false; st.fall = 0; st.sink = 0; st.rise = 1;
+      st.angle = 0; st.angVel = 0; st.settled = true;
+      st.slideX = 0; st.slideZ = 0; st.slideV = 0;
     }
-    rig.group.rotation.x = -fallRad * st.fall;
+
+    // 绕「水平轴 (dz, 0, -dx)」倾斜 = 向 (dx, dz) 方向倒（不是固定绕局部 X）
+    axisV.set(st.dirZ, 0, -st.dirX);
+    qFall.setFromAxisAngle(axisV, st.angle);
+    qYaw.setFromAxisAngle(UP, s.bodyYaw);
+    rig.group.quaternion.copy(qFall).multiply(qYaw);
+
     st.y = s.position.y - deathCfg.sinkDepth * st.sink;
-    rig.group.position.y = st.y;
+    rig.group.position.set(
+      s.position.x + st.slideX,
+      st.y,
+      s.position.z + st.slideZ,
+    );
   }
 
   function pickDummy(clientX: number, clientY: number): number {
@@ -1132,6 +1357,18 @@ export function createSceneView(
         sink: st ? st.sink : 0,
         rise: st ? st.rise : 1,
         y: dummyRigs[i] ? dummyRigs[i].group.position.y : world.dummies[i].position.y,
+        // v9s.60：倒杆物理读数（角度 / 角速度 / 是否已关掉物理）+ 断肢
+        angle: st ? st.angle : 0,
+        angVel: st ? st.angVel : 0,
+        settled: st ? st.settled : true,
+        dirX: st ? st.dirX : 0,
+        dirZ: st ? st.dirZ : 1,
+        slide: st ? Math.hypot(st.slideX, st.slideZ) : 0,
+        sever: world.dummies[i].health.sever?.part ?? null,
+        pieces: severFx[i] ? severFx[i].pieces.length : 0,
+        // 残块的世界高度（验收「有没有落地 / 是不是挂在天上」直接读，不靠肉眼）
+        pieceY: severFx[i] && severFx[i].pieces.length > 0
+          ? severFx[i].pieces[0].obj.position.y : null,
       };
     },
     yawDebug() {
@@ -1273,7 +1510,10 @@ export function createSceneView(
       // （简化假人 / 持械陪练）都该一模一样，写在调用方只有一份。
       for (let i = 0; i < dummyRigs.length; i++) {
         const d = w.dummies[i];
-        if (d) applyDeathPose(i, d);
+        if (!d) continue;
+        // v9s.60：断肢是「死亡瞬间一次性」+ 残块自由落体，按真实帧时长推进（不跟卡肉冻结）
+        applySever(i, d, frameDt);
+        applyDeathPose(i, d, frameDt);
       }
 
       // v9s.9 / v9s.10：脚下半环 —— 弧心朝相机侧（屏幕下方），假人颜色读 Core 威胁等级

@@ -42,6 +42,8 @@
 | 打中只有卡肉 / 没有血 / 想要飙血 | `presentation/blood-fx.ts`、`core/health.ts` 的 `pushHitMark` | `createBloodFx`、`HitMark`、`HIT_MARK_CAP`、`FX_ORDER.bloodDrop/Stain/Mist` | [systems/blood.md](systems/blood.md) | `tests/v9s56-damage-blood.test.ts`、`python3 tools/blood-shot.py` |
 | 陪练打不死 / 打死了不消失 / 死了不刷新 | `core/health.ts`、`core/dummies.ts`、`three-scene.ts` 的 `applyDeathPose` | `damageDummy`、`killDummy`、`reviveDummy`、`updateHealth`、`REVIVE_GUARD` | [systems/damage-death.md](systems/damage-death.md) | `tests/v9s56-damage-blood.test.ts`、`__harness.deathDebug(id)` |
 | 血总喷在胸口（打头打腿一个位置） / 能穿过尸体 / 陪练没血条 | `core/hits.ts` 的 `hitU`、`core/separation.ts` 的尸体分支、`presentation/healthbar-layer.ts` | `hits.hitHeight`、`dummies.corpse`、`BodySample`、`healthBarDebug` | [systems/damage-death.md](systems/damage-death.md) §6–8 | `tests/v9s57-death-polish.test.ts`、`python3 tools/death-polish-shot.py` |
+| 死亡姿势全都一样 / 想按最后一击断手断头 / 倒下像插值 | `core/health.ts` 的 `decideSever`、`three-scene.ts` 的 `applySever` / `applyDeathPose` | `decideSever`、`sever`、`settled`、`SEVER_NODE`、`death.physics` | [systems/damage-death.md](systems/damage-death.md) §9–10 | `tests/v9s60-sever.test.ts`、`python3 tools/sever-shot.py` |
+| 仙人掌砍不到 / 一刀只断一棵 / 直接从可破坏物里穿过去 / 工位挤在圆心 | `presentation/destructible-layer.ts`、`core/destructibles.ts` | `hitSegments`、`DEST_BOX_PREFIX`、`syncDestructibleBoxes`、`meleeGatePrev` | [systems/destructibles.md](systems/destructibles.md) §9–11 | `tests/v9s60-cactus-collide.test.ts`、`__harness.hitTest()` |
 | 剑盾挥剑不舒展 / 扫角只有 130° / 剑扫到身后看不见 | `config.view.animation.swing` 的 `ss.*` 与 `weaponScale` | `armYaw` 换向、`elbow` 行程、`armLPitch`/`elbowL`（盾臂） | [systems/pose-entry.md](systems/pose-entry.md) §三 | `npm run clip:lab:check`、`python3 tools/swing-shot.py` |
 | 截图放哪 / 能不能入库 | `shots/`（`.gitignore` 已挡） | — | [assets/conventions.md](assets/conventions.md) | `git status` 里不该出现 png |
 | 刀光 / 斩击弧不出现 | `presentation/three-scene.ts` | `weapon-trail.ts`、`FX_ORDER.trail / slash` | [systems/presentation-fx.md](systems/presentation-fx.md) | `__harness.fxDebug()` |
@@ -58,7 +60,6 @@
 | 草压不开 / 刀割不到草 / 草挡住角色 | `core/grass.ts`、`presentation/grass-layer.ts` | `grassUpdate`、`grassCut`、`currentMeleeShape` | [systems/grass.md](systems/grass.md) | `tests/grass.test.ts`、`__harness.grassDebug()` |
 | 草不随风摆 / 浪带不明显 / 摆得太乱 | `core.grass.wind`、`presentation/grass-layer.ts` | `windPhase`、`windSample`、`windAdvance`、`installGrassWind` | [systems/grass.md](systems/grass.md) §12 | 主场景「风：开」/ `G` 键 A/B、`__harness.windDebug()` |
 | 草割断后「长回来」太突然 / 想缓慢长高 | `core/grass.ts`、`presentation/grass-layer.ts` | `grassGrowth`、`GRASS_GROWTH_STAGGER`、`sampleHeight` | [systems/grass-growth-pivot.md](systems/grass-growth-pivot.md) §1 | `tests/grass-growth-pivot.test.ts`、`__harness.grassDebug().sampleHeight` |
-| [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒（实现正本） |
 | 风把草每节 box 拉歪 / 想要一节一节弯且保持方块 | 同上 | `windPivotAngles`、`windPivotEffLength`、`windPivotRotate`、`<project_vertex>` | 同上 §2 | `tests/grass-growth-pivot.test.ts`、`__harness.grassDebug().wind.mode` |
 | 多个 agent 同时开发 / 怎么合并提交 | `tools/gh-commit.mjs`、冲突分类 | `--apply`、ref SHA 乐观锁 | [systems/multi-agent-workflow.md](systems/multi-agent-workflow.md) | `node tools/gh-commit.mjs`（dry-run） |
 | 用户通知 push 后怎么推到功能分支（`git push` 无凭证） | `tools/push-branch.py`、GitHub MCP 网关 | `push_files` / `delete_file`、tree 一致校验 | 同上 §1 | `python3.11 tools/push-branch.py --dry` → 去掉 `--dry` |
@@ -125,7 +126,7 @@
 | `config/plots/*.json` | 一地块一文件（不写世界坐标；`span` 声明占几格，自带地形 / 摆设 / 假人 / 草块） |
 | `src/app.ts` | 组装层 + `window.__harness`（所有 `*Debug()` 验收接口在这里暴露） |
 | `tests/` | vitest；`tests/helpers.ts` 的 `FIXTURE_CORE_PATCH` 是**冻结夹具**，另用同一套拼合器注入线上配置 |
-| `tools/smoke.py` | 线上自检（53 项）；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样 |
+| `tools/smoke.py` | 线上自检（53 项）；`tools/clip-lab/` 动作验证台；`tools/sweep.py` 扫掠采样；`tools/sever-shot.py` 断肢 / 倒地验收截图（7 张，走 `__harness.hitTest`） |
 | `tools/publish-preview.mjs` | **每次任务完成的发布闸门**：build → 发布 `dist/` → 校验资源 → 打印公网链接 |
 
 ### 3.4 调试面板分组
@@ -197,7 +198,7 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/animation.md`](systems/animation.md) | 连击骨架锚点 / 平衡 / 节奏 / 加动作清单（规范） |
 | [`systems/idle-stance.md`](systems/idle-stance.md) | 待机斜跨站姿：前脚锁定、三条「不写」、参数与门控 |
 | [`systems/pose-entry.md`](systems/pose-entry.md) | 动作进出场：起手接待机、收招交还待机、剑身通道也要淡 |
-| [`systems/damage-death.md`](systems/damage-death.md) | 伤害 / 血量 / 死亡 / 重生：三个旋钮、七处跳过、倒→沉→升 |
+| [`systems/damage-death.md`](systems/damage-death.md) | 伤害 / 血量 / 死亡 / 重生：三个旋钮、七处跳过、倒→沉→升、**断肢规则表 / 倒杆物理** |
 | [`systems/blood.md`](systems/blood.md) | 命中飙血：三层、为什么不用事件队列、调参经验 |
 | [`systems/animation-notes-1/2/3/4.md`](systems/animation-notes-1.md) | 按版本追加的动画落地细节（补充，非规范） |
 | [`systems/movement-facing.md`](systems/movement-facing.md) | 移动 / 朝向四角 / 分离 / 边界 |
@@ -209,7 +210,7 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/known-limits.md`](systems/known-limits.md) | 已知限制（现状，不是待办） |
 | [`systems/grass.md`](systems/grass.md) | 体素草块：压开 / 割断 / 实例化渲染 / 风吹麦浪 / 性能结论 |
 | [`systems/grass-growth-pivot.md`](systems/grass-growth-pivot.md) | v9s.46 缓慢连续生长 + 枢轴顶点动画（每节 box 刚体旋转，实现正本） |
-| [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒（实现正本） |
+| [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒、**仙人掌分段 / 碰撞盒 / 多判定轴（实现正本）** |
 | [`systems/test-scene-policy.md`](systems/test-scene-policy.md) | 单一主测试场景 + 三条规则（规则正本） |
 | [`systems/plot-assembly.md`](systems/plot-assembly.md) | 地块拼合：整数格底板 / 自带物件 / 工位传送 / 测试按钮（实现正本） |
 | [`systems/voxel-forge.md`](systems/voxel-forge.md) | 造型工坊：JSON spec → 3D 预览 → 导出 TS 片段（只在本地用，不进 dist） |
