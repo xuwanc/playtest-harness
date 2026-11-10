@@ -1,4 +1,0 @@
-.nojekyll
-assets/main-D1e-fxFV.js
-assets/main-DbGchuoI.css
-index.html
