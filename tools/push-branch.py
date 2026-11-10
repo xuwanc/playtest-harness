@@ -21,6 +21,11 @@ git 凭证：`git push` 会报 `could not read Username for 'https://github.com'
 再 `git reset --hard origin/<branch>` 让本地与远端对齐（git commit SHA 会不同，
 因为远端 commit 由 API 重建，但 tree 逐字节相同）。
 
+每次推代码都顺带刷新固定页面（2026-11-10 用户约定）：**推送成功后**自动调用
+`publish-pages.py`，把本地 `dist/` 推到 `preview` 分支，让 GitHub Pages 与刚推的
+代码保持一致，不用再单独说「发个链接」。失败只告警、绝不阻断推送结果；
+`--no-pages` 可显式关闭，`--dry` 不会触发发布。
+
 用法
 ----
     python3.11 tools/push-branch.py                       # 推当前分支，message 取最近一次本地 commit
@@ -134,6 +139,8 @@ def main():
                     help='差异基线；默认优先 origin/<branch>（增量），否则 origin/main（全量）')
     ap.add_argument('-m', '--message', default=None)
     ap.add_argument('--dry', action='store_true', help='只打印计划，不写远端')
+    ap.add_argument('--no-pages', action='store_true',
+                    help='推送后不刷新 GitHub Pages（默认每次推送都刷新 preview 分支）')
     args = ap.parse_args()
 
     owner, repo = args.repo.split('/', 1)
@@ -251,6 +258,29 @@ def main():
             print('[push-branch] 删除', path)
         except Exception as e:
             print('[push-branch] 删除失败(可能已不存在):', path, str(e)[:120])
+
+    # ── 每次推送后刷新固定页面（GitHub Pages） ─────────────────────────────
+    # 2026-11-10 用户约定：推代码 = 页面同步更新，不用再单独说「发个链接」。
+    # 复用 publish-pages.py 的 MCP 网关通道把本地 dist/ 推到 preview 分支；
+    # 失败只告警、绝不阻断推送结果（Pages 构建由 GitHub 侧完成）。
+    if not args.no_pages:
+        pages = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'publish-pages.py')
+        try:
+            r = subprocess.run(
+                [sys.executable, pages], cwd=ROOT, text=True,
+                capture_output=True, timeout=360,
+            )
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    if '写入 OK' in line or '删除旧文件' in line:
+                        print('[push-branch][pages]', line.strip())
+                print('[push-branch][pages] 固定页面已更新: '
+                      f'https://{owner}.github.io/{repo}/')
+            else:
+                print('[push-branch][pages] 页面更新失败（不阻断推送）:',
+                      (r.stderr or r.stdout).strip()[:300])
+        except Exception as e:
+            print('[push-branch][pages] 页面更新异常（不阻断推送）:', str(e)[:200])
 
     print('\n[push-branch] 完成。请执行：')
     print(f'  git fetch origin {branch}')
