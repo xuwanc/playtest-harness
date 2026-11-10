@@ -35,10 +35,10 @@ v0.9.86：**鱼人从「直立」变成「爬姿」，靠的是一层可组合�
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 113 文件 / 1127 例全绿 |
+| `npx vitest run` | 119 文件 / 1216 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
-| `npm run smoke` | 53/53 PASS |
-| `npm run docs:check` | PASS（101 份文档 ≤300 行，README 98 行） |
+| `npm run smoke` | 70/70 PASS |
+| `npm run docs:check` | PASS（101 份文档 ≤300 行，README 99 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 | `python3 tools/check-online.py --wait 180` | 发布后核验线上 JS 与本地 `dist` 同一份 |
