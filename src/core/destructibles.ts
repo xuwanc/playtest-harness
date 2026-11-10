@@ -231,12 +231,14 @@ function mulberry32(a: number): () => number {
  */
 function makeCactusArms(height: number, radius: number, _seed: number): CactusArm[] {
   void _seed;
-  const armRad = radius * 0.45;   // 手臂直径 ≈ 0.9×主干直径，明显敦实
-  const outLen = radius * 1.7;    // 水平伸出（明显伸出主干外再上弯）
-  const upLen = radius * 1.45;    // 末端向上弯
+  // v9s.61：手腕更细、伸出更短、上扬更长 —— 上一版手臂粗到和主干差不多（0.9 倍直径），
+  // 远看是一根柱子上挂着两个钩子；萨瓜罗的识别点是「细腕、短出、明显上折」。
+  const armRad = radius * 0.34;
+  const outLen = radius * 1.15;   // 水平伸出（刚出主干就上折）
+  const upLen = radius * 2.1;     // 末端向上弯
   const arms: CactusArm[] = [
-    { atU: 0.58, dx: 1, dz: 0, outLen, upLen, rad: armRad },
-    { atU: 0.72, dx: -1, dz: 0, outLen, upLen, rad: armRad },
+    { atU: 0.52, dx: 1, dz: 0, outLen, upLen, rad: armRad },
+    { atU: 0.68, dx: -1, dz: 0, outLen, upLen, rad: armRad },
   ];
   arms.sort((a, b) => a.atU - b.atU);
   void height;

@@ -847,9 +847,14 @@ def main() -> int:
                   };
                   h.clock.singleStep(I);
                   h.debug.timeScale = 1;
-                  h.world.character.position.x = p.centerX;
+                  // 站到「中间那根旗杆」正北 1.0m，明确朝向它挥刀。
+                  // 旧写法用地块中心 -2.0，正好与 pole-b（z = centerZ-2.05）重合 ——
+                  // v9s.60 能过是靠「人和杆重叠」侥幸命中；v9s.61 杆有了碰撞盒，
+                  // 玩家一落位就被推开 0.4m，这一刀就砍空了。
+                  const st = h.world.destructibles.find(s => s.id === 'pole-b') || { x: p.centerX, z: p.centerZ };
+                  h.world.character.position.x = st.x;
                   h.world.character.position.y = 0;
-                  h.world.character.position.z = p.centerZ - 2.0;
+                  h.world.character.position.z = st.z + 1.0;
                   h.world.character.bodyYaw = 0;
                   h.world.character.facing = 0;
                   h.world.combat.phase = 'idle';

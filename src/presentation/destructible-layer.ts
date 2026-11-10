@@ -107,7 +107,6 @@ type Piece = {
   bodyMat: THREE.MeshLambertMaterial;
   capMat: THREE.MeshLambertMaterial;
   /** v9s.60：主干的暗色段（仙人掌分段用，别的物件不用） */
-  darkMat: THREE.MeshLambertMaterial;
   key: string;
 };
 
@@ -223,26 +222,32 @@ function buildJarTiers(
 }
 
 /**
- * 仙人掌：**分段收腰的主干 + 三段式侧臂**。
+ * 仙人掌：**一根直柱 + 两条 L 形侧臂**。
  *
- * v9s.60 重做。旧版是「一根方柱 + 两条直角横杆」，两个问题一眼就能看出：
- *  - 主干从底到顶一样粗，看着像旗杆刷了绿漆；
- *  - 侧臂是 L 形的两根方盒拼的，转角处没有任何过渡，像插上去的积木。
+ * v9s.61 简化。上一版为了「不像旗杆」加了 6 段收腰、明暗交替、每段错位旋转 ——
+ * 结果是碎：亮暗条纹把它读成一摞小方块，错位让轮廓毛刺，侧臂三段折线像插上去的积木。
  *
- * 现在：主干分 6 段、中间粗两端细、每段轻微错位旋转（植物是长歪的，不是一摞立方体）；
- * 侧臂分「水平伸出 → 上扬 → 圆头」三段，宽度递减。断面仍然只有最上一段是斜切的，
- * 所以砍断后依然是斜切口 —— 造型变了，破坏逻辑一行没动。
+ * 抓形只留三个特征：**直、粗、两臂**。
+ *  - 主干 4 段，`w = R(0.90 + 0.12·sin(πt))` —— 中段略粗，肉眼是一条柱；
+ *  - 统一本色，不交替（体积感交给光照，不交给条纹）；
+ *  - 侧臂两段：伸出（粗）+ 上扬（细），末端一个小方头，转角不做过渡。
+ *
+ * 断面仍然只切最上一段（斜切口），破坏逻辑一行没动。
  */
 function buildCactusStanding(
   st: DestructibleState, group: THREE.Group,
-  bodyMat: THREE.Material, capMat: THREE.Material, darkMat: THREE.Material,
+  bodyMat: THREE.Material, capMat: THREE.Material,
   unit: THREE.BufferGeometry,
 ): void {
   const R = st.radius;
   const H = st.height;
   const standH = Math.max(0.02, st.standU * H);
-  const N = 6;
+  const N = 4;
   const segH = standH / N;
+  // 视觉半径略小于碰撞半径（碰撞盒按 R 建）：柱身太粗就读成「绿柱子」，不是仙人掌
+  const VR = R * 0.82;
+  // 只有被砍过才显示浅色斜切面；完整站立时顶端是同色的（仙人掌的顶是长出来的，不是切出来的）
+  const cut = st.standU < 0.999;
 
   // 斜切顶面只作用于最后一段：cutBoxHeights 给的是整株高度，换成段内相对高度
   const top = cutBoxHeights(R, st.standU, H, st.snx, st.sny, st.snz);
@@ -252,60 +257,65 @@ function buildCactusStanding(
 
   for (let i = 0; i < N; i++) {
     const t = (i + 0.5) / N;
-    // 中间最粗、两端略收：读起来是「柱状仙人掌」，不是一根均匀的杆
-    const w = R * (0.84 + 0.26 * Math.sin(Math.PI * Math.min(1, t * 1.02)));
+    // 中段略粗、两端略收：读起来是「柱状仙人掌」，不是一根均匀的杆
+    const w = VR * (0.90 + 0.12 * Math.sin(Math.PI * t));
     if (i === N - 1) {
-      const cap = new THREE.Mesh(boxPieceGeometry(w, relTop), [bodyMat, capMat]);
+      const cap = new THREE.Mesh(
+        boxPieceGeometry(w, relTop),
+        cut ? [bodyMat, capMat] : [bodyMat, bodyMat],
+      );
       cap.position.y = baseOfLast;
       group.add(cap);
     } else {
-      const m = new THREE.Mesh(unit, i % 2 === 0 ? bodyMat : darkMat);
-      m.scale.set(w * 2, segH * 1.04, w * 2);
-      // 轻微错位 + 旋转：体素植物也要有「长歪」的感觉
-      m.position.set(
-        Math.sin(i * 2.3) * R * 0.05,
-        (i + 0.5) * segH,
-        Math.cos(i * 1.9) * R * 0.05,
-      );
-      m.rotation.y = i * 0.26;
+      const m = new THREE.Mesh(unit, bodyMat);
+      m.scale.set(w * 2, segH * 1.02, w * 2);
+      m.position.set(0, (i + 0.5) * segH, 0);
       group.add(m);
     }
   }
 
-  // 侧臂：水平段 → 上扬段 → 圆头。宽度逐段收，看起来像自然长出来的。
+  // 顶端的圆头：一小块收窄的同色方块，把方柱顶「收圆」（没被砍过才有）
+  if (!cut) {
+    const topW = VR * 0.62;
+    const crown = new THREE.Mesh(unit, bodyMat);
+    crown.scale.set(topW * 2, Math.min(VR * 0.42, segH * 0.5), topW * 2);
+    crown.position.set(0, standH + Math.min(VR * 0.42, segH * 0.5) * 0.5, 0);
+    group.add(crown);
+  }
+
+  // 侧臂：伸出 → 上扬 → 方头。两段直角，不加过渡 —— 方块风格里直角反而干净。
   for (const a of st.arms) {
     if (a.atU > st.standU + 1e-4) continue;
     const baseY = a.atU * st.height;
     const alongX = Math.abs(a.dx) > 0.5;
-    const half = (alongX ? a.outLen / 2 : a.rad) * 2;
-    const other = (alongX ? a.rad : a.outLen / 2) * 2;
+    const thick = a.rad * 1.55;
+    const outLen = alongX ? a.outLen : thick;
+    const outDep = alongX ? thick : a.outLen;
+    const cx = a.dx * (VR + a.outLen / 2);
+    const cz = a.dz * (VR + a.outLen / 2);
 
     const out = new THREE.Mesh(unit, bodyMat);
-    out.scale.set(alongX ? half : other, a.rad * 1.9, alongX ? other : half);
-    out.position.set(
-      a.dx * (R + a.outLen / 2),
-      baseY,
-      a.dz * (R + a.outLen / 2),
-    );
+    out.scale.set(outLen, thick, outDep);
+    out.position.set(cx, baseY, cz);
     group.add(out);
 
-    // 上扬段：从末端往上长，略微往里收（真实萨瓜罗的手臂就是这么折的）
-    const up = new THREE.Mesh(unit, darkMat);
-    up.scale.set(a.rad * 1.8, a.upLen * 2, a.rad * 1.8);
+    // 上扬段：从伸出段末端往上，略细（真实萨瓜罗的手臂就是这么折的）
+    const up = new THREE.Mesh(unit, bodyMat);
+    up.scale.set(a.rad * 1.3, a.upLen, a.rad * 1.3);
     up.position.set(
-      a.dx * (R + a.outLen * 0.94),
-      baseY + a.upLen * 0.92,
-      a.dz * (R + a.outLen * 0.94),
+      a.dx * (VR + a.outLen * 0.9),
+      baseY + a.upLen * 0.5,
+      a.dz * (VR + a.outLen * 0.9),
     );
     group.add(up);
 
-    // 圆头：一小块，把上扬段的方角「收圆」
+    // 方头：把上扬段顶端加宽一点，收住方角
     const tip = new THREE.Mesh(unit, bodyMat);
-    tip.scale.set(a.rad * 1.5, a.rad * 1.5, a.rad * 1.5);
+    tip.scale.set(a.rad * 1.15, a.rad * 1.15, a.rad * 1.15);
     tip.position.set(
-      a.dx * (R + a.outLen * 0.94),
-      baseY + a.upLen * 1.82,
-      a.dz * (R + a.outLen * 0.94),
+      a.dx * (VR + a.outLen * 0.9),
+      baseY + a.upLen,
+      a.dz * (VR + a.outLen * 0.9),
     );
     group.add(tip);
   }
@@ -347,7 +357,7 @@ function buildStanding(
       );
       p.standing.add(p.standingMesh);
     } else {
-      buildCactusStanding(st, p.standing, p.bodyMat, p.capMat, p.darkMat, unit);
+      buildCactusStanding(st, p.standing, p.bodyMat, p.capMat, unit);
     }
   } else if (st.kind === 'jar') {
     if (st.broken === 0) buildJarTiers(st, p.standing, p.bodyMat, p.capMat, unit);
@@ -380,10 +390,6 @@ export function createDestructibleLayer(
     const capMat = new THREE.MeshLambertMaterial({
       color: new THREE.Color(st.cutColor), side: THREE.DoubleSide,
     });
-    // 同色系压暗 18%：分段之间的明暗差就是「有体积」的读法，比换色更自然
-    const darkMat = new THREE.MeshLambertMaterial({
-      color: new THREE.Color(st.color).multiplyScalar(0.82), side: THREE.DoubleSide,
-    });
     const standing = new THREE.Group();
     standing.name = `standing-${st.id}`;
     const root = new THREE.Group();
@@ -397,7 +403,7 @@ export function createDestructibleLayer(
     object.add(fragGroup);
     const p: Piece = {
       id: st.id, root, standing, standingMesh: null, fragGroup,
-      fragViews: [], bodyMat, capMat, darkMat, key: '',
+      fragViews: [], bodyMat, capMat, key: '',
     };
     buildStanding(p, st, unitBox);
     p.key = standingKey(st);
@@ -419,21 +425,19 @@ export function createDestructibleLayer(
       }
       p.bodyMat.color.set(st.color);
       p.capMat.color.set(st.cutColor);
-      p.darkMat.color.set(st.color).multiplyScalar(0.82);
       p.root.position.set(st.x, st.y, st.z);
       // 坛子碎裂后不再画站立盒；其余（旗杆 / 仙人掌 / 按钮）始终保持（仙人掌是剩余桩体）
       p.standing.visible = !(st.kind === 'jar' && st.broken !== 0);
 
       // 掉落片段：按数组长度伸缩 FragView 池，逐帧只更新变换（躯干 + 侧臂子盒）
       const frags = st.fragments ?? [];
-      const trunkSegs = st.kind === 'cactus' ? 5 : 1;
+      const trunkSegs = st.kind === 'cactus' ? 4 : 1;
       while (p.fragViews.length < frags.length) {
         const group = new THREE.Group();
         group.name = `frag-${st.id}-${p.fragViews.length}`;
-        // 3 段固定池：仙人掌断块靠分段还原「中间粗两端细」的腰身，
+        // 4 段固定池：仙人掌断块靠分段还原「中段略粗」的柱身，
         // 单块方盒会让断下来的那截突然变成一块砖（原来就是这个问题）。
         const trunk = [
-          new THREE.Mesh(unitBox, p.bodyMat),
           new THREE.Mesh(unitBox, p.bodyMat),
           new THREE.Mesh(unitBox, p.bodyMat),
           new THREE.Mesh(unitBox, p.bodyMat),
@@ -453,7 +457,7 @@ export function createDestructibleLayer(
         fv.group.position.set(f.x, f.y, f.z);
         fv.group.quaternion.set(f.qx, f.qy, f.qz, f.qw);
         // 分段：宽度按「下 0.88 / 中 1.0 / 上 0.9」收腰，与站立段造型同源
-        const W = [0.94, 1, 1, 0.96, 0.9];
+        const W = [0.95, 1, 0.99, 0.93];
         const segH = (f.hy * 2) / trunkSegs;
         for (let s = 0; s < fv.trunk.length; s++) {
           const m = fv.trunk[s];
@@ -585,7 +589,6 @@ export function createDestructibleLayer(
       }
       p.bodyMat.dispose();
       p.capMat.dispose();
-      p.darkMat.dispose();
     }
     unitBox.dispose();
     object.clear();

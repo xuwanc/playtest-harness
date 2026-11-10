@@ -33,7 +33,7 @@ import {
   ringGroundHeight,
   groundRingRadius, linkLandingPreview, playerMeterSource, playerRingVisual, threatRingColor,
 } from './ground-ring';
-import { dummyThreatLevel, groundHeightAt, isHostileDummy } from '../core';
+import { DEST_BOX_PREFIX, dummyThreatLevel, groundHeightAt, isHostileDummy } from '../core';
 import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
 import { createVoxelRig } from './voxel-rig';
 import type { VoxelRig } from './voxel-rig';
@@ -328,6 +328,10 @@ export function createSceneView(
   const materials: THREE.MeshLambertMaterial[] = [];
   const boxGroup = new THREE.Group();
   for (const b of world.boxes) {
+    // v9s.61：可破坏物的 AABB 只服务碰撞，不画白盒。
+    // 盒子宽度就是物件直径（罐子 0.56 / 仙人掌 0.64），画出来正好把造型整个包住 ——
+    // 现场读作「可破坏物是一个红棕色方块」，仙人掌再怎么改造型也看不见。
+    if (b.id.startsWith(DEST_BOX_PREFIX)) continue;
     const width = b.maxX - b.minX;
     const height = b.maxY - b.minY;
     const depth = b.maxZ - b.minZ;
