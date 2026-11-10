@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import type { AppConfig } from '../src/core';
 import { createVoxelRig } from '../src/presentation/voxel-rig';
+import { torsoYawOf } from './rig-nodes';
 import { makeWorld } from './helpers';
 
 const raw = JSON.parse(
@@ -96,9 +97,8 @@ describe('v9s.32 持械待机姿态', () => {
     const rig = mkRig();
     w.combat.weapon = 'sword-shield';
     for (let i = 0; i < 60; i++) rig.update(w.character, w.combat, w.playerHurt, 1 / 60);
-    // v9s.33：躯干总偏航（腰段 + 胸段）
-    const idleYaw = rig.group.getObjectByName('upper')!.rotation.y
-      + (rig.group.getObjectByName('chest')?.rotation.y ?? 0);
+    // v9s.33 / v9s.72：躯干总偏航 = 整条脊柱链之和
+    const idleYaw = torsoYawOf(rig);
     const stanceYaw = rig.stanceDebug().torsoYaw;
     expect(stanceYaw).toBeGreaterThan(0);
     expect(idleYaw).toBeGreaterThanOrEqual(stanceYaw - 1e-6);
@@ -108,8 +108,7 @@ describe('v9s.32 持械待机姿态', () => {
     w.combat.comboIndex = 1;
     w.combat.attackProgress = 0.5;
     for (let i = 0; i < 20; i++) rig.update(w.character, w.combat, w.playerHurt, 1 / 60);
-    const attackYaw = rig.group.getObjectByName('upper')!.rotation.y
-      + (rig.group.getObjectByName('chest')?.rotation.y ?? 0);
+    const attackYaw = torsoYawOf(rig);
     expect(Math.abs(attackYaw - (idleYaw + stanceYaw))).toBeGreaterThan(0.02);
     rig.dispose();
   });

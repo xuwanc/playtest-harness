@@ -1962,6 +1962,11 @@
         "chest": 0.42,
         "neck": 0.16,
         "chestPivot": 0.42,
+        "segments": 3,
+        "pivots": [
+          0.42,
+          0.72
+        ],
         "chainBlend": 0.58
       }
     },

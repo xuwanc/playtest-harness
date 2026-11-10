@@ -5,12 +5,13 @@
     npm run build && python3 tools/spine-chain-shot.py
 
 产物落在 shots/spine-chain/：
-    01-side.png       正侧：腰 / 胸两段之间有没有楔形缺口、骨盆处是不是空的
+    01-side.png       正侧：各级之间有没有楔形缺口、骨盆处是不是空的
     02-back.png       后 3/4：弓背时背面接缝
     03-top.png        俯视 38°（游戏默认视角）：可读性
     04/05-front34     前 3/4 两个方向：髋块的体积有没有吞掉大腿
     06-dummy.png      码头杂兵：假人骨架也补了髋块（同一套体态）
     07-swing.png      挥砍中：髋块是否跟着少转（不该「骨盆往前甩」）
+    08/09-human      默认主角（人类体型）：三段链在直立体型上会不会露缝
 
 同时打印三段骨骼的**世界朝向**（模型空间 Y 轴的俯仰 / 偏航），用于判断
 「朝向是不是单调连续」—— 不连续的表现是 40° → 7° → 24° 这种回落。
@@ -31,7 +32,17 @@ READ = """() => {
   // 不依赖 window.THREE：从已存在的对象上借构造器
   const V3 = root.position.constructor;
   const Q = root.quaternion.constructor;
-  const names = ['pelvis', 'lower', 'upper', 'chest'];
+  // v9s.72：段数可配，沿链走一遍（upper → spine1… → chest）
+  const names = ['pelvis', 'lower', 'upper'];
+  {
+    let n = root.getObjectByName('upper');
+    for (let i = 0; n && i < 6; i++) {
+      const next = (n.children || []).find((c) => c.name === 'chest' || /^spine\d+$/.test(c.name || ''));
+      if (!next) break;
+      names.push(next.name);
+      n = next;
+    }
+  }
   const out = {};
   for (const n of names) {
     const o = root.getObjectByName(n);
@@ -99,7 +110,15 @@ def main() -> int:
 
         def report(tag: str) -> None:
             d = page.evaluate(READ)
-            for n in ('lower', 'upper', 'chest'):
+            chain = [k for k in d.keys() if k in ('upper', 'chest') or k.startswith('spine')]
+            def _ord(k: str) -> int:
+                if k == 'upper':
+                    return 0
+                if k == 'chest':
+                    return 99
+                return int(k[5:]) + 1
+            chain.sort(key=_ord)
+            for n in ['lower'] + chain:
                 r = d.get(n)
                 if r:
                     print(f"  {n:7s} pitchWorld={r['pitchDeg']:+6.1f}°  yawWorld={r['yawDeg']:+6.1f}°")
@@ -155,6 +174,34 @@ def main() -> int:
         cam(24, 8, 4.2)
         page.screenshot(path=str(OUT / '06-dummy.png'))
         print('[06-dummy]')
+
+        # 人类体型（无体态层）：三段链在直立体型上会不会露出接缝。
+        # 默认识别不到的体型没有补块，全靠每级折角小 —— 这是「三段」最容易翻车的一组。
+        page.goto(f'{srv.url}', wait_until='load', timeout=60000)
+        page.wait_for_function(
+            "() => !!(window.__harness && window.__harness.clipLab)", timeout=30000,
+        )
+        page.wait_for_timeout(600)
+        page.evaluate("""() => {
+          const h = window.__harness;
+          document.querySelectorAll('[data-ui-region]').forEach((e) => { e.style.display = 'none'; });
+          const vb = document.getElementById('version-badge');
+          if (vb) vb.style.display = 'none';
+          h.clipLab.release();
+          const c = h.world.character;
+          c.position.x = -14.0; c.position.z = 9.5; c.position.y = 0;
+          c.velocity.x = 0; c.velocity.z = 0;
+        }""")
+        page.wait_for_timeout(900)
+        cam(6, 90)
+        page.screenshot(path=str(OUT / '08-human-side.png'))
+        print('[08-human-side]')
+        report('human-idle')
+        page.mouse.click(450, 450)
+        page.wait_for_timeout(300)
+        page.screenshot(path=str(OUT / '09-human-swing.png'))
+        print('[09-human-swing]')
+        report('human-swing')
 
         if errors:
             print('PAGE ERRORS:', errors)

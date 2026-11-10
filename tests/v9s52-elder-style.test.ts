@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { createVoxelRig } from '../src/presentation/voxel-rig';
 import type { VoxelRig } from '../src/presentation/voxel-rig';
+import { spineChain, torsoPitchOf } from './rig-nodes';
 import { makeWorld } from './helpers';
 import type { AppConfig } from '../src/core';
 
@@ -54,13 +55,13 @@ describe('v9s.52 造型特征：体态', () => {
     const rig = makeRig(elderVoxel);
     const w = makeWorld();
     step(rig, w, 30);
-    const upper = rig.group.getObjectByName('upper')!;
-    const chest = rig.group.getObjectByName('chest')!;
-    const total = (upper.rotation.x as number) + (chest.rotation.x as number);
+    // v9s.72：躯干总俯仰 = 整条脊柱链之和（3 段时不能只加两块）
+    const total = torsoPitchOf(rig);
     expect(total).toBeGreaterThan(elderVoxel.style!.hunch! * 0.8);
     expect(total).toBeLessThan(elderVoxel.style!.hunch! * 1.4);
-    // 驼背必须由两段分担，而不是整根斜：腰段应占大头但胸段也确实在转
-    expect(chest.rotation.x as number).toBeGreaterThan(0.02);
+    // 驼背必须由多段分担，而不是整根斜：最上面一段也确实在转
+    const chain = spineChain(rig);
+    expect(chain[chain.length - 1].rotation.x as number).toBeGreaterThan(0.02);
   });
 
   it('屈膝：骨盆比髋高基准低 kneeSink（IK 把脚钉回地面 → 膝盖自然前屈）', () => {

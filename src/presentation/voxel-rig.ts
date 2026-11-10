@@ -48,6 +48,7 @@ import { applyFootIK, captureIKBase, EMPTY_IK_DIAGNOSTICS } from './rig-ik';
 import { blendIKAngles, solveTwoBoneIK } from './ik';
 import type { IKDiagnostics, IKLimb } from './rig-ik';
 import { pitchInModelSpace } from './rig-space';
+import { normalizeSegments, spineWeights, spineYawCurve } from './spine-chain';
 import {
   decayImpact, NEUTRAL_STRETCH, smoothStretch, solveStretch,
 } from './limb-stretch';
@@ -176,9 +177,10 @@ export type VoxelRig = {
    *  v9r 追加 stopDip（骨盆惯性下沉量，验收「骨盆跟着沉、脚不跟着沉」）。 */
   /** v9s.33：动态平衡读数（COM / 捕获点 / 支撑余量 / 综合分）；未开启时为 null */
   balanceDebug(): (BalanceResult & { shift?: number; latDeficit?: number; lateralFf?: number }) | null;
-  /** v9s.33：脊柱分段读数（腰 / 胸 / 颈）；未开启时为 null */
+  /** v9s.33：脊柱分段读数（腰 / 中间各级 / 胸 / 颈）；未开启时为 null */
   spineDebug(): {
-    enabled: boolean; waistYaw: number; chestYaw: number; totalYaw: number;
+    enabled: boolean; segments: number;
+    waistYaw: number; midYaw: number; chestYaw: number; totalYaw: number;
     totalPitch: number; totalLean: number; neckPitch: number; leak: number;
   } | null;
   /**
@@ -433,48 +435,88 @@ export function createVoxelRig(
   // 只在鱼人身上加 —— 直立体型的腰段只压 10~20°，缺口 2cm 以内，加了反而显胖。
   const hipMesh = murloc ? buildMurlocHip(pelvis, HS, bodyW, torsoD, colors) : null;
 
-  // ---- v9s.33 脊柱分段 ----
-  // 开启时：upper 只承担「腰段」，新增 chest 节点承担「胸段」，肩 / 头挂在 chest 下。
-  // 同一份躯干总角按权重拆到两段（见 update() 末尾的 splitSpine），世界朝向不变，
-  // 但弯折点从腰移到胸腔 → 大幅挥击不再是「一根棍整体转」。
+  // ---- v9s.33 脊柱分段 / v9s.72 脊柱链 ----
+  // 开启时：躯干按 `segments` 拆成 N 块，`upper` 承担腰段，最上面那块挂在 `chest` 下，
+  // 肩 / 头 / 背鳍都跟着 `chest`。同一份躯干总角按权重摊到 N 个关节（见 splitSpine），
+  // 世界朝向不变，但弯折从「一根棍」变成一条曲线 —— 每级折角 ≈ 总角 / N，
+  // 接头掀开的楔形缝按 sin(折角) 缩小，这才是 v9s.70 那些补块想盖住的东西的正解。
   // 关闭时 chest 保持单位变换、躯干仍是单块，逐帧与旧版一致。
   const spineCfg = animCfg.spine;
   const spineOn = !!spineCfg?.enabled;
-  const chestPivotY = spineOn
-    ? clamp(spineCfg!.chestPivot ?? 0.42, 0.15, 0.85) * bodyH
-    : 0;
-  const chest = group();
-  chest.name = 'chest';
-  chest.position.y = chestPivotY;
-  upper.add(chest);
+  /** v9s.72：段数（2 = 旧的腰 / 胸两段；3 = 腰 / 下胸 / 上胸） */
+  const spineSegs = spineOn ? normalizeSegments(spineCfg!.segments) : 1;
+  /** 各关节高度（相对 pelvis，自下而上）；长度 = 段数 − 1 */
+  const spinePivotY: number[] = [];
+  for (let i = 0; i < spineSegs - 1; i++) {
+    const below = i === 0 ? 0 : spinePivotY[i - 1] / bodyH;
+    const want = spineCfg?.pivots?.[i] ?? [0.42, 0.72, 0.84][i] ?? 0.9;
+    spinePivotY.push(clamp(want, below + 0.05, 0.94) * bodyH);
+  }
+  /** 躯干顶（最上面那个关节）相对 pelvis 的高度：头 / 肩 / 背鳍的基准都从它算 */
+  const torsoTopY = spinePivotY.length ? spinePivotY[spinePivotY.length - 1] : 0;
+
+  // 关节链：upper（腰）→ spine1 → … → chest（上胸）。
+  // 未开启分段时 chest 是个 y=0 的空节点（一批老代码无条件按名字找 chest），
+  // 链退化成 upper 一段 —— 与 v9s.33 之前逐帧一致。
+  const spineJoints: THREE.Group[] = [upper];
+  {
+    let parent: THREE.Object3D = upper;
+    for (let i = 1; i < spineSegs; i++) {
+      const j = group();
+      j.name = i === spineSegs - 1 ? 'chest' : `spine${i}`;
+      j.position.y = spinePivotY[i - 1] - (i >= 2 ? spinePivotY[i - 2] : 0);
+      parent.add(j);
+      parent = j;
+      spineJoints.push(j);
+    }
+    if (!spineOn) {
+      const j = group();
+      j.name = 'chest';
+      upper.add(j);
+      spineJoints.push(j);
+    }
+  }
+  const chest = spineJoints[spineJoints.length - 1];
   const torsoRoot = spineOn ? chest : upper;
 
-  let torso: THREE.Mesh;
-  let chestMesh: THREE.Mesh | null = null;
-  let abdomenH = bodyH;
-  let chestH = 0;
+  /** 每段方块的几何（squash&stretch 要按段各自缩放，不能只认第一块和最后一块） */
+  const spineMesh: THREE.Mesh[] = [];
+  /** 每段方块的高度（含向上加长的那一截） */
+  const spineBoxH: number[] = [];
   if (spineOn) {
-    abdomenH = Math.max(0.05, chestPivotY);
-    chestH = Math.max(0.05, bodyH - chestPivotY);
-    // v9s.70：腰块向上多长一截，藏进更宽的胸块里（胸块宽 +8mm，所以看不出来）——
-    // 胸段折 17° 时背面会掀开 4.4cm 的楔形缝，靠这一截填上。与髋块同一个思路：
-    // 每一级台阶都要被上一级的方块盖住，链才读得连续。
-    const torsoPad = murloc ? Math.min(0.06, chestH * 0.3) : 0;
-    torso = makeBox(bodyW, abdomenH + torsoPad, torsoD, colors.body);
-    torso.name = 'torsoLower';
-    torso.position.y = (abdomenH + torsoPad) / 2;
-    upper.add(torso);
-    // 胸块略宽 8mm：两块的侧面不共面，避免 z-fighting；读起来也像胸甲。
-    chestMesh = makeBox(bodyW + 0.008, chestH, torsoD + 0.008, colors.body);
-    chestMesh.name = 'torsoUpper';
-    chestMesh.position.y = chestH / 2;
-    chest.add(chestMesh);
+    for (let i = 0; i < spineSegs; i++) {
+      const base = i === 0 ? 0 : spinePivotY[i - 1];
+      const top = i === spineSegs - 1 ? bodyH : spinePivotY[i];
+      const h = Math.max(0.05, top - base);
+      // 每段顶面往上多长一截，藏进**更宽**的上一段里（每级 +4mm）——
+      // 弯折时背面掀开的楔形缝靠这一截填住，而上一段比下一段宽，接缝就被盖住。
+      // v9s.70 只在腰 / 胸之间做过这件事，v9s.72 把它推广到每一级。
+      const pad = murloc && i < spineSegs - 1 ? Math.min(0.06, h * 0.3) : 0;
+      const mesh = makeBox(bodyW + i * 0.004, h + pad, torsoD + i * 0.004, colors.body);
+      // 名字保持 `torsoLower` / `torsoUpper`：胡子避让、受击染色、体型断言都按名字找
+      mesh.name = i === 0 ? 'torsoLower' : (i === spineSegs - 1 ? 'torsoUpper' : `torsoMid${i}`);
+      mesh.position.y = (h + pad) / 2;
+      spineJoints[i].add(mesh);
+      spineMesh.push(mesh);
+      spineBoxH.push(h + pad);
+    }
   } else {
-    torso = makeBox(bodyW, bodyH, torsoD, colors.body);
-    torso.name = 'torso';
-    torso.position.y = bodyH / 2;                 // 相对骨盆
-    upper.add(torso);
+    const mesh = makeBox(bodyW, bodyH, torsoD, colors.body);
+    mesh.name = 'torso';
+    mesh.position.y = bodyH / 2;                 // 相对骨盆
+    upper.add(mesh);
+    spineMesh.push(mesh);
+    spineBoxH.push(bodyH);
   }
+  const torso = spineMesh[0];
+  const chestMesh: THREE.Mesh | null = spineOn ? spineMesh[spineMesh.length - 1] : null;
+
+  /** v9s.72：俯仰 / 侧倾沿链的权重（和恒为 1，所以总角一分不改） */
+  const spineShare = spineOn
+    ? spineWeights(spineSegs, spineCfg!.waist ?? 1, spineCfg!.chest ?? 0)
+    : [1];
+  /** v9s.72：偏航的累计曲线（各级的「朝到哪」，末项恒为 1） */
+  const spineCumul = spineOn ? spineYawCurve(spineSegs, spineCfg!.chainBlend ?? 0.58) : [1];
 
   // 头部独立枢轴：绕脖子旋转，实现「头先于身体转向目标方向」
   const headPivot = group();
@@ -488,7 +530,7 @@ export function createVoxelRig(
   // v9s.65：鱼人的枢轴要再往上抬到**颅骨中心**。鱼人的头比身体还横，绕脖子转时
   // 整颗头像锤子一样甩出去 —— 待机盯人时读作「疯狂转头」。抬高的同时
   // `buildMurlocHead` 会把几何下移同样的量，净效果是「位置不变、旋转中心变了」。
-  headPivot.position.y = Math.min(ori.headPivotHeight, bodyH) - chestPivotY;
+  headPivot.position.y = Math.min(ori.headPivotHeight, bodyH) - torsoTopY;
   /** 颈根基准高度：posture.neckDrop 从这里往下压（每帧按绝对值写，不累加）。 */
   const headPivotBaseY = headPivot.position.y;
   torsoRoot.add(headPivot);
@@ -675,8 +717,8 @@ export function createVoxelRig(
     // 副作用：双手 IK 的目标点必须先把 yaw 逆旋转掉，见 applySecondaryGrip 的 probeAt。
     shoulder.rotation.order = 'YXZ';
     // 相对父节点：不开启脊柱分段时父节点就是 upper（y 相对骨盆）；
-    // 开启后父节点是 chest（枢轴在 chestPivotY），要减掉这段高度。
-    shoulder.position.set(sx * (bodyW / 2 + t / 2), bodyH - 0.04 - chestPivotY, 0);
+    // 开启后父节点是 chest（枢轴在躯干顶 `torsoTopY`），要减掉这段高度。
+    shoulder.position.set(sx * (bodyW / 2 + t / 2), bodyH - 0.04 - torsoTopY, 0);
     torsoRoot.add(shoulder);
 
     const upperArm = makeBox(t, armLen / 2, t, colors.limb);
@@ -733,7 +775,7 @@ export function createVoxelRig(
     for (const sx of [-1, 1]) {
       const sp = makeBox(t * 1.2, t * 1.1, bodyW * 0.40, colors.body);
       sp.name = sx < 0 ? 'spaulderL' : 'spaulderR';
-      sp.position.set(sx * (bodyW / 2 + t * 0.4), bodyH - 0.05 - chestPivotY, 0);
+      sp.position.set(sx * (bodyW / 2 + t * 0.4), bodyH - 0.05 - torsoTopY, 0);
       torsoRoot.add(sp);
     }
   }
@@ -741,14 +783,14 @@ export function createVoxelRig(
   // ---- v9s.63 鱼人的「非人类」两件：背鳍 + 短尾 ----
   if (sentinel) {
     // 胸甲板 + 警示条 + 背包排气管 + 腰侧液压杆，全部挂在胸段（与背鳍同一套 baseY）
-    buildSentinelTorso(torsoRoot, bodyW, bodyH, torsoD, bodyH - chestPivotY);
+    buildSentinelTorso(torsoRoot, bodyW, bodyH, torsoD, bodyH - torsoTopY);
   }
   if (murloc) {
     // 背鳍挂 `torsoRoot`（开脊柱分段时就是 chest）并与肩共用 baseY：
     // 挂 `upper` 的话大幅挥击时背鳍不跟着胸段弯折，会在背上浮起来。
-    buildMurlocDorsalFin(torsoRoot, bodyH, torsoD, bodyH - chestPivotY);
-    buildMurlocShoulderFin(torsoRoot, bodyW, bodyH, bodyH - chestPivotY);
-    buildMurlocBelly(torsoRoot, bodyW, torsoD, bodyH, bodyH - chestPivotY);
+    buildMurlocDorsalFin(torsoRoot, bodyH, torsoD, bodyH - torsoTopY);
+    buildMurlocShoulderFin(torsoRoot, bodyW, bodyH, bodyH - torsoTopY);
+    buildMurlocBelly(torsoRoot, bodyW, torsoD, bodyH, bodyH - torsoTopY);
     // 短尾挂 `pelvis`：跟着屁股走。挂 `lower` 会被腿的转体甩到一侧。
     buildMurlocTail(pelvis, HS, torsoD);
   }
@@ -1273,14 +1315,16 @@ export function createVoxelRig(
       // 再动它就会与脚锁打架（实测误差正好等于腿长一半）。
       leg.ankle.position.y = -leg.segLen * s.leg;
     }
-    // v9s.33：躯干可能是「腰块 + 胸块」两块，各自按自己的基准高度缩放，
-    // 叠放顺序不能错（胸块要跟着腰块一起抬）。
-    torso.scale.set(s.girthTorso, s.torso, s.girthTorso);
-    torso.position.y = (abdomenH / 2) * s.torso;
-    if (chestMesh) {
-      chestMesh.scale.set(s.girthTorso, s.torso, s.girthTorso);
-      chestMesh.position.y = (chestH / 2) * s.torso;
-      chest.position.y = abdomenH * s.torso;
+    // v9s.33 / v9s.72：躯干是 N 块叠起来的，每块按自己的基准高度缩放，
+    // **关节位置也要跟着一起抬** —— 只缩网格不挪关节，块与块之间会当场裂开。
+    for (let i = 0; i < spineMesh.length; i++) {
+      const m = spineMesh[i];
+      m.scale.set(s.girthTorso, s.torso, s.girthTorso);
+      m.position.y = (spineBoxH[i] / 2) * s.torso;
+      if (i > 0) {
+        const baseY = spinePivotY[i - 1] - (i >= 2 ? spinePivotY[i - 2] : 0);
+        spineJoints[i].position.y = baseY * s.torso;
+      }
     }
   }
 
@@ -1735,8 +1779,8 @@ export function createVoxelRig(
    */
   function applyShoulderPose(attacking: boolean, weapon: WeaponId): void {
     const baseX = bodyW / 2 + t / 2;
-    // 肩点相对**父节点**：脊柱分段后父节点是 chest（枢轴在 chestPivotY），要减掉这段。
-    const baseY = bodyH - 0.04 - chestPivotY;
+    // 肩点相对**父节点**：脊柱分段后父节点是 chest（枢轴在躯干顶 `torsoTopY`），要减掉这段。
+    const baseY = bodyH - 0.04 - torsoTopY;
     if (!swingCfg.enabled) {
       armL.root.position.set(-baseX, baseY, 0);
       armR.root.position.set(baseX, baseY, 0);
@@ -1867,12 +1911,16 @@ export function createVoxelRig(
   }
 
   /**
-   * v9s.33 · 把「躯干总角」拆到腰 / 胸两段。
+   * v9s.33 / v9s.72 · 把「躯干总角」沿脊柱链拆到 N 个关节。
    *
    * 所有姿态层（步态、攻击、受击、惯性、持械偏移、朝向补偿）都只写 `upper`，
    * 这里在**最后一刻**按权重拆开：世界朝向不变（绕同一竖直轴的旋转可加），
-   * 但弯折点从腰移到了胸腔。因此不需要改任何一条动画数据 —— 这正是
+   * 但弯折被摊成一条曲线。因此不需要改任何一条动画数据 —— 这正是
    * 「现有动画数据能适配有腰胸颈骨骼的模型」的原因：数据描述的是总角，不是某根骨。
+   *
+   * 段数从 2 提到 3 之后，每级折角只有总角的 1/3：接头掀开的楔形缝 ≈ sin(折角) × 深度/2，
+   * 直接小一半以上。这是比「加补块盖住」更根本的一层（补块只是让缝看不见，
+   * 锥形分配是让缝根本不成立）。
    *
    * 颈段只吃俯仰：头相对躯干反向转 `neck × 总俯仰`，身体压下去时视线仍然平。
    * 扭转留给 gaze（headYaw），两套来源不打架。
@@ -1886,59 +1934,68 @@ export function createVoxelRig(
 
   function splitSpine(): void {
     if (!spineOn) return;
-    const cfg = spineCfg!;
-    const w = Math.max(0, cfg.waist ?? 1);
-    const c = Math.max(0, cfg.chest ?? 0);
-    const sum = w + c;
-    const kw = sum > 1e-6 ? w / sum : 1;
-    const kc = sum > 1e-6 ? c / sum : 0;
     const tx = upper.rotation.x;
     const ty = upper.rotation.y;
     const tz = upper.rotation.z;
-    upper.rotation.set(tx * kw, ty * kw, tz * kw);
-    chest.rotation.set(tx * kc, ty * kc, tz * kc);
-    const neck = clamp(cfg.neck ?? 0, 0, 1);
+    for (let i = 0; i < spineSegs; i++) {
+      const k = spineShare[i];
+      spineJoints[i].rotation.set(tx * k, ty * k, tz * k);
+    }
+    const neck = clamp(spineCfg!.neck ?? 0, 0, 1);
     if (neck > 0) headPivot.rotation.x -= tx * neck;
     // 记下拆分前的总角，帧尾用它校验「有没有人在 split 之后又把 upper 当总角写」
     intendedTorso = { x: tx, y: ty, z: tz };
   }
 
   /**
-   * v9s.70：把躯干总偏航沿「髋 → 腰 → 胸」这条链重新摊一次。
+   * v9s.70 / v9s.72：把躯干总偏航沿「髋 → 腰 → … → 胸」这条链重新摊一次。
    *
-   * 不变量两条：**总角不变**（`upper + chest` 之和）、**胸的世界朝向不变**
-   * （`chest` 是 `upper` 的子节点，两者之和就是它的世界角）。变的只有一件事：
-   * 腰段停在髋与胸之间的哪个比例上。
+   * 不变量两条：**总角不变**（各级局部角之和）、**胸的世界朝向不变**
+   * （`chest` 在最末端，累计角就是总角）。变的只有中间各级停在髋与胸之间的哪一点。
    *
    * 为什么必须锚在髋上：旧版腰段从 0 起算（`总角 × 0.58`），下盘 40° 时链上是
    * 40° → 7° → 24° —— 中间那节先「转回去」再「转出来」，读作腰被拧断。
-   * 锚在髋上之后恒为单调过渡（40° → 31° → 24°）。
-   * `chainBlend` 缺省 0.58：髋未转时 `hip + (总角 − hip) × 0.58` 恒等于 `总角 × 0.58`，
-   * 与 v9s.66 的姿态逐位相同 —— 只有「下盘带转」时才真正生效。
+   * 锚在髋上之后恒为单调过渡。
+   *
+   * 三级及以上时用累计曲线（`spineYawCurve`，`x^p` 且 `c(1/2) = chainBlend`），
+   * 三级下是 40° → 31° → 34°… 这类「每级增量递减」的折线 —— 真脊柱在体转时
+   * 也不是均分的：下段先跟、上段补足。两段时曲线退化成旧公式，逐位相同。
    */
   function distributeYaw(): void {
     if (!spineOn) return;
-    const total = upper.rotation.y + chest.rotation.y;
+    let total = 0;
+    for (let i = 0; i < spineSegs; i++) total += spineJoints[i].rotation.y;
     const hip = lower.rotation.y;
-    const b = clamp(spineCfg!.chainBlend ?? 0.58, 0, 1);
-    const waist = hip + (total - hip) * b;
-    upper.rotation.y = waist;
-    chest.rotation.y = total - waist;
+    // prev 从 **0** 起算（`upper` 的父节点是 pelvis，不是 lower）：
+    // 每级的局部角 = 世界角之差，末级的世界角必须是 total，否则整条链会平白
+    // 少掉一个 hip（实测漏 0.2 rad，头部跟着转、帧尾守卫报 leak）。
+    let prev = 0;
+    for (let i = 0; i < spineSegs; i++) {
+      const world = hip + (total - hip) * spineCumul[i];
+      spineJoints[i].rotation.y = world - prev;
+      prev = world;
+    }
   }
 
   /**
-   * v9s.34：本帧躯干「总」角（腰 + 胸）。
+   * v9s.34：本帧躯干「总」角（整条链之和）。
    *
    * **所有需要总角的代码都必须走这里，不要直接读 `upper.rotation`** ——
-   * `splitSpine()` 之后 `upper` 只剩腰段（42% 被拆到 `chest`），
+   * `splitSpine()` 之后 `upper` 只是腰段（其余分给了 `spine1…` / `chest`），
    * 直接读会静默偏小且不报错（v9s.33 实际踩了 5 处）。
    */
   function torsoTotal(): { yaw: number; pitch: number; lean: number } {
-    return {
-      yaw: upper.rotation.y + (spineOn ? chest.rotation.y : 0),
-      pitch: upper.rotation.x + (spineOn ? chest.rotation.x : 0),
-      lean: upper.rotation.z + (spineOn ? chest.rotation.z : 0),
-    };
+    let yaw = upper.rotation.y;
+    let pitch = upper.rotation.x;
+    let lean = upper.rotation.z;
+    if (spineOn) {
+      for (let i = 1; i < spineSegs; i++) {
+        yaw += spineJoints[i].rotation.y;
+        pitch += spineJoints[i].rotation.x;
+        lean += spineJoints[i].rotation.z;
+      }
+    }
+    return { yaw, pitch, lean };
   }
 
   /** 本帧躯干「总」偏航：脊柱拆分后 upper 只剩腰段，读总角必须把胸段加回来。 */
@@ -1973,8 +2030,15 @@ export function createVoxelRig(
     };
     const H = v.headSize;
     add(headPivot, 0.08, H / 2);
-    add(torso, 0.14);
-    add(chestMesh ?? chest, spineOn ? 0.24 : 0.24);
+    // v9s.72：躯干质量按段均摊（总量仍是 0.14 + 0.24 = 0.38）——
+    // 否则分段数一变，质心就跟着跳，平衡读数会莫名其妙地动。
+    if (spineOn) {
+      const per = 0.38 / spineMesh.length;
+      for (let i = 0; i < spineMesh.length; i++) add(spineMesh[i], per);
+    } else {
+      add(torso, 0.14);
+      add(chest, 0.24);
+    }
     add(pelvis, 0.12);
     add(armL.hand, 0.05);
     add(armR.hand, 0.05);
@@ -3463,9 +3527,14 @@ export function createVoxelRig(
     spineDebug() {
       if (!spineOn) return null;
       const t = torsoTotal();
+      let midYaw = 0;
+      for (let i = 1; i < spineSegs - 1; i++) midYaw += spineJoints[i].rotation.y;
       return {
         enabled: true,
+        segments: spineSegs,
         waistYaw: upper.rotation.y,
+        /** v9s.72：中间各级之和（2 段时恒为 0，3 段时就是 `spine1`） */
+        midYaw,
         chestYaw: chest.rotation.y,
         totalYaw: t.yaw,
         totalPitch: t.pitch,

@@ -7,6 +7,7 @@ import { createVoxelRig } from '../src/presentation/voxel-rig';
 import { blendSwingPose, segEase, solveSwingPose } from '../src/presentation/swing-pose';
 import type { SwingPoseViewConfig } from '../src/core';
 import { makeWorld, intent } from './helpers';
+import { spineChain } from './rig-nodes';
 
 /**
  * v9s.23 · 「大剑三段各自一个方向」+「攻击时身体给更多幅度」+「肩膀（上臂根部）会动」。
@@ -58,15 +59,15 @@ function swordRun(n: number, weapon: 'greatsword' | 'sword-shield' | 'dual-sword
     (w.combat as any).weapon = weapon;
     rig.update(w.character, w.combat, NONE, w.config.fixedDt, false, w.time);
     const d = rig.swingDebug();
-    const upper = rig.group.getObjectByName('upper')!;
-    const chest = rig.group.getObjectByName('chest');
+    // v9s.72：躯干总角 = 整条脊柱链之和（2~4 段都可配，不能只加两块）
+    const chain = spineChain(rig);
+    const sum = (k: 'x' | 'y' | 'z'): number => chain.reduce((a, n) => a + n.rotation[k], 0);
     frames.push({
       i, seg: d.seg, kind: d.kind, yaw: d.yaw, pitch: d.pitch, roll: d.roll,
       strike: d.strike,
-      // v9s.33：躯干总角 = 腰段 + 胸段（脊柱分段后 upper 只是腰）
-      upperY: upper.rotation.y + (chest?.rotation.y ?? 0),
-      upperX: upper.rotation.x + (chest?.rotation.x ?? 0),
-      upperZ: upper.rotation.z + (chest?.rotation.z ?? 0),
+      upperY: sum('y'),
+      upperX: sum('x'),
+      upperZ: sum('z'),
       shoulderL: d.shoulderL, shoulderR: d.shoulderR,
       phase: w.combat.phase,
     });
@@ -208,11 +209,12 @@ describe('v9s.23 骨架落地：身体 / 肩部', () => {
   it('肩部（上臂根部）在挥击中被抬起 / 前送，idle 时精确回到基准', () => {
     const { rig, frames, w } = swordRun(160);
     const baseX = raw.view.voxel.bodyWidth / 2 + raw.view.voxel.limbThickness / 2;
-    // v9s.33：肩点挂在 chest 下，局部 y 要减掉胸段枢轴高度
-    const chestPivotY = raw.view.animation.spine?.enabled
-      ? (raw.view.animation.spine.chestPivot ?? 0.42) * raw.view.voxel.bodyHeight
-      : 0;
-    const baseY = raw.view.voxel.bodyHeight - 0.04 - chestPivotY;
+    // v9s.33 / v9s.72：肩点挂在最上面那个关节（`chest`）下，局部 y 要减掉**躯干顶**
+    // 的高度 —— 段数可配之后它不再是 chestPivot，而是 pivots 的最后一项。
+    const sp = raw.view.animation.spine;
+    const segs = sp?.enabled ? Math.min(4, Math.max(2, Math.round(sp.segments ?? 2))) : 1;
+    const topFrac = segs > 1 ? (sp?.pivots?.[segs - 2] ?? sp?.chestPivot ?? 0.42) : 0;
+    const baseY = raw.view.voxel.bodyHeight - 0.04 - topFrac * raw.view.voxel.bodyHeight;
     const live = frames.filter((f) => f.strike > 0.3);
     const maxY = Math.max(...live.map((f) => Math.max(f.shoulderL.y, f.shoulderR.y)));
     const maxZ = Math.max(...live.map((f) => Math.max(f.shoulderL.z, f.shoulderR.z)));

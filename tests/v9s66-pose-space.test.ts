@@ -8,6 +8,8 @@ import {
 import { applyFootIK, captureIKBase } from '../src/presentation/rig-ik';
 import type { IKLimb } from '../src/presentation/rig-ik';
 import { createVoxelRig } from '../src/presentation/voxel-rig';
+import { spineChain } from './rig-nodes';
+import { spineYawCurve } from '../src/presentation/spine-chain';
 import { makeWorld, intent, run } from './helpers';
 import type { AppConfig, IKViewConfig } from '../src/core';
 
@@ -186,20 +188,25 @@ describe('v9s.66 偏航分账：胸真的会跟着下盘转', () => {
       run(w, 1, go);
       rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt, false);
       const d = rig.gaitDebug();
-      const upper = rig.group.getObjectByName('upper')!;
-      const chest = rig.group.getObjectByName('chest')!;
+      const chain = spineChain(rig);
       const lower = rig.group.getObjectByName('lower')!;
-      const total = upper.rotation.y + chest.rotation.y;
+      const total = chain.reduce((a, n) => a + n.rotation.y, 0);
       const hipYaw = lower.rotation.y;
-      // 腰段 = 髋 → 胸 的 chainBlend 处；胸的世界朝向恒等于总角
-      expect(upper.rotation.y).toBeCloseTo(hipYaw + (total - hipYaw) * b, 6);
-      expect(total).toBeCloseTo(hipYaw + (total - hipYaw), 6);
-      // 单调：腰段夹在髋与胸之间（v9s.66 那版会跑出区间）
-      const lo = Math.min(hipYaw, total);
-      const hi = Math.max(hipYaw, total);
-      expect(upper.rotation.y).toBeGreaterThanOrEqual(lo - 1e-9);
-      expect(upper.rotation.y).toBeLessThanOrEqual(hi + 1e-9);
-      maxChest = Math.max(maxChest, Math.abs(chest.rotation.y));
+      // 每一级的累计角 = 髋 +（总角 − 髋）× 曲线（v9s.72：段数可配，曲线末项 = 1）
+      const curve = spineYawCurve(chain.length, b);
+      let prev = 0;
+      for (let k = 0; k < chain.length; k++) {
+        const cum = prev + chain[k].rotation.y;
+        expect(cum).toBeCloseTo(hipYaw + (total - hipYaw) * curve[k], 6);
+        // 单调：每一级的世界角都夹在「髋」与「胸」之间（v9s.66 那版会跑出区间）
+        const lo = Math.min(hipYaw, total) - 1e-9;
+        const hi = Math.max(hipYaw, total) + 1e-9;
+        expect(cum).toBeGreaterThanOrEqual(lo);
+        expect(cum).toBeLessThanOrEqual(hi);
+        prev = cum;
+      }
+      expect(prev).toBeCloseTo(total, 6);
+      maxChest = Math.max(maxChest, Math.abs(chain[chain.length - 1].rotation.y));
       maxHip = Math.max(maxHip, Math.abs(hipYaw));
     }
     expect(maxHip).toBeGreaterThan(0.02);      // 下盘真的转了，否则这条测试是空转
@@ -214,10 +221,10 @@ describe('v9s.66 偏航分账：胸真的会跟着下盘转', () => {
     for (let i = 0; i < 20; i++) {
       run(w, 1, go);
       rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt, false);
-      const upper = rig.group.getObjectByName('upper')!;
-      const chest = rig.group.getObjectByName('chest')!;
+      const chain = spineChain(rig);
       const head = rig.group.getObjectByName('headPivot')!;
-      const world = w.character.bodyYaw + upper.rotation.y + chest.rotation.y + head.rotation.y;
+      const torso = chain.reduce((a, n) => a + n.rotation.y, 0);
+      const world = w.character.bodyYaw + torso + head.rotation.y;
       let d = world - w.character.headYaw;
       d = Math.atan2(Math.sin(d), Math.cos(d));
       expect(Math.abs(d)).toBeLessThan(1e-6);
