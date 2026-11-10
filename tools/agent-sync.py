@@ -234,6 +234,15 @@ def claim_version():
         txt = re.sub(r'(最后更新：)[^\n]*',
                      r'\g<1>' + datetime.now().strftime('%Y-%m-%d %H:%M') + '。', txt)
         CURRENT_PATH.write_text(txt)
+    # v9s.73：README 首行也写死了版本（`当前版本 **v0.9.94**`），而 `check-facts.mjs`
+    # 会拿它和 `package.json` 比对 —— 只改 CURRENT 的话，领号后的第一次 `verify`
+    # 必然在 docs:check 挂掉（实测 0.9.94 → 0.9.95 就是这么断的）。领号时一起同步。
+    readme = ROOT / 'README.md'
+    if readme.exists():
+        rt = readme.read_text()
+        rt2 = re.sub(r'v0\.9\.\d+', f'v{new}', rt)
+        if rt2 != rt:
+            readme.write_text(rt2)
     print(f'[agent-sync] 领号 {cur} → {new} / {internal or "（代号未读到）"}（分支不占号）')
     save_state(version=new, internal=internal)
     return new

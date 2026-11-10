@@ -92,7 +92,10 @@ describe('v9s.32 持械待机姿态', () => {
     expect(stance.greatsword.armSwing!).toBeLessThan(0.6);
   });
 
-  it('躯干扭转只在非攻击帧叠加，攻击时让位给挥击姿态', () => {
+  // v9s.73：站姿扭转不再是「攻击时让位」，而是**基础姿势的一部分** ——
+  // 攻击层往上面叠增量（`delta = 站姿⁻¹ ⊗ 攻击`），所以攻击帧的躯干 = 站姿 + 剪辑偏转。
+  // 这条用例量的是「攻击帧的躯干不等于待机帧的躯干 + 站姿」，仍然成立。
+  it('躯干扭转在攻击帧被剪辑接管（站姿进基准，不再整份叠加）', () => {
     const w = makeWorld();
     const rig = mkRig();
     w.combat.weapon = 'sword-shield';

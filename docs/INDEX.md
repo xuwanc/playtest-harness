@@ -48,7 +48,7 @@
 | 躯干背面裂开楔形缝 / 能看穿到身体另一侧 / 胯部是个洞 | `presentation/murloc-parts.ts` → `buildMurlocHip`、`voxel-rig.ts` 3.05 段 | `hipMesh`、`hipShare`、`torsoPad` | [systems/pose-layers.md](systems/pose-layers.md) §3 | `python3 tools/spine-chain-shot.py` |
 | 上臂回正后手朝斜前方支棱 / 补偿随父节点偏航而歪 | `presentation/rig-space.ts`、`voxel-rig.ts` 3.1 段 | `pitchInModelSpace`、`q_parentInModel⁻¹·R·q_parentInModel` | [systems/pose-layers.md](systems/pose-layers.md) §4 | `tests/v9s66-pose-space.test.ts` |
 | 脚钉住了但脚掌在地面上慢慢转向 / 脚腕被掰 / IK 拧脚 | `rig-ik.ts` 的 `footRest`、`voxel-rig.ts` 的 `ankleL/R` | `lockModelRotation`、`IKLimb.ankle` | [systems/pose-layers.md](systems/pose-layers.md) §5 | `tests/v9s66-pose-space.test.ts` |
-| 想给动作叠增量（攻击姿势 − 攻击基础姿势）/ 加 lean 层 | `presentation/rig-space.ts`、`voxel-rig.update()` 的 2.x→4 段 | `quatInModel`、`rotateInModelSpace`、`lockModelRotation` | [systems/pose-layers.md](systems/pose-layers.md) §6 | 设计稿（尚未实现增量层） |
+| 想给动作叠增量（攻击姿势 − 攻击基础姿势）/ 攻击时体态被抹掉 / 大角度切换时姿势「走歪」 | `presentation/pose-quat.ts`、`voxel-rig.ts` 的 `captureBasePose`/`buildAttackReference`/`blendCombatPose` | `deltaPoseQuat`、`composePoseQuat`、`POSE_NODES`、`segEase`、`combatPoseW` | [systems/pose-layers.md](systems/pose-layers.md) §6.3 | `tests/v9s73-attack-additive.test.ts` |
 | 想让角色整体驼背 / 屁股高头压低 / 加一个「体态」而不是做新动画 | `core/types.ts` 的 `CharacterPosture`、`voxel-rig.ts` 2.96 / 3.0 段、`dummy-rig.ts` | `style.posture`、`MURLOC_POSTURE`、`postureDebug()`、`POSTURE_MAX_TOTAL` | [systems/posture.md](systems/posture.md) | `tests/v9s64-posture-sentinel.test.ts`、`__harness.view.postureDebug()` |
 | 想要一个机器人 / 单眼角色 | `presentation/sentinel-parts.ts`、`bodyTypes.sentinel` | `buildSentinelHead`、`buildSentinelTorso`、`bodyTypes.sentinel` | [systems/sentinel.md](systems/sentinel.md) | `?hero=sentinel`、`tests/v9s64-posture-sentinel.test.ts` |
 | 想加一个「怪物」角色 / 鱼人怎么做 | `presentation/murloc-parts.ts`、`voxel-rig.ts` / `dummy-rig.ts` 的挂点、`DummySpawn.variant` | `buildMurlocHead`、`buildMurlocDorsalFin`、`DummyVariant`、`bodyTypes.murloc` | [systems/murloc.md](systems/murloc.md) §1–4 | `tests/v9s63-murloc.test.ts`、`?hero=murloc`、`y-murloc` 工位 |
@@ -160,7 +160,7 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（125 文件 / 1285 例） | 提交前 |
+| `npm test` | vitest 全量（126 文件 / 1294 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
 | `npm run smoke` | 起 `dist/`，跑 77 项画面层 + 契约自检 | 发布前 |
