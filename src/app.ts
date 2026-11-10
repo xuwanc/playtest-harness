@@ -100,10 +100,22 @@ export function startApp(): void {
 
   // v9s.x：装备 / 外观展示界面。纯表现层、惰性创建独立 WebGL 转台，
   // 不写 World、不进主循环 / 确定性快照；入口胶囊挂在顶部 #panel-row。
+  // v9s.69：getCharacterConfig 实时读当前体型，让展示界面匹配主场景所选角色。
   const wardrobe = createWardrobeView({
     view: VIEW_CONFIG,
     moveSpeed: world.config.moveSpeed,
     toggleButton: document.getElementById('wardrobe-toggle'),
+    getCharacterConfig: () => {
+      const id = view.bodyTypes().id;
+      const bt = VIEW_CONFIG.bodyTypes?.[id];
+      if (!bt) return { id, name: id, voxel: VIEW_CONFIG.voxel, colors: VIEW_CONFIG.colors };
+      return {
+        id,
+        name: bt.name ?? id,
+        voxel: bt.voxel ?? VIEW_CONFIG.voxel,
+        colors: bt.colors ? { ...VIEW_CONFIG.colors, ...bt.colors } : VIEW_CONFIG.colors,
+      };
+    },
   });
 
   // v9r：手感调试面板 = 实际位移速度曲线 + 方向罗盘；胶囊与容器由统一胶囊行提供，

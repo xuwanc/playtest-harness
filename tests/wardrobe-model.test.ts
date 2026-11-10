@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  WARDROBE_LOOK, WARDROBE_PALETTES, WARDROBE_SECTIONS, WARDROBE_WEAPONS,
-  blendTowards, dragYaw, idleSway, mergePalette, resolveLook, wrapPi,
+  CRAFT_CELLS, WARDROBE_LOOK, WARDROBE_MATERIALS, WARDROBE_RECIPES, WARDROBE_SECTIONS,
+  WARDROBE_WEAPONS, blendTowards, consumeForRecipe, countMaterials, dragYaw, idleSway,
+  matchRecipe, resolveLook, wrapPi,
 } from '../src/presentation/wardrobe-model';
+import type { MaterialId } from '../src/presentation/wardrobe-model';
 import type { ColorConfig } from '../src/core';
 
 const DEG = Math.PI / 180;
@@ -100,46 +102,86 @@ describe('Wardrobe 平滑与待机微摆', () => {
   });
 });
 
-describe('Wardrobe 数据驱动分区 / 染色', () => {
-  it('分区表：武器与染色是真交互，防具与背包是显式占位；槽位齐全', () => {
+describe('Wardrobe 数据驱动分区（武器 + 合成台，已去染色）', () => {
+  it('分区表：武器与合成台两段，无 dye 段', () => {
     const ids = WARDROBE_SECTIONS.map((s) => s.id);
-    expect(ids).toEqual(['weapon', 'armor', 'dye', 'bag']);
+    expect(ids).toEqual(['weapon', 'craft']);
     expect(new Set(ids).size).toBe(ids.length);
-    const weapon = WARDROBE_SECTIONS.find((s) => s.id === 'weapon')!;
-    const dye = WARDROBE_SECTIONS.find((s) => s.id === 'dye')!;
-    const armor = WARDROBE_SECTIONS.find((s) => s.id === 'armor')!;
-    const bag = WARDROBE_SECTIONS.find((s) => s.id === 'bag')!;
-    expect(weapon.kind).toBe('weapon');
-    expect(dye.kind).toBe('dye');
-    expect(armor.kind).toBe('placeholder');
-    expect(bag.kind).toBe('placeholder');
-    expect((armor.slots?.length ?? 0) + (bag.slots?.length ?? 0)).toBeGreaterThanOrEqual(10);
+    expect(WARDROBE_SECTIONS.find((s) => s.id === 'weapon')!.kind).toBe('weapon');
+    expect(WARDROBE_SECTIONS.find((s) => s.id === 'craft')!.kind).toBe('craft');
   });
 
-  it('武器表与配色表 id 唯一，染色第一套是「原色」（不改配置）', () => {
+  it('武器表 id 唯一', () => {
     expect(new Set(WARDROBE_WEAPONS.map((w) => w.id)).size).toBe(WARDROBE_WEAPONS.length);
-    expect(new Set(WARDROBE_PALETTES.map((p) => p.id)).size).toBe(WARDROBE_PALETTES.length);
-    expect(WARDROBE_PALETTES[0].id).toBe('default');
-    expect(Object.keys(WARDROBE_PALETTES[0].colors)).toHaveLength(0);
   });
 
-  it('mergePalette 返回新对象、不污染 base、未知 id 回落原色', () => {
-    const before = { ...BASE };
-    const ember = mergePalette(BASE, 'ember');
-    expect(ember).not.toBe(BASE);
-    expect(ember.body).not.toBe(BASE.body);
-    expect(ember.head).toBe(BASE.head);          // 只覆盖外观键，头色沿用
-    expect(ember.ground).toBe(BASE.ground);      // 场景色不参与染色
-    expect(BASE).toEqual(before);                // base 未被改写
-    expect(mergePalette(BASE, 'nope')).toEqual(BASE);
-  });
-
-  it('每套染色都带合法色卡与可解析 hex', () => {
-    for (const p of WARDROBE_PALETTES) {
-      expect(p.swatch).toMatch(/^#[0-9a-fA-F]{6}$/);
-      for (const v of Object.values(p.colors)) {
-        expect(v).toMatch(/^#[0-9a-fA-F]{6}$/);
-      }
+  it('合成魔方固定 12 格（3×4），材料表 id 唯一且带合法色卡', () => {
+    expect(CRAFT_CELLS).toBe(12);
+    expect(new Set(WARDROBE_MATERIALS.map((m) => m.id)).size).toBe(WARDROBE_MATERIALS.length);
+    for (const m of WARDROBE_MATERIALS) {
+      expect(m.swatch).toMatch(/^#[0-9a-fA-F]{6}$/);
     }
+  });
+
+  it('配方表：5 件装备、需求为材料计数、slot 唯一', () => {
+    expect(WARDROBE_RECIPES).toHaveLength(5);
+    expect(new Set(WARDROBE_RECIPES.map((r) => r.slot)).size).toBe(5);
+    expect(new Set(WARDROBE_RECIPES.map((r) => r.id)).size).toBe(5);
+    for (const r of WARDROBE_RECIPES) {
+      const total = Object.values(r.need).reduce((a, b) => a + (b ?? 0), 0);
+      expect(total).toBeGreaterThan(0);
+      expect(total).toBeLessThanOrEqual(CRAFT_CELLS);
+    }
+  });
+});
+
+describe('Wardrobe 合成（材料计数 / 配方匹配 / 消耗）', () => {
+  const fill = (...mats: (MaterialId | null)[]): (MaterialId | null)[] => {
+    const cells = new Array(CRAFT_CELLS).fill(null) as (MaterialId | null)[];
+    mats.forEach((m, i) => { cells[i] = m; });
+    return cells;
+  };
+
+  it('countMaterials 只统计非空格', () => {
+    const c = countMaterials(fill('iron', 'iron', 'iron', null, 'leather', 'cloth'));
+    expect(c.iron).toBe(3);
+    expect(c.leather).toBe(1);
+    expect(c.cloth).toBe(1);
+    expect(c.wood).toBe(0);
+    expect(c.crystal).toBe(0);
+  });
+
+  it('matchRecipe 按计数匹配、与格子位置无关、多余材料不影响', () => {
+    expect(matchRecipe(fill('iron', 'iron', 'iron'))?.recipe.id).toBe('helmet');
+    expect(matchRecipe(fill('iron', 'iron', 'leather'))?.recipe.id).toBe('legs');
+    expect(matchRecipe(fill('crystal'))?.recipe.id).toBe('trinket');
+    expect(matchRecipe(fill('wood', 'wood', 'cloth'))?.recipe.id).toBe('bag');
+    expect(matchRecipe(fill('leather', 'leather', 'leather'))?.recipe.id).toBe('chest');
+    // 多余材料不参与判定，仍能匹配首个可满足配方
+    expect(matchRecipe(fill('iron', 'iron', 'iron', 'crystal', 'wood'))?.recipe.id).toBe('helmet');
+    // 完全不匹配
+    expect(matchRecipe(fill('wood', 'cloth'))).toBeNull();
+    expect(matchRecipe(fill())).toBeNull();
+  });
+
+  it('matchRecipe 材料不够时不匹配（如只 2 铁，不够头盔的 3 铁）', () => {
+    expect(matchRecipe(fill('iron', 'iron'))).toBeNull();
+  });
+
+  it('consumeForRecipe 只移除满足配方所需的材料，其余保留、不改动入参', () => {
+    const before = fill('iron', 'iron', 'iron', 'crystal');
+    const after = consumeForRecipe(before, WARDROBE_RECIPES.find((r) => r.id === 'helmet')!);
+    expect(after.slice(0, 3)).toEqual([null, null, null]);  // 3 铁被消耗
+    expect(after[3]).toBe('crystal');                       // 多余晶保留
+    expect(before).toEqual(fill('iron', 'iron', 'iron', 'crystal')); // 入参不变
+  });
+
+  it('consumeForRecipe 多材料配方按序消耗（护腿 = 铁×2 + 皮×1）', () => {
+    const before = fill('iron', 'leather', 'iron', 'wood');
+    const after = consumeForRecipe(before, WARDROBE_RECIPES.find((r) => r.id === 'legs')!);
+    const c = countMaterials(after);
+    expect(c.iron).toBe(0);
+    expect(c.leather).toBe(0);
+    expect(after[3]).toBe('wood');
   });
 });
