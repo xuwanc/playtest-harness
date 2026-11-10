@@ -21,7 +21,8 @@ import type {
   CharacterState, ColorConfig, CombatState, GaitViewConfig, HurtState, HurtViewConfig,
   IKViewConfig, LeanViewConfig, LinkState, LinkViewConfig, OrientationViewConfig,
   BalanceViewConfig,
-  ProgramAnimViewConfig, StanceViewConfig, SwingPoseViewConfig, TurnInPlaceState, VoxelConfig, WeaponId,
+  ProgramAnimViewConfig, StanceViewConfig, SwingPoseViewConfig, TurnInPlaceState,
+  VoxelConfig, WeaponId,
   WeaponMountConfig,
   WeaponWristViewConfig,
 } from '../core';
@@ -48,6 +49,11 @@ import { applyFootIK, captureIKBase, EMPTY_IK_DIAGNOSTICS } from './rig-ik';
 import { blendIKAngles, solveTwoBoneIK } from './ik';
 import type { IKDiagnostics, IKLimb } from './rig-ik';
 import { pitchInModelSpace } from './rig-space';
+import {
+  capturePoseQuat, composePoseQuat, createPoseQuat, deltaPoseQuat, setPoseNodeEuler,
+  setPoseNodeIdentity,
+} from './pose-quat';
+import type { PoseQuat } from './pose-quat';
 import { normalizeSegments, spineWeights, spineYawCurve } from './spine-chain';
 import {
   decayImpact, NEUTRAL_STRETCH, smoothStretch, solveStretch,
@@ -767,6 +773,28 @@ export function createVoxelRig(
   const legR = makeLeg(1);
   const armL = makeArm(-1);
   const armR = makeArm(1);
+
+  // ---- v9s.73 姿态增量层：攻击层接管哪些节点的旋转 ----
+  // 顺序固定（快照按索引对应），腿不在内 —— 腿由步态 / 跨步 / IK 独占。
+  // `root` 也不在内：它带「整圈旋转」语义（spinYaw ≡ 2π），必须走最短弧而不是 slerp，
+  // 单独处理（见 blendCombatPose）。
+  // 只含躯干：手臂 / 肘仍走逐轴欧拉混合。
+  //
+  // 为什么不是所有节点（v9s.73 第一版试过）：`armR.root.rotation.order` 是 YXZ，
+  // 抬臂到 −1.9 rad（−109°）时四元数→欧拉有两个等价解，Three 会挑到
+  // `(x=−1.24, y=2.86, z=−3.01)` 那一支 —— 朝向一样，但下游全都按「rotation.x 是抬臂角」
+  // 在读（剑身仰角反解、肩部 IK、举顶内收），一翻转就全错（实测剑身仰角 89° → 78°）。
+  // 躯干没有这个问题：俯仰 / 偏航都在 ±1 rad 内，且体态是「个性」最该保留的地方。
+  const POSE_NODES: THREE.Object3D[] = [upper];
+  const PI_UPPER = 0;
+  /** 攻击前的基础姿势（步态 + 体态 + 持械站姿），增量层的「底」 */
+  const basePose = createPoseQuat(POSE_NODES);
+  /** 本帧攻击剪辑解出的绝对姿势 */
+  const attackPose = createPoseQuat(POSE_NODES);
+  /** 攻击基准姿势：剪辑作者写关键帧时的零点（只含持械站姿） */
+  const refPose = createPoseQuat(POSE_NODES);
+  /** `attackPose ⊗ refPose⁻¹`，每帧复用 */
+  const attackDelta = new Float32Array(POSE_NODES.length * 4);
 
   // ---- v9s.53 肩甲：一块方块把「肩宽 + 细臂」的接头补实 ----
   // 体素风格里手臂是一根细棍插在山墙上，肩线单薄；加一块略大于臂的方块，轮廓立刻变厚。
@@ -1844,13 +1872,18 @@ export function createVoxelRig(
   // applyCombatPose 只负责上半身与武器姿态，职责单一。
 
   /**
-   * v9s.29 · 「不打这一击时」的骨架快照（待机 / 步态姿态）。
+   * v9s.29 / v9s.73 · 「不打这一击时」的骨架快照（待机 / 步态姿态）。
    *
-   * 只记战斗姿态会覆盖的节点：躯干、骨盆、双臂、整体转体。
-   * 腿不动 —— 腿的进出由 `attackBlend` 单独负责（它要跟跨步相位对齐）。
+   * 分两半：
+   *   - **躯干**（`upper`）走四元数快照 `basePose`，攻击层相对「持械站姿」叠增量；
+   *   - **手臂 / 肘 / 骨盆旋转**仍是欧拉逐轴插值 —— 抬臂到 −109° 时四元数→欧拉会
+   *     翻到等价解上，下游按 `rotation.x` 读抬臂角的代码全错（见 `POSE_NODES` 注释）。
+   *   - **位移**没有四元数语义，逐轴插值；`root.rotation.y` 带整圈语义，走最短弧。
+   *
+   * 腿不在快照里 —— 腿的进出由 `attackBlend` 单独负责（它要跟跨步相位对齐）。
    */
   type BaseSnap = {
-    upperX: number; upperY: number; upperZ: number; upperPX: number; upperPZ: number;
+    upperPX: number; upperPZ: number;
     pelvisX: number; pelvisY: number; pelvisZ: number; pelvisRX: number; pelvisRZ: number;
     lrx: number; lry: number; lrz: number; lj: number;
     rrx: number; rry: number; rrz: number; rj: number;
@@ -1860,7 +1893,6 @@ export function createVoxelRig(
 
   function captureBasePose(): void {
     baseSnap = {
-      upperX: upper.rotation.x, upperY: upper.rotation.y, upperZ: upper.rotation.z,
       upperPX: upper.position.x, upperPZ: upper.position.z,
       pelvisX: pelvis.position.x, pelvisY: pelvis.position.y, pelvisZ: pelvis.position.z,
       pelvisRX: pelvis.rotation.x, pelvisRZ: pelvis.rotation.z,
@@ -1870,23 +1902,61 @@ export function createVoxelRig(
       rj: armR.joint.rotation.x,
       rootY: root.rotation.y,
     };
+    capturePoseQuat(POSE_NODES, basePose);
   }
 
   /**
-   * v9s.29 · 把「战斗姿态」按权重混合回待机姿态。
+   * v9s.73 · 攻击基准姿势 —— 剪辑作者写关键帧时的「零点」。
    *
-   * w=1 → 完全是战斗姿态（攻击主体，逐帧不变）；w=0 → 完全待机。
-   * 进出各一段时长（`poseIn` / `poseOut`），两端用 smoothstep，导数连续 = 不抽。
+   * 剪辑数据里的 `bodyYaw / armPitch / bladePitch…` 都是**绝对量**，作者是站在
+   * 「持械站姿」上量的（见 `view.animation.stance`）。把这份站姿单独解出来当参考，
+   * 躯干这一层就变成「相对站姿的偏转」：
+   *
+   * ```text
+   * delta = 站姿⁻¹ ⊗ 攻击姿势        final = 基础姿势 ⊗ slerp(I, delta, w)
+   * ```
+   *
+   * 收益：基础姿势里多出来的东西（体态前倾、走动带转、将来按体型缩放的骨架特征）
+   * 不再被攻击层「一刀切掉」，而是**保留在下面**，攻击叠在上面。
+   * 换体型 / 换武器时只要基准跟着变，剪辑数据不用逐帧重调。
+   *
+   * 只含站姿，**不含体态**：体态是「个性」，在 capture 之后才写进 `upper`（2.96 段），
+   * 本来就叠在攻击之上。要不要在攻击时压掉它是另一个旋钮（`posture.attackKeep`），
+   * 不属于这一层 —— 这一步留给「体态纳入基础」的下一轮。
+   *
+   * `weight` 与步态层写 stance 时用的 `stanceWeight` 同源：换武器的 0.22s 淡入期间，
+   * base 里的站姿只吃到一部分，基准若按满站姿算，delta 会凭空多出剩下的那部分。
+   */
+  function buildAttackReference(stance: StanceViewConfig | null, weight: number): void {
+    const k = clamp(weight, 0, 1);
+    if (!stance || k <= 0) {
+      setPoseNodeIdentity(refPose, PI_UPPER);
+      return;
+    }
+    setPoseNodeEuler(refPose, PI_UPPER, (stance.torsoPitch ?? 0) * k, (stance.torsoYaw ?? 0) * k, 0);
+  }
+
+  /**
+   * v9s.73 · 把「战斗姿态」按权重合成回基础姿态。
+   *
+   * 躯干：`q = base ⊗ slerp(I, 站姿⁻¹ ⊗ attack, k)` —— 四元数增量。
+   * 旧版这里是逐轴欧拉 lerp，大角度扭转时中间帧不沿最短弧走、多轴同转会「先绕开再回来」。
+   *
+   * 手臂 / 肘 / 骨盆 / 位移：保留原来的逐轴插值（理由见 `POSE_NODES`）。
+   * `root.rotation.y` 带整圈语义（`spinYaw ≡ 2π`），必须走最短弧。
+   *
+   * `k = segEase(w)` 保留原来的 smoothstep 手感。
    */
   function blendCombatPose(w: number): void {
     const b = baseSnap;
     if (!b) return;
     const k = segEase(clamp(w, 0, 1));
-    if (k >= 1) return;
+    // ---- 躯干：四元数增量 ----
+    capturePoseQuat(POSE_NODES, attackPose);
+    deltaPoseQuat(refPose, attackPose, attackDelta);
+    composePoseQuat(basePose, attackDelta, k);
+    // ---- 以下沿用 v9s.29 的逐轴插值 ----
     const mix = (from: number, to: number): number => from + (to - from) * k;
-    upper.rotation.x = mix(b.upperX, upper.rotation.x);
-    upper.rotation.y = mix(b.upperY, upper.rotation.y);
-    upper.rotation.z = mix(b.upperZ, upper.rotation.z);
     upper.position.x = mix(b.upperPX, upper.position.x);
     upper.position.z = mix(b.upperPZ, upper.position.z);
     pelvis.position.x = mix(b.pelvisX, pelvis.position.x);
@@ -2125,6 +2195,11 @@ export function createVoxelRig(
     bowModel.drawString.position.z = -0.06;
     arrowModel.position.z = 0;
     staffModel.orb.scale.setScalar(1);
+    // v9s.73：`upper.rotation.y` 归零前先记下基础值（持械站姿扭转 + 下盘带转）。
+    // 攻击层写的是**绝对** y（`+= p.yaw`，前提是这里归零），基础值由 `blendCombatPose`
+    // 从快照里加回来；不攻击时没有 blend，必须在返回前原样恢复 ——
+    // 否则剑盾侧身站姿的 0.12 rad 会被这一句清零（实测躯干扭转 0.12 → 0）。
+    const baseUpperY = upper.rotation.y;
     upper.rotation.y = 0;
 
     if (combat.charging && combat.weapon === 'bow') {
@@ -2167,6 +2242,8 @@ export function createVoxelRig(
       if (combat.weapon === 'greatsword') {
         mountR.position.x = -Math.max(0, mountCfg.twoHandInsetX ?? 0);
       }
+      // 不攻击：交还基础姿势的偏航（持械站姿扭转，无 blend 可加回来）
+      upper.rotation.y = baseUpperY;
       return;
     }
 
@@ -2349,6 +2426,7 @@ export function createVoxelRig(
       root.rotation.y = 0;
       lastRootTurn = 0;
       upper.rotation.x = 0;
+      upper.rotation.y = 0;
       upper.rotation.z = 0;
       // 每帧把骨盆复位到髋部基准：applyStep / applyHurt / 落地缓冲 / 挥击跨步
       // 都用 += / -= 叠加，若不归零会逐帧累积，导致攻击时上半身飞出去（v7a 回归 bug）。
@@ -3019,18 +3097,26 @@ export function createVoxelRig(
           combatPoseW + (fadeTarget > combatPoseW ? step : -step), 0, 1,
         );
       }
-      if (combatPoseW > 0 || combatActive) captureBasePose();
-      applyCombatPose(combat, dt);
-      // 只在「过渡中」混合：w=1 是恒等，w=0 时上面已经写完待机姿态，
-      // 再拿上一帧的快照混一次会把旧姿态糊回来（快照只在非零权重时刷新）。
-      if (combatPoseW > 0 && combatPoseW < 1) blendCombatPose(combatPoseW);
-      // v9s.32：躯干朝向的持械偏移。攻击权重越高，这部分越让位给挥击姿态，
-      // 收招时再随 combatPoseW 淡回 —— 不额外引入一条淡入淡出时间轴。
+      // v9s.32 / v9s.73：躯干朝向的持械偏移。
+      //
+      // v9s.73 起**不再随攻击权重让位**：它是「基础姿势」的一部分，攻击层只是往
+      // 上面叠增量（`delta = 攻击 ⊗ 站姿⁻¹`）。让位的话基准就落不到 base 里，
+      // w=1 时会少掉整个站姿扭转（剑盾 0.12 rad ≈ 7°）。
       if (stanceCfgNow) {
-        const w = (1 - combatPoseW) * stanceWeight;
-        upper.rotation.y += (stanceCfgNow.torsoYaw ?? 0) * w;
-        upper.rotation.x += (stanceCfgNow.torsoPitch ?? 0) * w;
+        upper.rotation.y += (stanceCfgNow.torsoYaw ?? 0) * stanceWeight;
+        upper.rotation.x += (stanceCfgNow.torsoPitch ?? 0) * stanceWeight;
       }
+      if (combatPoseW > 0 || combatActive) {
+        captureBasePose();
+        // 基准每帧重建：站姿会随武器切换淡入（0.22s），缓存的唯一收益是省一次欧拉合成，
+        // 却要再维护一条「权重变了没」的判据 —— 不值得。
+        buildAttackReference(stanceCfgNow, stanceWeight);
+      }
+      applyCombatPose(combat, dt);
+      // v9s.73：满权重也合成（base ⊗ delta），不再要求 0<w<1。
+      // 旧版 w=1 直接返回、骨骼就是攻击绝对姿态 —— 那样基础里的步态摆臂 / 体态
+      // 会被整层覆盖；现在攻击只贡献「相对站姿的偏转」，下面那层原样保留。
+      if (combatPoseW > 0) blendCombatPose(combatPoseW);
       // 2.05) 法杖引导姿态：不进近战状态机，在基础步态之上单独叠加（v7c #12）
       applyChannelPose(channeling, c.gaitPhase);
       // 2.06) v9a 派生招姿态（举盾前撞）：与 combat.phase 正交，按 link.progress 独立驱动
@@ -3063,8 +3149,19 @@ export function createVoxelRig(
 
       // 2.6) 移动惯性倾斜叠加：启动前倾 / 刹车后仰 / 绕圈侧倾。
       //      受击时减半，避免与受击后仰打架；攻击时速度差分很小，倾斜自然趋零。
+      //
+      //      v9s.73：这一层**写在攻击合成之后**，所以它是叠加在攻击之上的独立增量：
+      //      攻击层决定「手往哪挥」，lean 决定「身体被惯性推到哪」，两者不共享权重、
+      //      也不互相覆盖。顺序本身就是解耦，不需要额外的混合通道。
+      //
+      //      为什么仍用局部欧拉（而不是 `pitchInModelSpace`）：`upper` 的父节点是
+      //      `pelvis`，它的偏航恒为 0（髋的偏航在兄弟节点 `lower` 上），只有一个
+      //      几度以内的步态侧倾。父链几乎不转时模型空间与局部空间逐位等价，
+      //      而欧拉写法能让 `distributeYaw` 继续把 `rotation.y` 当「纯偏航」读
+      //      （复合四元数分解出的 y 会带 4.6e-4 的串扰，头部朝向断言会失守）。
       const leanScale = hurt.type === 'none' ? 1 : 0.4;
       // v9p：停步惯性让上身跟着微微前倾，随脉冲两端归零
+      // （`stopChest` 不乘 leanScale —— 它是停步收势，不是受击反应）
       upper.rotation.x += leanForward * leanScale + stopChest;
       // 侧移时的程序化身体侧倾（v8）与惯性侧倾叠加；受击时同样减半
       upper.rotation.z += (leanSide + gait.sideLean) * leanScale;

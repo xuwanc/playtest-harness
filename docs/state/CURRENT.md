@@ -5,13 +5,17 @@
 
 ## 一句话
 
-v0.9.93：**躯干从「两级台阶」变成一条曲线**——脊柱链支持 3 段（可配到 4），弯折沿链锥形分配。
-① 本轮（表现层）：`spine.segments` / `spine.pivots`（缺省 3 段、`[0.42, 0.72]`），
-分配数学抽成 `presentation/spine-chain.ts`（俯仰按 waist→chest 线性权重、偏航按 `x^p` 累计曲线，
-两段时逐位退化成 v9s.70）。每级折角降到 1/3，接缝缝宽从 8.8cm 收到 ~3.2cm，补块退回兜底；
-`dummy-rig` 的假人暂时不参与分段。
-② 主干已含：Wardrobe 底部抽屉改版 + 待机盾面朝向修正（v0.9.92，`shieldPitchDeg` 8°→70°，
-见 `systems/wardrobe.md`）、脊柱链偏航沿「髋 → 腰 → 胸」单调 + 髋块 + 鱼人抬头（v0.9.91）、
+v0.9.93：**攻击层从「欧拉逐轴覆盖」变成「四元数增量」**——躯干按
+`delta = 站姿⁻¹ ⊗ 攻击姿势`、`final = 基础 ⊗ slerp(I, delta, w)` 叠加。
+① 本轮（表现层）：`presentation/pose-quat.ts`（快照 / 增量 / 合成 / 转角，纯函数），
+`voxel-rig` 的 `captureBasePose` 抓四元数、`buildAttackReference` 解持械站姿当基准、
+`blendCombatPose` 改四元数合成（满权重也合成）。满权重与旧绝对姿态逐位一致（1278 例全绿）；
+大角度切换走最短弧、不再「先绕开再回来」。**手臂不走这条路径**：`shoulder` 是 YXZ，
+抬臂 −1.9 rad 时四元数→欧拉会翻支、下游按 `rotation.x` 读抬臂角全错（举顶仰角 89°→78°），
+所以 `POSE_NODES` 只有 `[upper]`。顺手修了 `applyCombatPose` 归零 `upper.rotation.y`
+吃掉持械站姿（剑盾侧身 0.12 rad → 0.03）的问题。
+② 主干已含：脊柱链 3 段 + 锥形分配（v0.9.93 / v9s.72）、Wardrobe 底部抽屉改版 +
+待机盾面朝向（v0.9.92）、偏航沿「髋 → 腰 → 胸」单调 + 髋块 + 鱼人抬头（v0.9.91）、
 模型空间补偿 + 脚锁（v0.9.89）、鱼人爬姿体态层、哨兵机角色、`rig-fix` 七条造型修正。
 ③ 更早：竖屏操作簇、震屏分档、技能指示器统一口径、文档事实守卫 / 推送护栏 / 四层 CI。
 
@@ -37,10 +41,10 @@ v0.9.93：**躯干从「两级台阶」变成一条曲线**——脊柱链支持
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 123 文件 / 1269 例全绿 |
+| `npx vitest run` | 124 文件 / 1278 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
 | `npm run smoke` | 77/77 PASS |
-| `npm run docs:check` | PASS（107 份文档 ≤300 行，README 99 行） |
+| `npm run docs:check` | PASS（108 份文档 ≤300 行，README 99 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 | `python3 tools/check-online.py --wait 180` | 发布后核验线上 JS 与本地 `dist` 同一份 |
@@ -51,7 +55,7 @@ v0.9.93：**躯干从「两级台阶」变成一条曲线**——脊柱链支持
 
 ## 正在做
 
-- 无。v9s.72（v0.9.93）已合并发布。
+- 无。v9s.73 的攻击层增量已合并发布。
 
 ## 伤害 / 死亡的关键数（改之前先读）
 
@@ -69,6 +73,20 @@ v0.9.93：**躯干从「两级台阶」变成一条曲线**——脊柱链支持
 细节：[`../systems/damage-death.md`](../systems/damage-death.md)、[`../systems/blood.md`](../systems/blood.md)。
 
 ## 下一步
+
+**优先（本轮引出的四条）**：
+
+- **体态还没有进 base**：`posture` 的 `upper.rotation.x +=` 仍在 capture 之后，所以攻击增量叠的是
+   「站姿」，不是「站姿 + 驼背」。要真正实现「个性 Pose + 增量」，得把 2.96 段移到 capture 之前，
+   同时把 `keep = 1 − attackBlend × 0.5` 换成显式配置，并复查 `POSTURE_MAX_TOTAL` 的预算
+   （那时 `upper.rotation.x` 还不含攻击角）。见 `systems/pose-layers.md` §6.3 末段。
+- **`lean` 缺一个「攻击时压多少」的旋钮**：顺序已经解耦（写在攻击合成之后），
+   但没有独立的权重；攻击自带前压 + 惯性前倾可能叠加过头。
+- **脚锁假设踝的局部旋转没人用**：将来做「脚尖点地 / 踮脚」得给它一条显式优先级通道。
+- **`chainBlend` 不区分偏航来源**：下盘带转 / 攻击旋身 / 站姿斜跨走同一条分配曲线，
+   要分开得先有逐层 mask（`pose-layers.md` §6.1 的 Unity Avatar Mask 那一条）。
+
+**其余**：
 
 1. **残肢只是表演**：断块不进 `world.boxes`，会穿地穿人；要「踩到断头会滑」得给残块加低矮碰撞。
 2. **腰斩高度写死**：`waist` 一律在 `u` 处断开，不看骨架的盆骨位置；驼背体型会偏。

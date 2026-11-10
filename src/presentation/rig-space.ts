@@ -79,6 +79,20 @@ export function yawInModelSpace(
 }
 
 /**
+ * 绕模型 Z 轴滚转（+ = 向角色左侧倒，与 `rotation.z` 正方向一致）。
+ *
+ * 补齐 X / Y / Z 三轴的对称 API。**惯性侧倾（lean）现在没用它**：`upper` 的父节点
+ * 是 `pelvis`，而髋的偏航在兄弟节点 `lower` 上 —— 父链几乎不转，局部欧拉与模型空间
+ * 逐位等价；反过来用它会破坏 `distributeYaw` 把 `rotation.y` 当「纯偏航」读的约定
+ * （复合四元数分解出的 y 会带串扰）。留给将来真有「父链大角度旋转下要侧倾」的层。
+ */
+export function rollInModelSpace(
+  node: THREE.Object3D, root: THREE.Object3D, angle: number,
+): void {
+  rotateInModelSpace(node, root, AXIS_Z, angle);
+}
+
+/**
  * 把节点的模型空间朝向锁到 `target`（`quatInModel` 的读数），按 `weight` 混入。
  *
  * 用途：足部 IK。两骨 IK 改的是髋 / 膝角，脚掌挂在踝上会跟着被拧 ——
