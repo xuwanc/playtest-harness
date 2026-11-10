@@ -3160,6 +3160,36 @@ export type TrailViewConfig = {
 };
 
 /**
+ * 角色移动残影（v9s.56，纯表现层）。
+ *
+ * 不做后处理、不动主渲染循环：老头移动时按节流间隔浅克隆一次 rig 顶层 group
+ * （共享几何体、共享各部件原材质引用），冻结在生成时刻的世界位姿，再统一换成
+ * 半透明材质、按年龄淡出后回收进对象池。只对指定 bodyType（默认 `elder`）生效，
+ * 站着不动不生成，完全贴合「移动的时候后面有前几帧残影」。
+ */
+export type AfterimageViewConfig = {
+  enabled: boolean;
+  /** 对象池容量：最多同时存在的残影数（≈ 残影条数） */
+  maxGhosts: number;
+  /** 生成间隔（秒）：移动时每隔这么久生成一张快照，避免每帧堆残影 */
+  spawnInterval: number;
+  /** 单张残影存活时长（秒，≈ 前几帧） */
+  life: number;
+  /** 触发残影的最低单帧位移（m），低于此值视为静止、不生成 */
+  minMove: number;
+  /** 残影起始不透明度 */
+  baseOpacity: number;
+  /** 衰减指数（>1 表示越老淡出越快） */
+  fadeExp: number;
+  /** 着色：'keep' 保留原部件颜色 / 'tint' 用 color 着色 / 'mono' 单色 */
+  tint: 'keep' | 'tint' | 'mono';
+  /** tint / mono 时的颜色（十六进制） */
+  color: string;
+  /** 仅对该 bodyType id 生效；缺省（空串）则所有角色都生残影 */
+  bodyType: string;
+};
+
+/**
  * v9s.22 · 四肢伸缩 / 挤压（squash & stretch）。
  *
  * 现状的痛点是「动作幅度不够夸张」：方块人手臂只有 0.36 m（比肩宽 0.6 还短），
@@ -3533,6 +3563,8 @@ export type ViewConfig = {
   projectiles: ProjectileViewConfig;
   /** v9s.22：挥击拖尾（刀光） */
   weaponTrail: TrailViewConfig;
+  /** v9s.56：角色移动残影（纯表现，克隆浅拷贝 + 半透明淡出，默认仅老头） */
+  afterimage: AfterimageViewConfig;
   /** v9s.22：命中定格（纯表现，只冻角色姿态，不冻 Core） */
   hitstop: HitstopViewConfig;
   /** v9s.37 · 击地冲击（大剑第三击）的尘环 / 震动 */

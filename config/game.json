@@ -2129,6 +2129,18 @@
       "tipBoost": 0.35,
       "pulseDecay": 14
     },
+    "afterimage": {
+      "enabled": true,
+      "maxGhosts": 6,
+      "spawnInterval": 0.045,
+      "life": 0.28,
+      "minMove": 0.012,
+      "baseOpacity": 0.34,
+      "fadeExp": 1.8,
+      "tint": "keep",
+      "color": "#9fdcff",
+      "bodyType": "elder"
+    },
     "hitstop": {
       "enabled": true,
       "duration": 0.07
