@@ -186,13 +186,29 @@ describe('v9s.56 老头移动残影：对象池与半透明淡出', () => {
     const holder = ai.container.children.find((h) => h.visible)!;
     const snap = holder.children[0]!;
     const mesh = snap.children[0] as THREE.Mesh;
-    const basePos = (mesh.userData._basePos as THREE.Vector3).clone();
-    const baseQuat = (mesh.userData._baseQuat as THREE.Quaternion).clone();
+    // 生成瞬间：clone 子部件位置 == 基准（= 活动角色该部件位置），尚未散开
+    const basePos = (mesh.position as THREE.Vector3).clone();
+    const baseQuat = (mesh.quaternion as THREE.Quaternion).clone();
     expect((mesh.position as THREE.Vector3).distanceTo(basePos)).toBeCloseTo(0, 5);
 
-    // 推进到 age > life*fragmentStart（0.28*0.3≈0.084s）
+    // 推进到 age > life*fragmentStart（0.28*0.3≈0.084s）：应沿固定方向散开 + 自转
     ai.update(0.2, target, root, false, 'elder');
     expect((mesh.position as THREE.Vector3).distanceTo(basePos)).toBeGreaterThan(0.001);
     expect((mesh.quaternion as THREE.Quaternion).angleTo(baseQuat)).toBeGreaterThan(0.001);
+  });
+
+  it('性能：同一 rig 连续生成不重复深克隆（稳态零分配）', () => {
+    const { root, target } = makeTarget();
+    const ai = createAfterimage(baseCfg);
+    // 连续多次生成，应复用首次克隆的树，不产生多份 snap
+    for (let i = 0; i < 8; i++) {
+      root.position.x += 0.5;
+      ai.update(0.2, target, root, true, 'elder');
+    }
+    // 对象池容量 maxGhosts=6，活跃槽位不超过 6 个；每个槽位只有 1 棵克隆树
+    const totalSnaps = ai.container.children.reduce(
+      (n, h) => n + (h.children.length > 0 ? 1 : 0), 0,
+    );
+    expect(totalSnaps).toBeLessThanOrEqual(baseCfg.maxGhosts);
   });
 });
