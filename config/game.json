@@ -2100,7 +2100,27 @@
         "sinkSec": 0.38,
         "riseSec": 0.42,
         "fallDeg": 84,
-        "sinkDepth": 1.05
+        "sinkDepth": 1.05,
+        "physics": {
+          "enabled": true,
+          "gravity": 9.5,
+          "damping": 1.6,
+          "kickBase": 2.4,
+          "kickGain": 2.6,
+          "bounce": 0.22,
+          "restVel": 0.45,
+          "slide": 1.1,
+          "slideDamp": 5.5
+        }
+      },
+      "sever": {
+        "enabled": true,
+        "gravity": 11,
+        "bounce": 0.3,
+        "kick": 0.85,
+        "kickBase": 0.75,
+        "friction": 0.86,
+        "lifeSec": 2.5
       }
     },
     "blood": {

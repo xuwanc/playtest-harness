@@ -6,10 +6,10 @@ import type { InputFrame } from './adapters/input';
 import { clampZoom } from './adapters/pinch';
 import { createRecorder } from './adapters/telemetry';
 import {
-  EMPTY_INTENTS, WEAPON_ORDER, clearPlotTestUnits, createWorld,
+  EMPTY_INTENTS, WEAPON_ORDER, applyHit, clearPlotTestUnits, createWorld,
   destructiblesReset, forceBreak, plotTestUnitCount, spawnPlotTestUnits,
 } from './core';
-import type { Intents, WeaponId } from './core';
+import type { HurtType, Intents, WeaponId } from './core';
 import { CORE_CONFIG, SCENE_CONFIG, VIEW_CONFIG, PLOTS, PLOT_ASSEMBLY } from './config';
 import { createDebugPanel } from './presentation/debug-panel';
 import type { DebugState } from './presentation/debug-panel';
@@ -360,6 +360,19 @@ export function startApp(): void {
       })),
       rendered: view.destructibleDebug(),
     }),
+    /**
+     * v9s.60：以指定受击类型 / 部位结算一次命中（走真机同一个 `applyHit`）。
+     * 断肢与倒地物理都按「最后一击」判定，验收必须能精确控制这一刀是什么 —— 靠真人挥砍
+     * 打到指定高度是碰运气，脚本要能直接给。
+     */
+    hitTest: (id: number, type: HurtType = 'heavy', hitU = 0.6, dirX = 0, dirZ = 1) => {
+      const i = world.dummies.findIndex((d) => d.id === id);
+      if (i < 0) return false;
+      applyHit(world, { kind: 'dummy', index: i }, {
+        type, duration: 0.24, dirX, dirZ, knockback: 0.35, hitU,
+      });
+      return true;
+    },
     /** 自动化 / 演示：以给定命中点打断指定物件，走与真机同一个 cutPlane。 */
     breakTest: (id: string, y: number, dx = 1, dy = 0, dz = 0) =>
       forceBreak(world, id, y, dx, dy, dz),

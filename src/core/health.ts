@@ -1,4 +1,6 @@
-import type { DummyHealth, DummyState, HitMark, World } from './types';
+import type {
+  DummyHealth, DummySever, DummyState, HitMark, HurtType, SeverPart, WeaponId, World,
+} from './types';
 
 const EPS = 1e-6;
 
@@ -30,7 +32,51 @@ export const DEFAULT_RESPAWN_SEC = 3;
 
 export function initialHealth(maxHp: number): DummyHealth {
   const hp = Math.max(0, maxHp);
-  return { hp, maxHp: hp, dead: false, deadT: 0, respawn: 0, revive: 0, kills: 0 };
+  return { hp, maxHp: hp, dead: false, deadT: 0, respawn: 0, revive: 0, kills: 0, sever: null };
+}
+
+/**
+ * v9s.60 · 由**致命一击**判定断哪一段。纯函数，无随机 —— 同一次击杀在任何机器上断同一处。
+ *
+ * 判据只有四个：受击类型（轻击 / 重击 / 击飞 / 击地）、命中部位 u、攻击方向的左右侧、
+ * 武器（大剑更长、更容易够到高位）。做成表而不是加权随机，是因为玩家必须能学会它：
+ * 「跳起来劈头会断头、平地重击断持械臂、击飞打腰会腰斩」。
+ *
+ * 轻击**只在够到手臂高度时**才断肢 —— 匕首削手合理，一刀砍掉头不合理。
+ */
+export function decideSever(
+  type: HurtType,
+  u: number,
+  dx: number,
+  dz: number,
+  bodyYaw: number,
+  weapon: WeaponId | undefined,
+): SeverPart | null {
+  // 大剑的刃更长：同样高度下更容易「够到」更高的部位
+  const reach = u + (weapon === 'greatsword' ? 0.06 : 0);
+  // 攻击方向在目标身体局部坐标里的右向分量 → 决定断哪一侧的肢体
+  const side = dx * Math.cos(bodyYaw) - dz * Math.sin(bodyYaw);
+  const right = side >= 0;
+
+  if (type === 'knock') {
+    // 击飞是「打腰把人掀出去」：高位削头、中位腰斩、贴地扫腿。
+    // 击地（hitU 0.26）也走这里 —— 贴地砸出来的就是断腿，不是腰斩。
+    if (reach >= 0.78) return 'head';
+    if (reach >= 0.36) return 'waist';
+    return right ? 'legR' : 'legL';
+  }
+  if (type === 'heavy') {
+    // 重击是「从上往下砸」：最高位劈头，胸肩高度断持械臂，再低就从腰切断
+    if (reach >= 0.80) return 'head';
+    if (reach >= 0.56) return right ? 'armR' : 'armL';
+    return 'waist';
+  }
+  if (type === 'light') {
+    // 轻击只会「削」：够到手臂高度才断，其余留全尸（否则每一刀都在肢解，很快麻木）
+    if (reach >= 0.52) return right ? 'armR' : 'armL';
+    return null;
+  }
+  return null;
 }
 
 /** 该假人的重生延迟：陪练自己的配置优先，其次全局，最后兜底。 */
@@ -58,18 +104,20 @@ function emit(world: World, type: 'dummy-death' | 'dummy-revive', s: DummyState)
  * 死亡判定放在这里而不是调用方：弓箭 / 飞弹 / 电环 / 近战四条链路都要扣血，
  * 各自判一次必然漂移（最典型的是「箭能把人射死、近战不能」）。
  */
-export function damageDummy(world: World, s: DummyState, amount: number): boolean {
+export function damageDummy(
+  world: World, s: DummyState, amount: number, sever?: DummySever | null,
+): boolean {
   const h = s.health;
   if (h.maxHp <= EPS || h.dead || h.revive > 0) return false;
   if (!(amount > 0)) return false;
   h.hp = Math.max(0, h.hp - amount);
   if (h.hp > EPS) return false;
-  killDummy(world, s);
+  killDummy(world, s, sever);
   return true;
 }
 
-/** 死亡：冻结 AI、清掉连击与受击残留、开始重生倒计时。 */
-export function killDummy(world: World, s: DummyState): void {
+/** 死亡：冻结 AI、清掉连击与受击残留、记录断肢、开始重生倒计时。 */
+export function killDummy(world: World, s: DummyState, sever?: DummySever | null): void {
   const h = s.health;
   if (h.dead) return;
   h.hp = 0;
@@ -78,6 +126,7 @@ export function killDummy(world: World, s: DummyState): void {
   h.respawn = respawnSecFor(world, s);
   h.revive = 0;
   h.kills += 1;
+  h.sever = sever ?? null;
 
   // 挥到一半的刀不能留：尸体不该继续出手，也不该在读条里「复活后半段」
   s.attackPhase = 'idle';
@@ -113,6 +162,9 @@ export function reviveDummy(world: World, s: DummyState): void {
   h.deadT = 0;
   h.respawn = 0;
   h.revive = REVIVE_GUARD;
+  // 重生是「一具完整的身体从地里升起来」：断肢必须一起复原，
+  // 否则表现层会按上一条 sever 继续隐藏肢体，长出个残废。
+  h.sever = null;
   s.velocity.x = 0;
   s.velocity.z = 0;
   s.velocity.y = 0;

@@ -1964,6 +1964,36 @@ export type DummyHealth = {
   revive: number;
   /** 本局累计被击杀次数（验收 / 调试读数） */
   kills: number;
+  /**
+   * v9s.60：致命一击造成的断肢（null = 完整尸体）。
+   *
+   * 判定放在 Core 而不是表现层，是因为它是**规则**，不是特效：
+   * 「大剑劈头会断头、轻击只断臂」需要能写断言，也要能随快照回放。
+   * 表现层只负责「按 part 隐藏哪一段、掉一块残肢」。
+   */
+  sever: DummySever | null;
+};
+
+/**
+ * v9s.60 · 断肢部位。`waist` = 腰斩（上下半身分离），其余是单肢。
+ */
+export type SeverPart = 'head' | 'armR' | 'armL' | 'legR' | 'legL' | 'waist';
+
+/**
+ * v9s.60 · 一次断肢的描述（由致命一击决定）。
+ *
+ * 只记**判定结果与断口位置**，不记残肢的物理状态 —— 掉下去的那块纯表现层，
+ * 不需要进快照（重放时按同样的 part 重新开一块就行）。
+ */
+export type DummySever = {
+  part: SeverPart;
+  /** 断口归一化高度（0 脚底 / 1 头顶）：表现层据此决定从哪一段切开 */
+  u: number;
+  /** 击打方向（单位向量，世界 XZ）：残肢往哪飞、尸体往哪倒 */
+  dx: number;
+  dz: number;
+  /** 0.3..1.5 力度：残肢初速与翻滚速度都按它缩放 */
+  power: number;
 };
 
 /**
@@ -2076,6 +2106,29 @@ export type DummyViewConfig = {
   fighterColors?: Array<{ body: string; limb: string; head: string }>;
   /** v9s.56：倒地 / 沉入地面 / 升起刷新的时序（陪练死亡表现） */
   death?: DummyDeathViewConfig;
+  /** v9s.60：断肢残块的表现参数（判定在 Core，这里只调「掉下去那一下」） */
+  sever?: DummySeverViewConfig;
+};
+
+/**
+ * v9s.60 · 断肢残块。
+ *
+ * 残块不是新做的几何 —— 直接把骨架上的那一段**克隆**下来，`scene.attach` 到世界坐标，
+ * 给一个初速做自由落体。所以断掉的胳膊就是刚才挥刀的那条胳膊，配色 / 比例天然一致。
+ */
+export type DummySeverViewConfig = {
+  enabled: boolean;
+  /** 重力（m/s²），残块下落用 */
+  gravity: number;
+  /** 每次触地的回弹比例 */
+  bounce: number;
+  /** 初速倍率：实际初速 = kick × sever.power + kickBase */
+  kick: number;
+  kickBase: number;
+  /** 落地摩擦（水平速度每帧乘以该系数） */
+  friction: number;
+  /** 兜底寿命（秒）：到点无论是否稳定都冻结，避免一直抖 */
+  lifeSec: number;
 };
 
 /**
@@ -2092,10 +2145,38 @@ export type DummyDeathViewConfig = {
   /** 沉入地面 / 从地面升起的时长（秒） */
   sinkSec: number;
   riseSec: number;
-  /** 倒下角度（度，绕局部 X 轴向后） */
+  /** 倒下角度（度，绕水平轴倒向击打方向） */
   fallDeg: number;
   /** 完全沉入时的下沉深度（米，负值方向） */
   sinkDepth: number;
+  /**
+   * v9s.60：倒下过程改用「一点物理」。
+   *
+   * 旧版是 `fallSec` 上的固定 smoothstep —— 每个人、每次死都倒在同一角度、同一节奏，
+   * 被打飞和轻轻蹭死看起来一模一样。现在改成**倒杆模型**：死亡瞬间按击打方向给一个
+   * 初角速度，之后由重力力矩（`sin θ`）加速、阻尼衰减、触地回弹，静止后**彻底关掉**。
+   *
+   * `fallSec` 仍然有用：它是物理关闭后的兜底时长（配置缺失 / 物理关闭时走老的插值）。
+   */
+  physics?: DummyDeathPhysViewConfig;
+};
+
+export type DummyDeathPhysViewConfig = {
+  enabled: boolean;
+  /** 倒杆角加速度增益（rad/s²）：越大倒得越快 */
+  gravity: number;
+  /** 角速度指数衰减（1/s）：关节 / 地面的阻尼 */
+  damping: number;
+  /** 初角速度基数 + 力度系数：`base + gain × power` */
+  kickBase: number;
+  kickGain: number;
+  /** 触地回弹比例（0 = 直接趴住） */
+  bounce: number;
+  /** 角速度低于此值且已接近躺平 → 判定到位，物理关掉 */
+  restVel: number;
+  /** 沿击打方向的滑行初速（m/s）与阻尼 */
+  slide: number;
+  slideDamp: number;
 };
 
 /**
@@ -3674,6 +3755,14 @@ export type World = {
   hitMarks: HitMark[];
   /** v9s.56：命中记录自增序号（只增不减，复位不归零 —— 表现层靠它去重） */
   hitMarkSeq: number;
+  /**
+   * v9s.60：上一帧刀风是否在窗口内。
+   *
+   * 表现层的命中候选有一帧延迟（render 采样 → 下一帧 step 消费）。若挥砍正好在
+   * 这一步结束，Core 侧 `currentMeleeShape` 已经关闭，这批候选会被整条丢掉 ——
+   * 玩家看到的就是「明明砍到了却没断」。只放一个 tick，去重仍由 hitArmed 负责。
+   */
+  meleeGatePrev: boolean;
   /** 假人累计发起的攻击次数（无伤害，仅用于验收观察） */
   dummyAttackCount: number;
   /** v9s.39：体素草块（确定性、可序列化；表现层只读） */

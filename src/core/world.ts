@@ -4,7 +4,9 @@ import { initialCombatState } from './combat';
 import { initialDashState, resetDash } from './dash';
 import { createDummies, resetDummies } from './dummies';
 import { createGrassState, grassReset } from './grass';
-import { createDestructibleStates, destructiblesReset } from './destructibles';
+import {
+  createDestructibleStates, destructibleColliders, destructiblesReset, syncDestructibleBoxes,
+} from './destructibles';
 import { initialHurt, NEVER_HURT_AT } from './hits';
 import { initialLinkState, resetLink } from './links';
 import { resetCharacter } from './movement';
@@ -32,6 +34,10 @@ import type { CoreConfig, SceneConfig, World } from './types';
 /** 创建初始世界。配置由外部注入，Core 自身不 import 任何配置文件。 */
 export function createWorld(core: CoreConfig, scene: SceneConfig): World {
   const boxes = buildBoxes(scene);
+  // v9s.60：可破坏物件也是实体 —— 碰撞盒和状态一起生成，别让玩家从仙人掌里穿过去。
+  const specs = scene.destructibles;
+  const states = createDestructibleStates(specs);
+  for (const b of destructibleColliders(states)) boxes.push(b);
   return {
     tick: 0,
     time: 0,
@@ -85,10 +91,11 @@ export function createWorld(core: CoreConfig, scene: SceneConfig): World {
     // v9s.56：命中记录（飙血数据源）。空数组序列化稳定，不影响既有快照结构之外的部分。
     hitMarks: [],
     hitMarkSeq: 0,
+    meleeGatePrev: false,
     // v9s.39：草场只在这里生成一次；冻结夹具没有 scene.grass → 空草场，行为零影响。
     grass: createGrassState(core, scene, boxes, scene.grid),
     // v9s.x：不配置可破坏物件时是空数组，既有世界行为逐字节不变。
-    destructibles: createDestructibleStates(scene.destructibles),
+    destructibles: states,
     events: [],
     modules: {
       movement: true,
@@ -159,5 +166,7 @@ export function resetWorld(world: World): void {
   g.threat = 0;
   grassReset(world);
   destructiblesReset(world);
+  // 复位把物件立回原高，碰撞盒也要跟着回来（否则复位后能穿过站着的旗杆）
+  syncDestructibleBoxes(world);
   world.events.length = 0;
 }
