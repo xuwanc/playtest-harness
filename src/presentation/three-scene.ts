@@ -499,6 +499,8 @@ export function createSceneView(
     boneAtWorld(x: number, y: number, z: number): { node: THREE.Object3D; point: THREE.Vector3 } | null;
     /** 只有走 voxel-rig 的持械陪练有步态读数；简化假人没有腿骨架，返回 null。 */
     debug?: () => FighterGaitDebug;
+    /** v9s.58 · 头顶高度（相对脚底，米）。建骨架时量一次包围盒，血条据此定位。 */
+    headY?: number;
     dispose(): void;
   };
   const fighterMoveSpeed = world.config.dummies.fighters?.moveSpeed ?? world.config.dummies.moveSpeed;
@@ -544,6 +546,11 @@ export function createSceneView(
     }
     // 所有子节点都带上 id，射线命中身体、标签或攻击弧都能识别
     rig.group.traverse((obj) => { obj.userData.dummyId = s.id; });
+    // v9s.58：量一次站立包围盒，记下头顶相对脚底的高度（发片 / 抬头会让它比 Core 的
+    // 碰撞高度高 0.1 左右）。血条用它定位，避免「悬空一条」。
+    rig.group.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(rig.group);
+    rig.headY = Math.max(0.5, box.max.y - rig.group.position.y);
     // v9s.56：死亡是「先转身再后倒」：YXZ 让 yaw 先应用，X 轴才是身体局部的前后轴
     rig.group.rotation.order = 'YXZ';
     scene.add(rig.group);
@@ -901,7 +908,10 @@ export function createSceneView(
   // ---- 2.5D 相机（叠加 Core 的智能构图意图） ----
   const cam = createCameraRig(view.camera, view.smartCamera, view.zoom, w0 / h0);
   // v9s.57：陪练头顶血条（DOM 覆盖层）。只画有血量的单位，死亡隐藏、重生重现。
-  const healthBars = createHealthBarLayer(container, view);
+  const healthBars = createHealthBarLayer(
+    container, view,
+    (i) => dummyRigs[i]?.headY ?? world.config.dummies.height,
+  );
   const p0 = world.character.position;
   cam.update(p0.x, p0.y, p0.z, 1, world.camera);
 

@@ -25,7 +25,12 @@ export type HealthBarLayer = {
 const BAR_W = 46;
 const BAR_H = 5;
 
-export function createHealthBarLayer(container: HTMLElement, view: ViewConfig): HealthBarLayer {
+export function createHealthBarLayer(
+  container: HTMLElement,
+  view: ViewConfig,
+  /** 第 i 个单位的头顶高度（相对脚底，米）。缺省用 Core 的碰撞身高。 */
+  heightAt?: (i: number) => number,
+): HealthBarLayer {
   const cfg = view.healthBar;
   if (cfg && cfg.enabled === false) {
     return { update() {}, debug: () => ({ total: 0, shown: 0 }), dispose() {} };
@@ -79,8 +84,10 @@ export function createHealthBarLayer(container: HTMLElement, view: ViewConfig): 
           if (b.shown) { b.el.style.display = 'none'; b.shown = false; }
           continue;
         }
-        // 条挂在头顶上方一点（身高按配置，不用骨骼 —— 只差几厘米，且频繁吸骨会抖）
-        v.set(s.position.x, s.position.y + world.config.dummies.height + lift, s.position.z);
+        // 条挂在**实测头顶**上方一点：Core 的 `dummies.height` 是碰撞高度（1.2），
+        // 视觉模型的发片 / 抬头会让真实头顶再高出 0.1 左右，用配置高度会让血条明显悬空。
+        const h = heightAt ? heightAt(i) : world.config.dummies.height;
+        v.set(s.position.x, s.position.y + h + lift, s.position.z);
         v.project(camera);
         if (v.z > 1 || v.z < -1) {
           if (b.shown) { b.el.style.display = 'none'; b.shown = false; }
