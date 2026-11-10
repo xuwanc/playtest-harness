@@ -282,18 +282,18 @@ npm run publish:preview   # tools/publish-preview.mjs（站点 skill 实时隧�
 npm run feat:status                               # 当前分支 / 落后 main 多少 / 队列
 npm run feat:start -- --topic death-polish --agent a
 npm run feat:finish -- --dry                      # 只看计划，不写远端
-npm run feat:finish                               # 真跑闭环
+npm run feat:finish                               # 真跑闭环（末尾自动清理已并入的分支）
+npm run feat:prune [-- --dry]                     # 只清理：已并入 main 的 feat/fix/merge，backup 不动
 ```
 
 ## 12. 2026-11-10 复核：通道换成「本地 git / gh 优先」（v9s.57）
 
-§1 的结论（`git push` 无凭证）在这个环境已不成立：`gh auth status` 已登录、`git push` 能写。
-`agent-sync.py` 的写通道改成两级 —— 推分支 `git push`（重试 5 次）→ `push-branch.py`；
+§1 的结论（`git push` 无凭证）已不成立：`gh auth status` 已登录、`git push` 能写。
+写通道改成两级 —— 推分支 `git push`（重试 5 次）→ `push-branch.py`；
 建 PR `gh pr create` → MCP；合 PR `gh pr merge --match-head-commit` → MCP `expectedHeadSha`；
 发布 `ship.sh --no-build` → `publish-pages.py`。
 
-**为什么优先本地 git**：MCP 推上去的 commit 由 API 重建，SHA 与本地不同，
-`git log` 看起来像「同一批改动重复提交」，排查冲突前得先比对树的 hash。**收尾多了一步切回 main**：旧版只 `git branch -f main origin/main`（不切工作区），
+**为什么优先本地 git**：MCP 推上去的 commit 由 API 重建、SHA 与本地不同，`git log` 看起来像「同一批改动重复提交」，排查冲突前得先比对树的 hash。**收尾多了一步切回 main**：旧版只 `git branch -f main origin/main`（不切工作区），
 下一个 agent 忘 fetch 就会基于旧 main 建分支 —— 这次合并对方分支正是这个局面
 （分支基于 v0.9.76，main 已到 v0.9.77，PR 直接 `CONFLICTING`）。现在 finish 会切回 main 并对齐。
 护栏没变：只允许 `feat/*` / `fix/*` 收尾；源码没提交就停；合并带 head 校验。

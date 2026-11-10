@@ -433,6 +433,46 @@ def cmd_finish(args):
         print('  （隧道兜底已开：上面的 shareLink 是临时按沙盒派生的链接，非权威）')
     print(f'\n[agent-sync] 闭环完成：main / 线上 / 本地一致，版本 v{version}')
     print(f'  权威线上链接：https://{owner}.github.io/{repo}/')
+
+    # 收尾顺手清理：已并入 main 的 feat/* / fix/* / merge/* 历史分支（backup/* 永远保留）。
+    # 失败只告警 —— 分支残留不影响任何结论，下次 finish / prune 会再来一次。
+    try:
+        cmd_prune(argparse.Namespace(dry=False))
+    except Exception as e:
+        print(f'[agent-sync] 分支清理跳过：{str(e)[:120]}')
+    return 0
+
+
+def cmd_prune(args):
+    """删掉「已经完全进 main」的功能分支（本地 + 远端），backup/* 永远保留。
+
+    判据只有一个：分支 tip 是 `origin/main` 的祖先（`git branch --merged`）。
+    还在开发 / 有未合并提交的分支不会被选中 —— 不猜、不强制。
+    """
+    fetch()
+    pat = re.compile(r'^(feat|fix|merge)/')
+    cur = git('rev-parse', '--abbrev-ref', 'HEAD')
+    local = [b.strip() for b in git('branch', '--merged', 'origin/main',
+                                    '--format=%(refname:short)').splitlines()]
+    local = [b for b in local if pat.match(b) and b != cur]
+    remote = [b.strip().replace('origin/', '', 1) for b in
+              git('branch', '-r', '--merged', 'origin/main',
+                  '--format=%(refname:short)').splitlines()]
+    remote = [b for b in remote if pat.match(b)]
+    print(f'[agent-sync] 已并入 main 的分支：本地 {len(local)} 条 / 远端 {len(remote)} 条')
+    for b in local:
+        print('   本地', b)
+    for b in remote:
+        print('   远端', b)
+    if args.dry:
+        print('[agent-sync] DRY-RUN：不删任何东西')
+        return 0
+    for b in local:
+        git('branch', '-D', b, check=False)
+    for b in remote:
+        if not git_push(f':refs/heads/{b}', tries=3):
+            print(f'  远端 {b} 删除失败（网络）；下次 prune 再来')
+    print(f'[agent-sync] 已清理 {len(local)} 条本地 / {len(remote)} 条远端分支（backup/* 不动）')
     return 0
 
 
@@ -451,6 +491,9 @@ def main():
     fi.add_argument('--pr-number', type=int, default=None)
     fi.add_argument('--dry', action='store_true')
     fi.set_defaults(fn=cmd_finish)
+    pr = sub.add_parser('prune')
+    pr.add_argument('--dry', action='store_true')
+    pr.set_defaults(fn=cmd_prune)
     args = ap.parse_args()
     try:
         return args.fn(args)

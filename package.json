@@ -26,7 +26,8 @@
     "feat:finish": "python3.11 tools/agent-sync.py finish",
     "feat:status": "python3.11 tools/agent-sync.py status",
     "sweep": "python3 tools/sweep_sample.py",
-    "docs:check": "node scripts/check-docs.mjs"
+    "docs:check": "node scripts/check-docs.mjs",
+    "feat:prune": "python3.11 tools/agent-sync.py prune"
   },
   "dependencies": {
     "lil-gui": "^0.19.2",
