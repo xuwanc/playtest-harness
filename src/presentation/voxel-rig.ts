@@ -57,7 +57,7 @@ import { beardAvoidAt, createBeardState, solveBeard } from './beard';
 import type { BeardState } from './beard';
 import {
   buildMurlocBelly, buildMurlocDorsalFin, buildMurlocFoot, buildMurlocHand, buildMurlocHead,
-  buildMurlocShoulderFin, buildMurlocTail, MURLOC_POSTURE,
+  buildMurlocShoulderFin, buildMurlocTail, MURLOC_HEAD_SPIN, MURLOC_POSTURE,
 } from './murloc-parts';
 import {
   buildSentinelFoot, buildSentinelHand, buildSentinelHead, buildSentinelTorso,
@@ -474,14 +474,37 @@ export function createVoxelRig(
   headPivot.rotation.order = 'YXZ';
   // 头部枢轴 = 躯干高度（配置值按标准体型写的 0.4）。瘦高体型躯干只有 0.24，
   // 直接沿用会让头飘在躯干上方 16cm，所以按 bodyHeight 夹一下。
+  //
+  // v9s.65：鱼人的枢轴要再往上抬到**颅骨中心**。鱼人的头比身体还横，绕脖子转时
+  // 整颗头像锤子一样甩出去 —— 待机盯人时读作「疯狂转头」。抬高的同时
+  // `buildMurlocHead` 会把几何下移同样的量，净效果是「位置不变、旋转中心变了」。
   headPivot.position.y = Math.min(ori.headPivotHeight, bodyH) - chestPivotY;
   /** 颈根基准高度：posture.neckDrop 从这里往下压（每帧按绝对值写，不累加）。 */
   const headPivotBaseY = headPivot.position.y;
   torsoRoot.add(headPivot);
 
+  /**
+   * v9s.65 · 鱼人的 **yaw 节点**：转头绕颅骨中心，俯仰仍绕脖子。
+   *
+   * 为什么分两层：鱼人的头比身体还横，绕脖子做 yaw 时整颗头像锤子一样甩出去 ——
+   * 待机盯人读作「疯狂转头」。但**俯仰不能一起搬家**：抬到颅中心后，同样的抬头角
+   * 不再带来「头向后仰」的位移，脸会直接扎到地上（实测头低了 25cm、前伸 25cm）。
+   *
+   * 所以：外层 `headPivot` 继续管 pitch（绕脖子，位移语义不变），
+   * 内层 `headYawNode` 管 yaw（绕颅中心，只有朝向变化、头不位移）。
+   * 几何在 `buildMurlocHead` 里下移 `MURLOC_HEAD_SPIN`，与节点抬高抵消。
+   */
+  const headYawNode = murloc ? group() : null;
+  const headYawTarget: THREE.Object3D = headYawNode ?? headPivot;
+  if (headYawNode) {
+    headYawNode.name = 'headYaw';
+    headYawNode.position.y = MURLOC_HEAD_SPIN * HS;
+    headPivot.add(headYawNode);
+  }
+
   if (murloc) {
-    // 鱼头：三层颅骨 + 前突吻部 + 侧置凸眼 + 头冠鳍 + 鳃（`murloc-parts` 里全是比例值）
-    buildMurlocHead(headPivot, HS, colors);
+    // 鱼头：一整块方颅 + 两颗凸眼 + 横裂嘴 + 头冠鳍 + 鳃（`murloc-parts` 里全是比例值）
+    buildMurlocHead(headYawTarget, HS, colors);
   } else if (sentinel) {
     // 机器头：方颅 + 护檐 + 单只灯眼 + 天线 + 后脑外露导线
     buildSentinelHead(headPivot, HS, colors);
@@ -3024,7 +3047,7 @@ export function createVoxelRig(
       // 只补偿主动攻击旋身，不含受击扭转（见 2.5 说明）；v9o 再补偿胸偏转，
       // 让头仍朝 Core 给的 headYaw（目标方向）而不是跟着胸一起偏走。
       const spin = combatSpin;
-      headPivot.rotation.y = wrapAngle(c.headYaw - c.bodyYaw - spin - chestYaw);
+      headYawTarget.rotation.y = wrapAngle(c.headYaw - c.bodyYaw - spin - chestYaw);
       // v9s.18：俯仰注视。Core 给的 headPitch 以「+ = 抬头」为正，three 的 rotation.x
       // 正值是低头（+Z 转向 -Y），所以取反。身体只吃其中一小部分（bodyPitch），
       // 叠加在上面的惯性前倾之上 —— 「整个人抬眼看」，而不是头单独在脖子上折。
@@ -3078,6 +3101,23 @@ export function createVoxelRig(
         if (intendedTorso) intendedTorso.x += postureAppliedWaist;
       }
 
+      // 3.1) v9s.65 手臂回正。躯干压平之后上臂跟着**胸段**一起倒向地面，
+      //   手垂到脚边、武器戳进土里（实测：肩到手几乎贴在小腿上）。
+      //   这里让上臂反向转回来，保持「肩 → 手」接近竖直。
+      //
+      //   为什么读 `chest.rotation.x` 而不是体态总角：肩挂在胸段上，手臂实际吃到的
+      //   就是这一段的角度（腰段 42% 已经由 `upper` 吃掉，不影响肩）。用总角会过补偿，
+      //   高前倾时手会反过来举到头顶。
+      //   为什么系数不给 1：完全抵消会把胳膊转进胸腔里。0.55 是「手落在身前」。
+      //
+      //   为什么放在 splitSpine 之后：拆分之前还读不到胸段角。
+      const armDrop = posture?.armDrop ?? 0;
+      if (armDrop > 0 && chest.rotation.x > 1e-4) {
+        const back = chest.rotation.x * armDrop;
+        armL.root.rotation.x -= back;
+        armR.root.rotation.x -= back;
+      }
+
       // 3.4) v9s.24 腕部滞后：放在朝向 / 胸偏转之后 —— 它读的就是「躯干已经转到哪」，
       //      早一步读会漏掉 chestYaw，横向甩动就只在攻击时才有、走路时没有。
       //      又在副手握持之前 —— 握持 IK 取的是柄的世界坐标，腕部一摆，柄就动了。
@@ -3120,6 +3160,8 @@ export function createVoxelRig(
         cfg: ikCfg,
         grounded: c.grounded,
         attacking,
+        // 地板兜底：锚点低于角色脚下地面时顶回去（否则 IK 会把脚钉在地里）
+        groundY: c.position?.y,
       });
 
       // 5) v9s.33：平衡读数放在最后 —— 质点位置要读 IK 之后的真实脚位 / 手位。

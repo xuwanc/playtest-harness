@@ -51,12 +51,31 @@ describe('v9s.63 鱼人', () => {
     const human = rig('human');
     const murloc = rig('murloc');
     const hh = human.group.getObjectByName('headPivot')!;
-    const mh = murloc.group.getObjectByName('headPivot')!;
+    // v9s.65：鱼人的头挂在 `headPivot → headYaw` 两层下（yaw 绕颅中心、pitch 绕脖子），
+    // 所以这里统计整棵子树的网格，而不是 `headPivot.children`（那只有 1 个节点）。
+    const mh = murloc.group.getObjectByName('headYaw')
+      ?? murloc.group.getObjectByName('headPivot')!;
     expect(hh.children.length).toBe(3);
+    let meshes = 0;
+    mh.traverse((o) => { if ((o as { isMesh?: boolean }).isMesh) meshes += 1; });
     // 颅 + 下颌 + 嘴 + 4 颗牙 + 喉 + 2×3 眼件 + 冠 + 2 尖 + 2×3 鳃 ≈ 23
-    expect(mh.children.length).toBeGreaterThan(18);
+    expect(meshes).toBeGreaterThan(18);
     human.dispose();
     murloc.dispose();
+  });
+
+  it('鱼人的 yaw 绕颅中心、pitch 仍绕脖子（两者分开两个节点）', () => {
+    const r = rig('murloc');
+    const pivot = r.group.getObjectByName('headPivot')!;
+    const yaw = r.group.getObjectByName('headYaw');
+    expect(yaw, '鱼人必须有 headYaw 节点').toBeDefined();
+    // 抬高量 ≈ headSize × 0.46：绕脖子转时整颗头会甩出去，待机盯人像在疯狂点头。
+    // 不写死 headSize（测试 helper 用的是全局 voxel，不是 bodyTypes.murloc），
+    // 只断言「抬了、且没抬到脖子以上就不成立」这两条结构性事实。
+    expect(yaw!.position.y).toBeGreaterThan(0.1);
+    // pitch 仍从脖子（躯干顶）起：headPivot 没被抬高
+    expect(pivot.position.y).toBeGreaterThan(yaw!.position.y);
+    r.dispose();
   });
 
   it('工位透传：只有鱼人带 variant / 血量，其余工位仍是打不死的测试桩', () => {

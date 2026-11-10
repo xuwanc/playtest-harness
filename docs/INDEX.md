@@ -42,6 +42,7 @@
 | 打中只有卡肉 / 没有血 / 想要飙血 | `presentation/blood-fx.ts`、`core/health.ts` 的 `pushHitMark` | `createBloodFx`、`HitMark`、`HIT_MARK_CAP`、`FX_ORDER.bloodDrop/Stain/Mist` | [systems/blood.md](systems/blood.md) | `tests/v9s56-damage-blood.test.ts`、`python3 tools/blood-shot.py` |
 | 陪练打不死 / 打死了不消失 / 死了不刷新 | `core/health.ts`、`core/dummies.ts`、`three-scene.ts` 的 `applyDeathPose` | `damageDummy`、`killDummy`、`reviveDummy`、`updateHealth`、`REVIVE_GUARD` | [systems/damage-death.md](systems/damage-death.md) | `tests/v9s56-damage-blood.test.ts`、`__harness.deathDebug(id)` |
 | 血总喷在胸口（打头打腿一个位置） / 能穿过尸体 / 陪练没血条 | `core/hits.ts` 的 `hitU`、`core/separation.ts` 的尸体分支、`presentation/healthbar-layer.ts` | `hits.hitHeight`、`dummies.corpse`、`BodySample`、`healthBarDebug` | [systems/damage-death.md](systems/damage-death.md) §6–8 | `tests/v9s57-death-polish.test.ts`、`python3 tools/death-polish-shot.py` |
+| 脚掌穿地 / 脚在小腿中段 / 尾巴断节 / 头转得像锤子 | `rig-ik.ts` 的 `groundY`、`murloc-parts.ts` 的 `MURLOC_HEAD_SPIN`、`sentinel-parts.ts` 的 `ankleY` | `groundY`、`headYaw` 节点、`cc` | [systems/posture.md](systems/posture.md) | `tests/v9s65-rig-fix.test.ts` |
 | 想让角色整体驼背 / 屁股高头压低 / 加一个「体态」而不是做新动画 | `core/types.ts` 的 `CharacterPosture`、`voxel-rig.ts` 2.96 / 3.0 段、`dummy-rig.ts` | `style.posture`、`MURLOC_POSTURE`、`postureDebug()`、`POSTURE_MAX_TOTAL` | [systems/posture.md](systems/posture.md) | `tests/v9s64-posture-sentinel.test.ts`、`__harness.view.postureDebug()` |
 | 想要一个机器人 / 单眼角色 | `presentation/sentinel-parts.ts`、`bodyTypes.sentinel` | `buildSentinelHead`、`buildSentinelTorso`、`bodyTypes.sentinel` | [systems/sentinel.md](systems/sentinel.md) | `?hero=sentinel`、`tests/v9s64-posture-sentinel.test.ts` |
 | 想加一个「怪物」角色 / 鱼人怎么做 | `presentation/murloc-parts.ts`、`voxel-rig.ts` / `dummy-rig.ts` 的挂点、`DummySpawn.variant` | `buildMurlocHead`、`buildMurlocDorsalFin`、`DummyVariant`、`bodyTypes.murloc` | [systems/murloc.md](systems/murloc.md) §1–4 | `tests/v9s63-murloc.test.ts`、`?hero=murloc`、`y-murloc` 工位 |
@@ -152,7 +153,7 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（119 文件 / 1216 例） | 提交前 |
+| `npm test` | vitest 全量（120 文件 / 1225 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
 | `npm run smoke` | 起 `dist/`，跑 70 项画面层 + 契约自检 | 发布前 |
@@ -239,4 +240,4 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`decisions/ADR-008`](decisions/ADR-008-grass.md) | 草块状态在 Core、几何在表现层、判定复用 hits |
 | [`decisions/ADR-009`](decisions/ADR-009-plot-slabs.md) | 测试场地块化：模数 5m + 整数跨格拼底板（已实现，v9s.49） |
 | [`decisions/ADR-010`](decisions/ADR-010-spider-locomotion.md) | 蜘蛛：复用的是解算器不是动画，不引入 FullBodyIK（已实施，v9s.51 造型/步幅/惯性定型） |
-| [`journal/`](journal/) | 按日期的迭代记录（45 份，2026-11-05 起；`-00` 是功能总表，`-02` 是 v9s.41 换腿、`-06` 是 v9s.45 慢放、`-08-plot-slabs` 是 v9s.49 底板、`2026-11-10-02` 是 v9s.55 站姿与进出场、`-03` 是 v9s.56 飙血与死亡重生；带 `<主题>` 后缀的按内容命名） |
+| [`journal/`](journal/) | 按日期的迭代记录（47 份，2026-11-05 起；`2026-11-10-11-rig-fix` 是 v9s.65 七条造型修正、`-10-posture-sentinel` 是 v9s.64 体态层；`-00` 是功能总表，`-02` 是 v9s.41 换腿、`-06` 是 v9s.45 慢放、`-08-plot-slabs` 是 v9s.49 底板、`2026-11-10-02` 是 v9s.55 站姿与进出场、`-03` 是 v9s.56 飙血与死亡重生；带 `<主题>` 后缀的按内容命名） |
