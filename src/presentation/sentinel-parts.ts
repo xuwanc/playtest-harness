@@ -76,8 +76,10 @@ export function buildSentinelHead(
     }
   }
   // ---- 天线：一根，长在头顶偏后（俯视相机唯一的立体线索）----
-  add(0.032, 0.44, 0.032, 0.22, 0.92, -0.16, SEN.belt);
-  add(0.07, 0.07, 0.07, 0.22, 1.16, -0.16, SEN.warn);
+  // v9s.65：加粗到 0.055（原 0.032）。0.032 在 900px 截图里还有 2~3px，
+  // 缩到游戏实际尺寸就只剩 1px 噪点，等于没有天线。
+  add(0.055, 0.46, 0.055, 0.18, 0.94, -0.10, SEN.belt);
+  add(0.115, 0.115, 0.115, 0.18, 1.19, -0.10, SEN.warn);
   // ---- 后脑接线盒 + 两根外露导线（斜着垂下，像被拆过又接回去）----
   add(0.40, 0.18, 0.10, 0, 0.40, -0.47, SEN.belt);
   for (const sx of [-1, 1]) {
@@ -130,7 +132,13 @@ export function buildSentinelTorso(
   }
 }
 
-/** 夹钳手：两片斜板 + 一个腕块。`side` 只决定开口朝哪边。 */
+/**
+ * 夹钳手：两片斜板 + 一个腕块。`side` 只决定开口朝哪边。
+ *
+ * 夹爪沿 **X** 张开（左右夹），不是沿 Z（前后夹）。
+ * 第一版是前后夹 —— 从侧面看像一只螯，而且握住竖直的武器杆时两片爪一上一下，
+ * 读作「把剑夹在腋下」。左右夹才像「钳子」，也和前臂的走向垂直。
+ */
 export function buildSentinelHand(
   parent: THREE.Object3D, HS: number, colors: ColorConfig, side: -1 | 1,
 ): void {
@@ -144,16 +152,20 @@ export function buildSentinelHand(
     return m;
   };
   add(0.34, 0.16, 0.30, 0, 0, 0, metal);          // 腕块
-  for (const sz of [-1, 1]) {
-    const jaw = add(0.18, 0.06, 0.34, side * 0.06, -0.10, sz * 0.10, SEN.rust);
-    jaw.rotation.x = sz * 0.34;                    // 两片夹爪张开
+  for (const sx of [-1, 1]) {
+    // 板沿 X 拉长，从腕块两侧伸出并向内勾 → 张开的虎口。
+    // 开口 0.22 rad（≈13°）不是 0.34：再大就读作两片弹簧，看不出「能夹住东西」。
+    const jaw = add(0.28, 0.10, 0.17, sx * 0.085, -0.095, 0, SEN.rust);
+    jaw.rotation.z = -sx * 0.22;
   }
 }
 
 /**
  * 机械脚：一块扁平方底板 + 两片前爪。
- * `ankleY` 是踝关节相对挂点的高度（= -legLen/2）—— 不传的话脚会长在膝盖上，
- * 实测读作「小腿上横着一根黑杠」。
+ *
+ * ⚠ `ankleY` 是**米**，不是 `headSize` 的倍数 —— 它必须原样写进 `position.y`。
+ * 第一版忘了这点，让它跟着 `add()` 一起乘了 `HS`（0.40）：踝高从 -0.31m 缩到 -0.124m，
+ * 脚掌正好落在小腿中段，小腿从脚板中间穿出来 —— 读作「腿穿进脚里」。
  */
 export function buildSentinelFoot(
   parent: THREE.Object3D, HS: number, colors: ColorConfig, ankleY: number,
@@ -166,8 +178,11 @@ export function buildSentinelFoot(
     parent.add(m);
     return m;
   };
-  add(0.42, 0.09, 0.62, 0, ankleY + 0.005, 0.06, colors.shoe);   // 底板（前后拉长）
+  // 三个件先按「踝点 = 0」摆，再整体沿 y 搬到踝高（不乘 HS）
+  const sole = add(0.42, 0.09, 0.62, 0, 0, 0.06, colors.shoe);       // 底板（前后拉长）
+  sole.position.y = ankleY + 0.005;
   for (const sx of [-1, 1]) {
-    add(0.14, 0.06, 0.10, sx * 0.10, ankleY - 0.005, 0.36, SEN.rust);  // 前爪
+    const paw = add(0.14, 0.06, 0.10, sx * 0.10, 0, 0.36, SEN.rust); // 前爪
+    paw.position.y = ankleY - 0.005;
   }
 }

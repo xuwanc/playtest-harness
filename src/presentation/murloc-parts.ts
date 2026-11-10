@@ -51,16 +51,35 @@ export const MURLOC_POSTURE: CharacterPosture = {
   headLift: 0.98,
   headReach: 0.16,
   neckDrop: 0.02,
-  pelvisDrop: 0,      // 屈膝会把脚压进地面（IK 残差随 drop 线性增长）
-  pelvisBack: 0.02,
+  // 屈膝：躯干压到 55° 后重心整个跑到脚尖前面，腿必须弯一点才站得住 ——
+  // 这正是「老头」和「趴着的攀岩者」的区别。脚由足 IK 钉回地面（`rig-ik`）。
+  pelvisDrop: 0.06,
+  // 后坐：把骨盆往屁股方向挪，抵消前倾带来的前倒力矩。与屈膝是配套的 ——
+  // 只弯腿不后坐，人还是往前栽。
+  pelvisBack: 0.07,
+  // 手臂回正：躯干压平后上臂会跟着倒向地面，手垂到脚边、武器插进土里。
+  // 0.55 把一半以上的前倾吃掉，剩下的留在手臂上（完全抵消会让胳膊穿进胸里）。
+  armDrop: 0.55,
 };
 
-/** 头部零件。坐标是 `headPivot` 局部：y=0 是脖子接口，+Z 是脸朝的方向。 */
+/**
+ * 头部旋转中心（相对 `headPivot` 原点，单位 = `headSize` 的倍数）。
+ *
+ * 鱼人的头比身体还横，绕脖子（y=0）转时整颗头像锤子一样甩出去 ——
+ * 待机盯人时读作「疯狂点头」。把旋转中心抬到颅骨中心偏后，转头就只剩朝向变化。
+ */
+export const MURLOC_HEAD_SPIN = 0.46;
+
+/** 头部零件。坐标是 `headPivot` 局部：y=0 是**旋转中心**（颅骨中心），+Z 是脸朝的方向。 */
 export function buildMurlocHead(
   parent: THREE.Object3D, HS: number, colors: ColorConfig,
 ): void {
   const skin = colors.head;
   const dark = colors.limb;
+
+  // 所有 y 减去旋转中心：调用方把 `parent` 抬到 `MURLOC_HEAD_SPIN * HS` 的高度，
+  // 几何自身下移同样的量 —— 于是**位置不变、旋转中心变了**。
+  const SPIN = MURLOC_HEAD_SPIN;
 
   const add = (
     w: number, h: number, d: number,
@@ -68,7 +87,7 @@ export function buildMurlocHead(
     color: string, glow = 0,
   ): THREE.Mesh => {
     const m = makeBox(w * HS, h * HS, d * HS, color);
-    m.position.set(x * HS, y * HS, z * HS);
+    m.position.set(x * HS, (y - SPIN) * HS, z * HS);
     if (glow > 0) {
       const mat = m.material as THREE.MeshLambertMaterial;
       // 瞳孔不参与光照：鱼人在暗处眼睛也是亮的，这是它「水栖」的唯一信号
@@ -192,14 +211,18 @@ export function buildMurlocBelly(
  *
  * 挂 pelvis 而不是 `lower`：尾巴跟着屁股走才自然，挂 lower 会被腿的转体甩到一侧。
  * 压得偏低偏短 —— 长了会从躯干下面穿出去。
+ *
+ * 两段必须**重叠 3cm 以上**：第一版按「首尾相接」摆，`base` 后缘与 `fin` 前缘差 1.6cm 没接上，
+ * 尾鳍斜过来之后缝隙被放大到约 4cm，正面看过去就是「尾巴中间少了一节」。
  */
 export function buildMurlocTail(parent: THREE.Object3D, HS: number, torsoD: number): void {
-  const base = makeBox(0.30 * HS, 0.22 * HS, 0.30 * HS, MUR.gill);
-  base.position.set(0, -0.10, -torsoD / 2 - 0.075);
+  const base = makeBox(0.30 * HS, 0.24 * HS, 0.34 * HS, MUR.gill);
+  base.position.set(0, -0.10, -torsoD / 2 - 0.085);
   parent.add(base);
 
-  const fin = makeBox(0.34 * HS, 0.26 * HS, 0.11 * HS, MUR.fin);
-  fin.position.set(0, -0.145, -torsoD / 2 - 0.185);
+  const fin = makeBox(0.34 * HS, 0.26 * HS, 0.14 * HS, MUR.fin);
+  // z 只比基座后缘再退 0.075（半深 0.032 + 重叠 0.04），旋转 0.36 后仍压在基座上
+  fin.position.set(0, -0.135, -torsoD / 2 - 0.16);
   // 尾鳍斜一点：竖直的尾鳍读作「鱼的尾巴」，完全垂直读作「一块板」
   fin.rotation.x = 0.36;
   parent.add(fin);

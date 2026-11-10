@@ -16,7 +16,7 @@ import type {
 } from '../core';
 import {
   buildMurlocBelly, buildMurlocDorsalFin, buildMurlocFoot, buildMurlocHead,
-  buildMurlocShoulderFin, buildMurlocTail, MURLOC_POSTURE,
+  buildMurlocShoulderFin, buildMurlocTail, MURLOC_HEAD_SPIN, MURLOC_POSTURE,
 } from './murloc-parts';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
@@ -116,6 +116,8 @@ export function createDummyRig(
   const mc: ColorConfig = murloc
     ? { ...colors, body: '#4f9c78', head: '#5fb692', limb: '#3d7f61', shoe: '#2b5d49' }
     : colors;
+  // 四肢 / 鞋 / 眼 也要吃这套色，否则鱼人是一颗绿头接在「每个假人专属色」的蓝色身体上。
+  const cc: ColorConfig = mc;
 
   const H = v.headSize;
   const legLen = v.legLength;
@@ -135,11 +137,21 @@ export function createDummyRig(
   headPivot.position.y = bodyH;                  // 相对骨盆（脖子在躯干顶）
   upper.add(headPivot);
 
+  // v9s.65：鱼人的 yaw 走内层节点（绕颅中心），pitch 留在 headPivot（绕脖子）。
+  // 全部搬到颅中心的话，同样的抬头角会让脸直接扎到地上 —— 见 `voxel-rig` 同一处注释。
+  const headYawNode = murloc ? new THREE.Group() : null;
+  const headYawTarget: THREE.Object3D = headYawNode ?? headPivot;
+  if (headYawNode) {
+    headYawNode.name = 'headYaw';
+    headYawNode.position.y = MURLOC_HEAD_SPIN * H;
+    headPivot.add(headYawNode);
+  }
+
   if (murloc) {
-    buildMurlocHead(headPivot, H, mc);
+    buildMurlocHead(headYawTarget, H, mc);
     // 鱼人零件自带材质，不受击闪光的话头会是唯一不闪的部位 —— 明显。
     // 瞳孔（userData.glow）除外：染红就丢了「暗处发亮」这个唯一的非人信号。
-    headPivot.traverse((o) => {
+    headYawTarget.traverse((o) => {
       const mat = (o as THREE.Mesh).material;
       if (mat instanceof THREE.MeshLambertMaterial && !mat.userData.glow) mats.push(mat);
     });
@@ -151,7 +163,7 @@ export function createDummyRig(
 
     // 眼睛贴在 +Z 面，用来验收朝向
     for (const sx of [-1, 1]) {
-      const eye = mk(0.06, 0.07, 0.02, colors.shoe);
+      const eye = mk(0.06, 0.07, 0.02, cc.shoe);
       eye.position.set(sx * 0.09, H / 2 + 0.03, H / 2 + 0.011);
       headPivot.add(eye);
     }
@@ -182,7 +194,7 @@ export function createDummyRig(
     // 注意：局部 mesh 不能叫 upper / lower，否则会遮蔽骨架的 upper / lower 组（TDZ）。
     (isArm ? upper : lower).add(jointRoot);
 
-    const upperSeg = mk(t, len / 2, t, colors.limb);
+    const upperSeg = mk(t, len / 2, t, cc.limb);
     upperSeg.position.y = -len / 4;
     jointRoot.add(upperSeg);
 
@@ -191,7 +203,7 @@ export function createDummyRig(
     joint.position.y = -len / 2;
     jointRoot.add(joint);
 
-    const lowerSeg = mk(t, len / 2, t, colors.limb);
+    const lowerSeg = mk(t, len / 2, t, cc.limb);
     lowerSeg.position.y = -len / 4;
     joint.add(lowerSeg);
 
@@ -199,7 +211,7 @@ export function createDummyRig(
       if (murloc) {
         buildMurlocFoot(joint, t, len, mc);
       } else {
-        const shoe = mk(t * 1.15, 0.07, t * 1.7, colors.shoe);
+        const shoe = mk(t * 1.15, 0.07, t * 1.7, cc.shoe);
         shoe.position.set(0, -len / 2 + 0.035, 0.045);
         joint.add(shoe);
       }
@@ -352,7 +364,7 @@ export function createDummyRig(
       root.position.set(s.position.x, s.position.y, s.position.z);
       // 身体用平滑朝向（bodyYaw），头相对身体再补一个差值，实现头身分离（v7b#9）
       root.rotation.y = s.bodyYaw;
-      headPivot.rotation.y = ((s.headYaw - s.bodyYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      headYawTarget.rotation.y = ((s.headYaw - s.bodyYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 
       // 模式变化：一次短暂高亮，给点击一个明确反馈
       if (s.mode !== lastMode) {
@@ -695,6 +707,14 @@ export function createDummyRig(
         headPivot.rotation.x -= posturePitch * (posture.headLift ?? 0);
         headPivot.position.z = posture.headReach ?? 0;
         headPivot.position.y = headBaseY - (posture.neckDrop ?? 0);
+        // 手臂回正（与主角同一个旋钮）：假人没有脊柱分段，`upper.rotation.x` 就是
+        // 手臂实际吃到的俯仰，所以这里直接用 posturePitch，不用像主角那样读胸段角。
+        const armDrop = posture.armDrop ?? 0;
+        if (armDrop > 0 && posturePitch > 0) {
+          const back = posturePitch * armDrop;
+          armL.root.rotation.x -= back;
+          armR.root.rotation.x -= back;
+        }
       }
 
       // 受击僵直时压过挥砍姿态：后仰 + 红闪优先，攻击弧隐藏
@@ -722,7 +742,7 @@ export function createDummyRig(
         sideYaw, gaitCfg.chestYawScale, gaitCfg.chestYawMaxDeg,
       );
       upper.rotation.y += chestYaw;
-      headPivot.rotation.y = ((s.headYaw - s.bodyYaw - chestYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      headYawTarget.rotation.y = ((s.headYaw - s.bodyYaw - chestYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 
       // 4) v8g 足部 IK 锚定：与主角同一套解算器，放在所有姿态层之后。
       //    enabled=false / 未传配置时整层跳过，精确回到旧 FK 姿态。
@@ -733,6 +753,7 @@ export function createDummyRig(
         cfg: ikCfg,
         grounded: true,
         attacking: s.attackPhase !== 'idle',
+        groundY: s.position?.y,
       });
     },
     ik(): IKDiagnostics {

@@ -77,6 +77,15 @@ export type FootIKInput = {
   grounded: boolean;
   /** 攻击期间权重乘 attackScale，给跨步留余地 */
   attacking: boolean;
+  /**
+   * 脚下地面高度（世界 y）。锚点低于它时会被顶到地面上。
+   *
+   * 为什么需要：这套 IK 的契约是「把脚钉在**基准变换下的脚位**」，它不判断那个位置
+   * 合不合理。而 FK 给出的脚位本身就可能在地面以下（落地缓冲压低骨盆、步态滞后、
+   * 站在地块边缘时基准高度差一点），于是 IK 忠实地把脚钉在地里 —— 越钉越沉，
+   * 读作「脚掌穿地」。这里只做下限兜底，正常帧锚点就贴地，结果与原来一致。
+   */
+  groundY?: number;
 };
 
 export function applyFootIK(input: FootIKInput): IKDiagnostics {
@@ -102,6 +111,14 @@ export function applyFootIK(input: FootIKInput): IKDiagnostics {
   // 2) 基准变换下取两脚锚点（腿 FK 角度保持本帧最终值，跨步 / 屈膝 / 抬膝都保留）
   root.updateWorldMatrix(true, true);
   const anchors = limbs.map((limb) => limb.tip.getWorldPosition(new THREE.Vector3()));
+  // 地板兜底：锚点只有**低于**地面时才被顶上来。抬脚 / 迈步帧锚点在地面之上，
+  // 这行不会动它 —— 所以「脚抬起」与「脚贴地」的原有语义都不变。
+  const groundY = input.groundY;
+  if (groundY !== undefined && Number.isFinite(groundY)) {
+    for (const a of anchors) {
+      if (a.y < groundY) a.y = groundY;
+    }
+  }
 
   // 3) 恢复真实变换
   pelvis.position.copy(current.pelvisPos);
