@@ -740,6 +740,32 @@ export type MeleeShape = {
   slamZ: number;
 };
 
+/**
+ * v9s.x · 一次近战攻击的**完整判定覆盖**（纯查询，不写 World）。
+ *
+ * `currentMeleeShape()` 描述「本帧刀风」，供草 / 可破坏物按帧裁决；而脚底范围
+ * 指示器要回答的是「这一击从头到尾会覆盖哪片地面」。两者口径必须同源，否则就会
+ * 出现用户反馈的「实际打得到的比画出来的大得多」。这里每个数都取自
+ * `playerHits` / `playerGroundSlam` 的同一处配置，由 `meleeCoverage()` 计算，
+ * 并用 `tests/melee-coverage.test.ts` 的一致性用例守护。
+ *
+ * 刻意**不新增任何判定逻辑**：Core 的命中规则一行没改，只是把它读出来。
+ */
+export type MeleeCoverage = {
+  /** 是否存在近战扇形（bow 这类弹道武器为 false，与 playerHits 首行同句） */
+  melee: boolean;
+  /** 命中距离（米）= hits.reach[weapon] + dummies.radius，与 `dist > reach + extra` 一致 */
+  radius: number;
+  /** 前半球**半角**（度）= hits.arcDeg；判定 `(d·f)/|d| >= cos(halfArcDeg)`，故扇面全角 = 2× */
+  halfArcDeg: number;
+  /** 本段连击刃身扫掠区间（相对 attackFacing，度）；null = 该段未设扫掠门（突刺 / 旧配置） */
+  sweep: { lo: number; hi: number } | null;
+  /** 击地圆：半径（含假人半径）与沿朝向前移量；null = 本武器无击地 */
+  slam: { radius: number; ahead: number } | null;
+  /** active 段前冲距离（米）：角色边走边判，实际覆盖比脚底静态圆更远 */
+  lunge: number;
+};
+
 /* ---------------- 武器 / 战斗契约 ---------------- */
 
 export type WeaponId = 'sword-shield' | 'dual-swords' | 'greatsword' | 'staff' | 'bow';

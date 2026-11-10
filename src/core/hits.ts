@@ -1,5 +1,5 @@
 import { damageDummy, decideSever, pushHitMark } from './health';
-import type { EventType, HitTarget, HurtState, HurtType, MeleeShape, Vec3, World } from './types';
+import type { EventType, HitTarget, HurtState, HurtType, MeleeCoverage, MeleeShape, Vec3, World } from './types';
 
 /** 一次命中结算的完整描述（近战与法杖技能共用）。 */
 export type HitSpec = {
@@ -306,6 +306,68 @@ export function currentMeleeShape(world: World): MeleeShape {
     shape.slamZ = p.z + shape.fz * Math.min(shape.slamRadius * 0.25, 0.5);
   }
   return shape;
+}
+
+/**
+ * v9s.x · 一次近战攻击的**完整判定覆盖**（纯查询，不写 World）。
+ *
+ * 脚底范围指示器不该自己再算一遍扇形：旧版把 `hits.arcDeg`（半角）当成扇面全角、
+ * 漏掉 `dummies.radius` 余量、漏掉 `hitSweep` 横扫与 `groundSlam` 击地圆，
+ * 于是「画出来的范围」比「真正打得到的范围」小得多（大剑尤其明显）。
+ * 这里把 `playerHits` / `playerGroundSlam` 用的那组量读成 plain data 对外暴露，
+ * 计算式逐条对齐两处判定，但**不改动任何判定逻辑** —— 876 例手感断言原样保留。
+ *
+ * 与 `currentMeleeShape()` 的分工：后者是「本帧刀风」（含时间闸门 / 瞬时扫掠区间），
+ * 供草块割断按帧裁决；本函数是「整击覆盖」（无时间闸门 / 全段扫掠值域），供范围预览。
+ */
+export function meleeCoverage(world: World): MeleeCoverage {
+  const cb = world.combat;
+  const cfg = world.config.hits;
+  const weapon = cb.weapon;
+  const profile = world.config.combat.weapons[weapon];
+  const extra = world.config.dummies.radius;
+  const empty: MeleeCoverage = {
+    melee: false, radius: 0, halfArcDeg: 0, sweep: null, slam: null, lunge: 0,
+  };
+  // 与 playerHits 首行同句：弹道武器（bow）没有近战扇形，伤害全由箭矢实体结算
+  if (weapon === 'bow') return empty;
+
+  // 扫描半径 = 武器 reach + 目标半径余量（playerHits: `if (dist > reach + extra) continue`）
+  const radius = (cfg.reach[weapon] ?? 0) + extra;
+  // cosArc = cos(clamp(arcDeg, 0, 90)°)：arcDeg 是**半角**，扇面全角是它的两倍
+  const halfArcDeg = clamp(cfg.arcDeg, 0, 90);
+
+  // 刃身扫掠门：与 playerHits 同一组 byCombo 选择 / tolDeg / pts。
+  // 区别在于这里取整段 pts 的角度值域（整击会扫过哪片），而非本帧 u 的瞬时区间。
+  let sweep: MeleeCoverage['sweep'] = null;
+  const hs = profile?.hitSweep;
+  const seg = hs?.byCombo?.[String(cb.comboIndex)] ?? hs?.byCombo?.['1'];
+  if (seg?.pts && seg.pts.length >= 2) {
+    const tol = hs?.tolDeg ?? 10;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const [, a] of seg.pts) {
+      lo = Math.min(lo, a);
+      hi = Math.max(hi, a);
+    }
+    sweep = { lo: lo - tol, hi: hi + tol };
+  }
+
+  // 击地圆：与 playerGroundSlam 的落点前移 / 半径余量一致
+  let slam: MeleeCoverage['slam'] = null;
+  const gs = profile?.groundSlam;
+  if (gs) {
+    const r = Math.max(0, gs.radius);
+    slam = { radius: r + extra, ahead: Math.min(r * 0.25, 0.5) };
+  }
+
+  // active 段前冲：角色边走边判，实际覆盖比以当前脚底为心的静态圆更远。
+  // 只是把位移如实导出，不把它硬折进半径（那会造出一个打不到的假范围）。
+  const lunge = profile?.lunge
+    ? profile.lunge[clamp(cb.comboIndex - 1, 0, profile.lunge.length - 1)] ?? 0
+    : 0;
+
+  return { melee: true, radius, halfArcDeg, sweep, slam, lunge };
 }
 
 /** 某个世界 XZ 点是否落在本帧刀身扇区内（extra = 目标半径放宽量）。 */

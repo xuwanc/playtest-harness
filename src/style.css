@@ -67,9 +67,32 @@ html, body {
   background: rgba(10, 14, 20, 0.62);
   font-size: 11px;
   line-height: 1.55;
-  white-space: pre;
+  /* v9s.x：改成分区 div 后，换行交给每行自己用 pre 保留对齐 */
+  white-space: normal;
   pointer-events: none;
   letter-spacing: 0.2px;
+}
+
+/* ---- v9s.x：状态读数按语义分区 ----
+   .hud-head 是分区标题（色条 + 小字），.hud-line 是原始读数行（pre 保留空格对齐）。
+   固定 div 池 + diff 写入，静止帧不碰 DOM。 */
+#hud .hud-line { white-space: pre; }
+#hud .hud-head {
+  margin-top: 7px;
+  padding: 1px 0 2px 6px;
+  border-left: 2px solid rgba(127, 184, 216, 0.66);
+  border-bottom: 1px solid rgba(120, 160, 200, 0.14);
+  color: #dff0ff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.5px;
+}
+#hud .hud-head:first-child { margin-top: 0; }
+#hud.is-compact .hud-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---- v9c：收起态 HUD 只留一行摘要，不再长期占屏挡视野 ---- */
@@ -84,6 +107,27 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---- v9s.x：胶囊行的「面板 / 开关」划分 ----
+   圆胶囊 = 互斥展开的查看面板；小圆角方片 = 点一下立即生效的开关。
+   标签与竖线都 pointer-events:none，不吃指针也不进输入层的按钮集合。 */
+.pill-tag {
+  align-self: center;
+  color: rgba(150, 176, 198, 0.6);
+  font-size: 9px;
+  letter-spacing: 0.6px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.pill-sep {
+  align-self: center;
+  width: 1px;
+  height: 14px;
+  margin: 0 2px;
+  background: rgba(140, 180, 215, 0.45);
+  pointer-events: none;
+}
+#panel-row [data-pill-group="switch"] { border-radius: 6px; }
 
 /* 折叠胶囊：一排里唯一可点的小块，其余状态文字仍不拦指针（不挡操作） */
 .fold-pill {
@@ -170,6 +214,47 @@ html, body {
   letter-spacing: 0;
 }
 
+/* ---- v9s.x：工位功能分组 ----
+   沿用调试面板「按你要找的是什么分大类」的语汇；组标题带计数与色条，
+   玩家当前所在的组整节提亮，十来个工位不用逐行扫名字。 */
+.lab-group {
+  margin-top: 9px;
+}
+.lab-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 2px 0 3px 6px;
+  border-left: 2px solid var(--lab-group-color, #7fb8d8);
+  border-bottom: 1px solid rgba(120, 160, 200, 0.16);
+}
+.lab-group-label {
+  color: rgba(220, 236, 248, 0.9);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.lab-group-count {
+  color: var(--lab-group-color, #7fb8d8);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.lab-group-hint {
+  margin-left: auto;
+  color: rgba(150, 176, 198, 0.55);
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lab-group.is-current .lab-group-head {
+  border-left-color: #f2f9ff;
+  background: rgba(58, 100, 138, 0.26);
+}
+.lab-group.is-current .lab-group-label { color: #f2f9ff; }
+
 .lab-row {
   display: flex;
   align-items: center;
@@ -197,6 +282,16 @@ html, body {
   border-color: var(--lab-color, #8fe7ff);
   background: rgba(52, 96, 136, 0.62);
   color: #f2f9ff;
+}
+
+/* v9s.x：工位名单行省略。个别地块的 name 很长（仙人掌工位带括号说明），
+   换行会把分组列表撑得参差、还把面板顶出屏幕底部；全名仍在 aria-label 里。 */
+.lab-row .lab-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lab-idx {
@@ -427,6 +522,72 @@ html, body {
   background: rgba(80, 60, 120, 0.45);
 }
 
+/* ---- v9s.x：操作按钮状态层（冷却 / 蓄力 / 引导 / 冲刺 / 电环 / 空中）----
+   状态由表现层每帧只读 World 派生，写成 --bs-deg / data-phase / data-badge。
+   - 进度环：conic-gradient 从 12 点方向扫过 --bs-deg，用 radial mask 挖空成一圈细环。
+     --bs-deg 是带单位的角度（不在 CSS 里做 calc），老 webview 兼容性最稳。
+   - 角标：content: attr(data-badge)，短文字（1.2s / 60% / 2/5 / 环 / 空中），
+     贴在按钮下沿内、不遮主标签；空串时不渲染。
+   - 相位配色：冷却 / 锁定压暗（inset 阴影只压背景不压文字），进行态给亮色描边。
+   环只在支持 mask 时显示（@supports 兜底）；不支持时角标 + 配色仍完整表达状态。 */
+.btn { position: relative; }
+
+@supports ((-webkit-mask: radial-gradient(#000, transparent)) or (mask: radial-gradient(#000, transparent))) {
+  .btn::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    background: conic-gradient(from -90deg,
+      var(--bs-ring, #7fb8d8) var(--bs-deg, 0deg), transparent var(--bs-deg, 0deg));
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms linear;
+  }
+  .btn[data-phase]:not([data-phase="ready"])::before { opacity: 0.95; }
+}
+
+.btn::after {
+  content: attr(data-badge);
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  transform: translateX(-50%);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  color: #f2f8ff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+  opacity: 0;
+}
+.btn[data-badge]:not([data-badge=""])::after { opacity: 1; }
+
+.btn[data-phase="cooldown"] {
+  --bs-ring: #7fb8d8;
+  box-shadow: inset 0 0 0 999px rgba(8, 14, 20, 0.30);
+}
+.btn[data-phase="charging"] {
+  --bs-ring: #ffd166;
+  border-color: rgba(255, 209, 102, 0.8);
+}
+.btn[data-phase="channeling"] {
+  --bs-ring: #b48cff;
+  border-color: rgba(180, 140, 255, 0.8);
+}
+.btn[data-phase="active"] {
+  --bs-ring: #6fe0a0;
+  border-color: rgba(111, 224, 160, 0.75);
+}
+.btn[data-phase="locked"] {
+  --bs-ring: #8a97a5;
+  box-shadow: inset 0 0 0 999px rgba(8, 14, 20, 0.34);
+}
+
 /* v9r：调试面板不再自己 fixed 到右侧，收进左上角的面板栈；展开后内部滚动 */
 #debug-panel {
   max-height: calc(100vh - 120px);
@@ -455,12 +616,14 @@ html, body {
   #pad-right { right: 10px; }
 }
 
-/* ---- v9b：竖屏操作簇 —— 冲 / 跳 与 技2 / 攻击 收拢到屏幕右侧、垂直居中 ----
-   布局：右列「技2 / 攻击」，左列「冲 / 跳」，两列中心对齐、合成一个拇指簇，
-        不再一组在右侧中部、一组在右侧底部来回够；
-   复位：「会重置整场」，从操作簇里移出、单独钉在右下角，避免高速滑拇指误触；
+/* ---- 竖屏操作簇 —— 冲 / 跳 与 技2 / 攻击 收拢到屏幕右下角、约 4/5 高度 ----
+   布局：右列「技2 / 攻击」，左列「冲 / 跳」，两列中心对齐、合成一个拇指簇。
+   v9s.x：按需求把整个簇从「垂直居中 50%」下移到「4/5 高度」（top: calc(80% - 半列高)），
+        落在单手竖屏时拇指自然够到的右下区，不再悬在屏幕正中。
+   复位：「会重置整场」，从操作簇里移出、单独钉在**左下角**（版本徽标上方），
+        右下角让给操作簇后仍保持「远离高频操作区、避免高速滑拇指误触」的初衷。
    横屏：完全保持原来的底部横排，只按屏幕方向切换，不依赖宽度断点。
-   居中用 top: calc(50% - 半列高) 而不是 transform —— 父级一旦有 transform 会
+   定位用 top: calc(80% - 半列高) 而不是 transform —— 父级一旦有 transform 会
    成为 fixed 子元素（复位）的包含块，导致复位钉错位置。 */
 @media (orientation: portrait) {
   #pad-right {
@@ -468,7 +631,7 @@ html, body {
     align-items: center;
     justify-content: center;
     right: calc(14px + env(safe-area-inset-right, 0px));
-    top: calc(50% - 82px); /* (技2 62 + gap 14 + 攻击 88) / 2 */
+    top: calc(80% - 82px); /* 4/5 高度 - (技2 62 + gap 14 + 攻击 88) / 2 */
     bottom: auto;
     gap: 14px;
   }
@@ -478,20 +641,21 @@ html, body {
     justify-content: center;
     left: auto;
     right: calc(14px + 88px + 12px + env(safe-area-inset-right, 0px));
-    top: calc(50% - 70px); /* (冲 64 + gap 12 + 跳 64) / 2 */
+    top: calc(80% - 70px); /* 4/5 高度 - (冲 64 + gap 12 + 跳 64) / 2 */
     bottom: auto;
     gap: 12px;
   }
-  /* 复位脱离操作簇，单独固定在右下角 */
+  /* 复位脱离操作簇，单独固定在左下角（版本徽标在更下方，留出 36px 不重叠） */
   #pad-left #btn-reset {
     position: fixed;
-    left: auto;
+    left: calc(14px + env(safe-area-inset-left, 0px));
+    right: auto;
     top: auto;
-    right: calc(14px + env(safe-area-inset-right, 0px));
-    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(36px + env(safe-area-inset-bottom, 0px));
   }
   /* 顶部整行让给武器条；胶囊行下移，展开的面板再放到胶囊行下方 */
   #panel-row { top: 58px; }
+  #panel-row .pill-tag { display: none; }
   /* 宽度锁在左侧空带（右缘不越过 x≈226），与右侧居中的操作簇完全分开 */
   #panel-stack {
     top: 92px;
@@ -505,21 +669,22 @@ html, body {
   #hud { font-size: 8px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; max-width: 100%; }
 }
 
-/* 竖屏窄屏：按钮走小屏档（攻击 72 / 技2 52 / 冲跳 54），列高变矮，重算居中与水平偏移 */
+/* 竖屏窄屏：按钮走小屏档（攻击 72 / 技2 52 / 冲跳 54），列高变矮，重算 4/5 居中与水平偏移 */
 @media (orientation: portrait) and (max-width: 620px) {
   #pad-right {
     right: calc(12px + env(safe-area-inset-right, 0px));
-    top: calc(50% - 69px); /* (52 + 14 + 72) / 2 */
+    top: calc(80% - 69px); /* 4/5 高度 - (52 + 14 + 72) / 2 */
     gap: 14px;
   }
   #pad-left {
     right: calc(12px + 72px + 10px + env(safe-area-inset-right, 0px));
-    top: calc(50% - 60px); /* (54 + 12 + 54) / 2 */
+    top: calc(80% - 60px); /* 4/5 高度 - (54 + 12 + 54) / 2 */
     gap: 12px;
   }
   #pad-left #btn-reset {
-    right: calc(12px + env(safe-area-inset-right, 0px));
-    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    right: auto;
+    bottom: calc(34px + env(safe-area-inset-bottom, 0px));
   }
 }
 
@@ -810,4 +975,56 @@ html, body {
   #panel-row { top: 6px; }
   #panel-stack { top: 30px; max-height: calc(100vh - 40px); }
   #dirdbg.is-embedded #dirdbg-canvas { width: 84px; height: 84px; }
+}
+
+
+/* ---- v9s.x：常驻性能条（帧率 / 掉帧判定）----
+   独立于 HUD 折叠：HUD 收起时仍能看到 FPS、帧时、慢帧数与 sparkline。
+   pointer-events:none —— 不吃指针，也不影响摇杆起点（data-ui-region 只用于排除误触）。
+   颜色三档 ok / warn / bad 让掉帧在余光里也能被发现，不用盯数字。 */
+#perf-meter {
+  position: fixed;
+  top: 10px;
+  right: 12px;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 7px;
+  border: 1px solid rgba(120, 160, 200, 0.28);
+  border-radius: 6px;
+  background: rgba(10, 14, 20, 0.66);
+  color: #a8d8b4;
+  font-size: 9px;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  white-space: pre;
+  pointer-events: none;
+  user-select: none;
+}
+#perf-meter .perf-spark { display: block; width: 120px; height: 24px; opacity: 0.9; }
+#perf-meter .perf-text { white-space: pre-line; }
+#perf-meter[data-level="warn"] { color: #ffd166; border-color: rgba(255, 209, 102, 0.5); }
+#perf-meter[data-level="bad"] {
+  color: #ff8a8a;
+  border-color: rgba(255, 107, 107, 0.6);
+  background: rgba(60, 18, 20, 0.72);
+}
+
+/* 竖屏：武器条在顶部居中、胶囊行在左上，性能条挪到右上稍下方，两侧不互相压 */
+@media (orientation: portrait) {
+  #perf-meter {
+    top: 104px; /* 下移到胶囊行之下：420px 宽下胶囊是一行（约 58~84px），
+                   62px 会直接压住「体型 / 风」两个胶囊 */
+    right: calc(8px + env(safe-area-inset-right, 0px));
+    gap: 6px;
+    padding: 3px 5px;
+    font-size: 8px;
+  }
+  #perf-meter .perf-spark { width: 84px; height: 20px; }
+}
+@media (orientation: portrait) and (max-width: 620px) {
+  #perf-meter { top: 100px; right: calc(6px + env(safe-area-inset-right, 0px)); }
+  #perf-meter .perf-spark { width: 64px; height: 18px; }
 }
