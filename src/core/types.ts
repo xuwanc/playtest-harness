@@ -3410,8 +3410,33 @@ export type ViewConfig = {
    * 半径上会把速度突跳放大成「一顿一顿」。默认 35ms ≈ 半帧，代价是朝向晚约半帧到位。
    */
   renderInterp?: { enabled: boolean; yawSmoothMs?: number };
+  /**
+   * v9s.62 · 渲染质量档。
+   *
+   * 微信（X5）/ iOS WKWebView 会在 GPU 内存吃紧时**周期性丢弃 WebGL 上下文**，
+   * 恢复要重传全部几何 / 纹理 —— 表现为「隔一段时间卡几秒」。移动端默认降一档
+   * （关 MSAA、dpr ≤ 1.5、阴影 1024），并把「丢过上下文就再降一档」记在本地。
+   */
+  render?: RenderViewConfig;
   colors: ColorConfig;
   dummies: DummyViewConfig;
+};
+
+/** v9s.62 · 渲染质量档（`view.render`）。 */
+export type RenderViewConfig = {
+  antialias: boolean;
+  /** devicePixelRatio 上限（超采样比分辨率更吃填充率）。 */
+  dprMax: number;
+  shadow: boolean;
+  /** 平行光阴影贴图边长（正方形）。 */
+  shadowMapSize: number;
+  /** 移动端 webview 覆盖上面四项；缺省 = 同桌面。 */
+  mobile?: { antialias: boolean; dprMax: number; shadow: boolean; shadowMapSize: number };
+  /**
+   * 同一个会话里第二次丢上下文就自动降档（关阴影 + dpr ≤ 1.25），
+   * 并把标记写进 localStorage —— 下次进页面直接按降档起，避免反复丢。
+   */
+  degradeOnContextLoss: boolean;
 };
 
 /**

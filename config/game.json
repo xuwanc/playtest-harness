@@ -2156,6 +2156,20 @@
       "predLead": 0.12,
       "counterBoost": 1.6
     },
+    "render": {
+      "_note": "v9s.62 质量档：移动端 webview（微信 X5 / WKWebView）默认降一档，避免周期性丢 WebGL 上下文导致「卡几秒」",
+      "antialias": true,
+      "dprMax": 2,
+      "shadow": true,
+      "shadowMapSize": 2048,
+      "mobile": {
+        "antialias": false,
+        "dprMax": 1.5,
+        "shadow": true,
+        "shadowMapSize": 1024
+      },
+      "degradeOnContextLoss": true
+    },
     "renderInterp": {
       "enabled": true,
       "yawSmoothMs": 35

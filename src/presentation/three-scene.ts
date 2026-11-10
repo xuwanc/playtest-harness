@@ -18,7 +18,8 @@
 import * as THREE from 'three';
 import type { GroundBasis } from '../adapters/input';
 import type {
-  BodyTypeConfig, Box, BreakHit, DummyState, SeverPart, SlabSpec, StationSpec, ViewConfig, World,
+  BodyTypeConfig, Box, BreakHit, DummyState, RenderViewConfig, SeverPart, SlabSpec,
+  StationSpec, ViewConfig, World,
 } from '../core';
 import { createCameraRig } from './camera-rig';
 import { createDummyRig } from './dummy-rig';
@@ -61,6 +62,20 @@ type PlayerRig = Pick<VoxelRig, 'group' | 'update' | 'dispose'>
   /** 多足骨架专有：8 条腿的最大伸展比 / 被夹住的腿数 / 当前步相。 */
   & { debug?: () => { maxReach: number; clamped: number; phase: number } };
 
+/**
+ * v9s.62 · 是不是「触摸 + 移动 webview」环境（微信 X5 / 手机浏览器）。
+ *
+ * 两个条件都要满足：UA 像移动端 **且** 主指针是 coarse。
+ * 只看 UA 会把桌面微信客户端也降到低档；只看 coarse 会把触屏笔记本算进来。
+ * 命中后用 `view.render.mobile` 那一档质量（关 MSAA / dpr ≤ 1.5 / 阴影 1024）。
+ */
+function isMobileWebView(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  return coarse && /MicroMessenger|Android|iPhone|iPad|iPod/i.test(ua);
+}
+
 export type SceneView = {
   render(world: World, frameDt: number): void;
   resize(): void;
@@ -85,6 +100,25 @@ export type SceneView = {
    * 它应与 `world.dummies.length` 严格相等 —— 用来断言「Core 有状态、画面也真的多出人」。
    */
   dummyRenderCount(): number;
+  /**
+   * v9s.62：GPU / 场景资源读数 —— 诊断移动端「隔一段时间卡几秒」。
+   *
+   * `geometries` / `textures` / `programs` 是 Three 的累计计数，只增不减就是资源没释放；
+   * `objects` / `meshes` 是遍历场景的存活数，和 dummies / fragments 一起看能判断
+   * 「是不是越砍越多」。`heapMB` 只有 Chromium 系有（JS 堆，不含 GPU）。
+   */
+  gpuDebug(): {
+    geometries: number; textures: number; programs: number;
+    calls: number; triangles: number;
+    objects: number; meshes: number;
+    heapMB: number | null; contextLost: boolean;
+    /** 0 = 配置档；1 = 因反复丢上下文已降档 */
+    tier: number;
+    /** 本次会话累计丢上下文次数（微信里这个数在涨就是元凶） */
+    lostCount: number;
+    /** 实际生效的像素比 / 阴影贴图边长 / 是否开了 MSAA（验收质量档用） */
+    dpr: number; shadowSize: number; antialias: boolean;
+  };
   /** 世界坐标 → 屏幕像素坐标，供自动化验收精确定位假人。 */
   projectToScreen(x: number, y: number, z: number): { x: number; y: number };
   /** v9s.37：击地尘环读数（spawns = 累计生成次数，live = 当前活跃环） */
@@ -274,9 +308,32 @@ export function createSceneView(
   const w0 = Math.max(1, container.clientWidth);
   const h0 = Math.max(1, container.clientHeight);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.shadowMap.enabled = true;
+  // ---- v9s.62：渲染质量档 ----
+  // 微信（X5）/ iOS WKWebView 在 GPU 内存吃紧时会周期性地丢 WebGL 上下文，
+  // 恢复要把全部几何 / 纹理重传一遍 —— 现场就是「隔一段时间卡几秒」。
+  // 移动端默认降一档（关 MSAA、dpr ≤ 1.5、阴影 1024），并且丢过两次上下文后
+  // 再降一档（关阴影、dpr ≤ 1.25）并记住，避免反复丢。
+  const RC: RenderViewConfig = view.render ?? {
+    antialias: true, dprMax: 2, shadow: true, shadowMapSize: 2048,
+    degradeOnContextLoss: true,
+  };
+  const mobileWebView = isMobileWebView();
+  const tierBase = mobileWebView && RC.mobile ? RC.mobile : RC;
+  const DEGRADE_KEY = 'ph.renderDegraded';
+  let degraded = false;
+  try { degraded = localStorage.getItem(DEGRADE_KEY) === '1'; } catch { degraded = false; }
+  let lostCount = 0;
+
+  const quality = (): { dpr: number; shadow: boolean; sm: number } => {
+    const raw = Math.min(window.devicePixelRatio || 1, tierBase.dprMax);
+    if (!degraded) return { dpr: raw, shadow: tierBase.shadow, sm: tierBase.shadowMapSize };
+    return { dpr: Math.min(raw, 1.25), shadow: false, sm: 512 };
+  };
+  const q0 = quality();
+
+  const renderer = new THREE.WebGLRenderer({ antialias: tierBase.antialias });
+  renderer.setPixelRatio(q0.dpr);
+  renderer.shadowMap.enabled = q0.shadow;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.setSize(w0, h0, false);
   container.appendChild(renderer.domElement);
@@ -290,12 +347,17 @@ export function createSceneView(
   glCanvas.addEventListener('webglcontextlost', (e: Event) => {
     e.preventDefault(); // 必须 preventDefault，否则浏览器不会派发 restored
     contextLost = true;
+    lostCount += 1;
+    // 第二次丢就认账：这台设备的 GPU 撑不住当前档位，降一档并记住
+    if (lostCount >= 2 && RC.degradeOnContextLoss && !degraded) {
+      degraded = true;
+      try { localStorage.setItem(DEGRADE_KEY, '1'); } catch { /* 隐私模式忽略 */ }
+      applyQuality();
+    }
   }, false);
   glCanvas.addEventListener('webglcontextrestored', () => {
     contextLost = false;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(container.clientWidth || w0, container.clientHeight || h0, false);
-    renderer.shadowMap.needsUpdate = true;
+    applyQuality();
   }, false);
 
   const scene = new THREE.Scene();
@@ -312,13 +374,29 @@ export function createSceneView(
   const sun = new THREE.DirectionalLight(0xfff2dc, 1.5);
   sun.position.set(mapCx + 9, 18, mapCz + 11);
   sun.target.position.set(mapCx, 0, mapCz);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.castShadow = q0.shadow;
+  sun.shadow.mapSize.set(q0.sm, q0.sm);
   const sc = sun.shadow.camera;
   sc.left = -mapHalf; sc.right = mapHalf; sc.top = mapHalf; sc.bottom = -mapHalf;
   sc.near = 1; sc.far = 90;
   scene.add(sun);
   scene.add(sun.target);
+
+  /** 把当前质量档**真的**落到 renderer / 阴影上（降档后调用，恢复上下文后也调用）。 */
+  function applyQuality(): void {
+    const q = quality();
+    renderer.setPixelRatio(q.dpr);
+    renderer.setSize(container.clientWidth || w0, container.clientHeight || h0, false);
+    renderer.shadowMap.enabled = q.shadow;
+    sun.castShadow = q.shadow;
+    if (q.shadow && sun.shadow.mapSize.width !== q.sm) {
+      sun.shadow.mapSize.set(q.sm, q.sm);
+      // 改尺寸必须丢掉旧的 render target，否则 Three 会沿用旧分辨率
+      sun.shadow.map?.dispose();
+      sun.shadow.map = null;
+    }
+    renderer.shadowMap.needsUpdate = true;
+  }
 
   // ---- 碰撞白盒 ----
   // v9s.38：地块默认**不透明**。旧版给每一块都设了 `transparent: true`（即使 opacity=1），
@@ -1850,6 +1928,32 @@ export function createSceneView(
     pickDummy,
     /** v9s.43：渲染对象容量，验收动态生成 / 清除单位时与 Core 的 dummies.length 对齐。 */
     dummyRenderCount: () => dummyRigs.length,
+    gpuDebug() {
+      let objects = 0;
+      let meshes = 0;
+      scene.traverse((o) => {
+        objects += 1;
+        if ((o as THREE.Mesh).isMesh) meshes += 1;
+      });
+      const perf = performance as unknown as { memory?: { usedJSHeapSize: number } };
+      const heap = perf.memory ? perf.memory.usedJSHeapSize / 1048576 : null;
+      return {
+        geometries: renderer.info.memory.geometries,
+        textures: renderer.info.memory.textures,
+        programs: renderer.info.programs?.length ?? 0,
+        calls: renderer.info.render.calls,
+        triangles: renderer.info.render.triangles,
+        objects,
+        meshes,
+        heapMB: heap === null ? null : Math.round(heap),
+        contextLost,
+        tier: degraded ? 1 : 0,
+        lostCount,
+        dpr: renderer.getPixelRatio(),
+        shadowSize: sun.shadow.mapSize.width,
+        antialias: !!renderer.getContext().getContextAttributes()?.antialias,
+      };
+    },
     projectToScreen,
     /** v9s.40：持械陪练的步态读数（id 从 1 开始，与 DummyState.id 一致）。 */
     dummyRigDebug(id: number): FighterGaitDebug | null {

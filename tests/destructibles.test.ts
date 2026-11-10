@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BREAK_FALL_TARGET, createDestructibleStates, cutBoxHeights, cutPlane,
-  destructiblesReset, destructiblesUpdate, forceBreak, snapshot, restoreWorld,
-  obbCorners,
+  BREAK_FALL_TARGET, cactusArmBoxes, clipArmBox, createDestructibleStates,
+  cutBoxHeights, cutPlane, destructiblesReset, destructiblesUpdate, forceBreak,
+  snapshot, restoreWorld, obbCorners,
 } from '../src/core';
 import type { DestructibleSpec, World } from '../src/core';
 import { intent, makeWorld } from './helpers';
@@ -258,7 +258,7 @@ describe('v9s.x · 仙人掌（固定造型 + 断块侧臂尺寸一致）', () =
     expect(again.arms).toEqual(short.arms);
   });
 
-  it('断块上的侧臂尺寸与站立侧臂完全一致（不减半 → 不会「掉下来变细」）', () => {
+  it('断块上的侧臂与站立侧臂同源（同一个盒子，不会「掉下来样子变了」）', () => {
     const w = armed(CACTUS);
     const st = w.destructibles[0];
     // 砍在最低手臂之下，使整段（含全部手臂）作为一块断块掉出
@@ -267,34 +267,85 @@ describe('v9s.x · 仙人掌（固定造型 + 断块侧臂尺寸一致）', () =
     expect(forceBreak(w, 'cac-a', hitY, 1, 0, 0)).toBe(true);
     const frag = st.fragments[st.fragments.length - 1];
     expect(frag.parts).toBeDefined();
-    // 每条手臂 = 2 个 part（水平伸出盒 + 末端向上盒）
-    expect(frag.parts!.length).toBe(st.arms.length * 2);
-    for (let i = 0; i < st.arms.length; i++) {
-      const a = st.arms[i];
-      const alongX = Math.abs(a.dx) > 0.5;
-      const hOut = frag.parts![i * 2];
-      const hUp = frag.parts![i * 2 + 1];
-      // 水平伸出盒：沿轴半长 = outLen（不是 outLen/2），径向半厚 = rad（不是 rad/2）
-      expect(hOut.hx).toBeCloseTo(alongX ? a.outLen : a.rad, 6);
-      expect(hOut.hy).toBeCloseTo(a.rad, 6);
-      expect(hOut.hz).toBeCloseTo(alongX ? a.rad : a.outLen, 6);
-      // 末端向上盒：径向半厚 = rad，半高 = upLen（与站立一致）
-      expect(hUp.hx).toBeCloseTo(a.rad, 6);
-      expect(hUp.hy).toBeCloseTo(a.upLen, 6);
-      expect(hUp.hz).toBeCloseTo(a.rad, 6);
+
+    // 每条手臂拆成 3 个盒（伸出 / 上扬 / 方头），断块上的必须与
+    // `cactusArmBoxes` 逐个对上：尺寸相等、世界位置相等。
+    expect(frag.parts!.length).toBe(st.arms.length * 3);
+    for (const a of st.arms) {
+      const baseY = st.y + a.atU * st.height;
+      for (const box of cactusArmBoxes(a, st.radius)) {
+        const want = { x: box.cx, y: baseY + box.cy, z: box.cz, hx: box.hx, hy: box.hy, hz: box.hz };
+        const hit = frag.parts!.find((p) =>
+          Math.abs(p.hx - want.hx) < 1e-6 && Math.abs(p.hy - want.hy) < 1e-6
+          && Math.abs(p.hz - want.hz) < 1e-6
+          && Math.abs(p.x - want.x) < 1e-6 && Math.abs(p.z - want.z) < 1e-6);
+        expect(hit, `找不到与 ${JSON.stringify(want)} 对应的断块子盒`).toBeTruthy();
+        // 断块子盒的 y 是相对断块中心：加回去应等于世界高度
+        expect(frag.y + hit!.y).toBeCloseTo(want.y, 5);
+        expect(hit!.x).toBeCloseTo(want.x, 5);
+        expect(hit!.z).toBeCloseTo(want.z, 5);
+      }
     }
   });
 
-  it('多段砍断：手臂总数守恒（站桩 + 各断块合计 = 原始条数），不会越砍越多', () => {
+  it('砍下来的根再砍一刀，不会重复掉出上一次已飞走的叉（v9s.62）', () => {
     const w = armed(CACTUS);
     const st = w.destructibles[0];
-    const total = st.arms.length;
-    // 在每条手臂高度之上各砍一刀 + 顶部一刀
-    const us = [...st.arms.map((a) => a.atU), 0.95].sort((a, b) => b - a);
-    for (const u of us) forceBreak(w, 'cac-a', (u + 0.02) * st.height, 1, 0, 0);
-    const standingArms = st.arms.filter((a) => a.atU <= st.standU + 1e-4).length;
-    const fragArms = st.fragments.reduce((s, f) => s + (f.parts ? f.parts.length / 2 : 0), 0);
-    expect(standingArms + fragArms).toBe(total);
+    // 第一刀砍在 0.60：0.68 那条臂（dx = -1）整条随断块飞走，0.52 那条留桩
+    forceBreak(w, 'cac-a', 0.60 * st.height, 1, 0, 0);
+    const first = st.fragments[0];
+    expect((first.parts ?? []).some((p) => p.x < 0)).toBe(true);
+
+    // 第二刀再砍剩下的根：切走 [0.45, 0.60]，只含 0.52 那条臂的根部
+    forceBreak(w, 'cac-a', 0.45 * st.height, 1, 0, 0);
+    const second = st.fragments[1];
+    expect(second).toBeTruthy();
+    // 已经飞走的那条（x < 0）不该再被打包一次 —— 旧判据 `atU > cutU` 就会这么干
+    expect((second.parts ?? []).every((p) => p.x > 0)).toBe(true);
+  });
+
+  it('多段砍断：同一条侧臂在各断块 / 桩上的高度区间互不重叠（不会越砍越多叉）', () => {
+    const w = armed(CACTUS);
+    const st = w.destructibles[0];
+    // 每次只砍掉一小段，逼出「砍下来的根再砍」这条路径
+    const us = [0.95, 0.72, 0.60, 0.40, 0.20];
+    for (const u of us) forceBreak(w, 'cac-a', u * st.height, 1, 0, 0);
+    expect(st.fragments.length).toBeGreaterThan(1);
+
+    // 把所有断块里的侧臂盒还原成世界高度区间。同一条臂被拆成 3 个盒
+    // （伸出 / 上扬 / 方头），**同类盒之间**才该互不重叠 —— 不同盒本来就在同一高度段。
+    const groups = new Map<string, Array<{ lo: number; hi: number }>>();
+    const keyOf = (x: number, hx: number, hz: number): string =>
+      `${Math.sign(x)}|${hx.toFixed(5)}|${hz.toFixed(5)}`;
+    for (const f of st.fragments) {
+      for (const p of f.parts ?? []) {
+        const k = keyOf(p.x, p.hx, p.hz);
+        const list = groups.get(k) ?? [];
+        list.push({ lo: f.y + p.y - p.hy, hi: f.y + p.y + p.hy });
+        groups.set(k, list);
+      }
+    }
+    for (const [k, list] of groups) {
+      list.sort((a, b) => a.lo - b.lo);
+      for (let i = 1; i < list.length; i++) {
+        // 后一段的起点不得落到前一段内部 —— 重复打包就是这个症状
+        expect(list[i].lo, `${k} 第 ${i} 段与上一段重叠`).toBeGreaterThanOrEqual(list[i - 1].hi - 1e-4);
+      }
+    }
+    // 桩上残留的侧臂也不能和任何断块重叠
+    const topY = st.y + st.standU * st.height;
+    for (const a of st.arms) {
+      const baseY = st.y + a.atU * st.height;
+      for (const box of cactusArmBoxes(a, st.radius)) {
+        const left = clipArmBox(box, baseY, 0, topY);
+        if (!left) continue;
+        const lo = baseY + left.cy - left.hy;
+        const hi = baseY + left.cy + left.hy;
+        for (const s of groups.get(keyOf(left.cx, left.hx, left.hz)) ?? []) {
+          expect(hi).toBeLessThanOrEqual(s.lo + 1e-4);
+        }
+      }
+    }
   });
 
   it('单次挥砍（多帧同高命中）只产生 1 个断块，不生成零高碎片（防「越砍越多 / 断枝浮空」）', () => {

@@ -463,6 +463,8 @@ export function startApp(): void {
       release: () => { clipHold = false; },
     },
     // v9s.24：腕部滞后读数（武器相对手的自由度）
+    // v9s.62：GPU / 场景资源读数（诊断移动端周期性卡顿，看资源是否只增不减）
+    gpuDebug: () => view.gpuDebug(),
     weaponDebug: () => view.weaponDebug(),
     gripDebug: () => view.gripDebug(),
     /**
@@ -530,6 +532,26 @@ export function startApp(): void {
   let interpApplied = false;
   /** v9s.35：本帧没能插值的原因（''=插值了；'off' 关闭；'noprev' 首帧；'key' 离散键变了；'alpha' 已到 1） */
   let interpSkip: string = '';
+
+  // ---- v9s.62：`?diag=1` 现场读数 ----
+  // 移动端「隔一段时间卡几秒」在桌面上复现不出来，只能让真机自己报数：
+  // fps / 近 5s 最坏帧 / 丢上下文次数 / 几何数与对象数 / 当前质量档。
+  // 默认不建节点（不改正式画面），加 ?diag=1 才出现，方便对着微信截图定位。
+  const diagOn = /(?:^|[?&])diag=1(?:&|$)/.test(location.search);
+  const diagEl: HTMLDivElement | null = diagOn ? document.createElement('div') : null;
+  const diagFrames: number[] = [];
+  let diagAt = 0;
+  if (diagEl) {
+    diagEl.id = 'diag-badge';
+    diagEl.setAttribute('aria-hidden', 'true');
+    diagEl.style.cssText = [
+      'position:fixed', 'top:6px', 'right:6px', 'z-index:99',
+      'font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace',
+      'color:#d6e2f2', 'background:rgba(12,16,22,.72)', 'padding:4px 7px',
+      'border-radius:6px', 'pointer-events:none', 'white-space:pre',
+    ].join(';');
+    document.body.appendChild(diagEl);
+  }
 
   /**
    * v9s.34：给渲染层挑一个「世界」——插值开且两个快照可插值时，返回套了插值姿态的替身；
@@ -620,6 +642,23 @@ export function startApp(): void {
       ik: diag.ik,
       zoom: diag.camera.zoom,
     }, fold.hudCompact());
+
+    // v9s.62：诊断角标每 500ms 刷一次（读取 renderer.info 有成本，不做每帧）
+    if (diagEl) {
+      diagFrames.push(dt * 1000);
+      if (diagFrames.length > 300) diagFrames.shift();
+      if (now - diagAt > 500) {
+        diagAt = now;
+        const g = view.gpuDebug();
+        let worst = 0;
+        for (const v of diagFrames) if (v > worst) worst = v;
+        diagEl.textContent =
+          `fps ${fps.toFixed(0)}  最坏 ${worst.toFixed(0)}ms\n`
+          + `lost ${g.lostCount}${g.contextLost ? ' (丢中)' : ''}  tier ${g.tier}\n`
+          + `geo ${g.geometries}  obj ${g.objects}  calls ${g.calls}\n`
+          + `tri ${(g.triangles / 1000).toFixed(1)}k  heap ${g.heapMB ?? '-'}MB`;
+      }
+    }
     requestAnimationFrame(frame);
   }
 

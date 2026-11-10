@@ -43,7 +43,8 @@
 | 陪练打不死 / 打死了不消失 / 死了不刷新 | `core/health.ts`、`core/dummies.ts`、`three-scene.ts` 的 `applyDeathPose` | `damageDummy`、`killDummy`、`reviveDummy`、`updateHealth`、`REVIVE_GUARD` | [systems/damage-death.md](systems/damage-death.md) | `tests/v9s56-damage-blood.test.ts`、`__harness.deathDebug(id)` |
 | 血总喷在胸口（打头打腿一个位置） / 能穿过尸体 / 陪练没血条 | `core/hits.ts` 的 `hitU`、`core/separation.ts` 的尸体分支、`presentation/healthbar-layer.ts` | `hits.hitHeight`、`dummies.corpse`、`BodySample`、`healthBarDebug` | [systems/damage-death.md](systems/damage-death.md) §6–8 | `tests/v9s57-death-polish.test.ts`、`python3 tools/death-polish-shot.py` |
 | 死亡姿势全都一样 / 想按最后一击断手断头 / 倒下像插值 | `core/health.ts` 的 `decideSever`、`three-scene.ts` 的 `applySever` / `applyDeathPose` | `decideSever`、`sever`、`settled`、`SEVER_NODE`、`death.physics` | [systems/damage-death.md](systems/damage-death.md) §9–10 | `tests/v9s60-sever.test.ts`、`python3 tools/sever-shot.py` |
-| 仙人掌砍不到 / 一刀只断一棵 / 从可破坏物里穿过去 / 可破坏物被一个红方块包住 / 工位挤在圆心 | `presentation/destructible-layer.ts`、`core/destructibles.ts`、`three-scene.ts` 的白盒段 | `hitSegments`、`DEST_BOX_PREFIX`、`syncDestructibleBoxes`、`meleeGatePrev`、`VR` | [systems/destructibles.md](systems/destructibles.md) §9–11 | `tests/v9s60-cactus-collide.test.ts`、`npm run smoke`「真机挥刀能打断」 |
+| 仙人掌砍不到 / 一刀只断一棵 / 从可破坏物里穿过去 / 可破坏物被一个红方块包住 / 工位挤在圆心 / **砍下来的根再砍又掉叉 / 掉下来的叉变大 / 旗杆砍完还有一整根** | `presentation/destructible-layer.ts`、`core/destructibles.ts`、`three-scene.ts` 的白盒段 | `hitSegments`、`DEST_BOX_PREFIX`、`syncDestructibleBoxes`、`meleeGatePrev`、`cactusArmBoxes`、`clipArmBox`、`CACTUS_VIS_RATIO` | [systems/destructibles.md](systems/destructibles.md) §9–12 | `tests/v9s60-cactus-collide.test.ts`、`tests/destructibles.test.ts`、`npm run smoke`「真机挥刀能打断」 |
+| 微信里隔一段时间卡几秒 / 想知道移动端该降什么档 | `three-scene.ts` 的 `render` 质量档与 `webglcontextlost`、`app.ts` 的 `?diag=1` | `view.render`、`isMobileWebView`、`applyQuality`、`gpuDebug().lostCount / tier` | [systems/webview-perf.md](systems/webview-perf.md) | `<url>/?diag=1`、`__harness.gpuDebug()` |
 | 剑盾挥剑不舒展 / 扫角只有 130° / 剑扫到身后看不见 | `config.view.animation.swing` 的 `ss.*` 与 `weaponScale` | `armYaw` 换向、`elbow` 行程、`armLPitch`/`elbowL`（盾臂） | [systems/pose-entry.md](systems/pose-entry.md) §三 | `npm run clip:lab:check`、`python3 tools/swing-shot.py` |
 | 截图放哪 / 能不能入库 | `shots/`（`.gitignore` 已挡） | — | [assets/conventions.md](assets/conventions.md) | `git status` 里不该出现 png |
 | 刀光 / 斩击弧不出现 | `presentation/three-scene.ts` | `weapon-trail.ts`、`FX_ORDER.trail / slash` | [systems/presentation-fx.md](systems/presentation-fx.md) | `__harness.fxDebug()` |
@@ -210,7 +211,8 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/known-limits.md`](systems/known-limits.md) | 已知限制（现状，不是待办） |
 | [`systems/grass.md`](systems/grass.md) | 体素草块：压开 / 割断 / 实例化渲染 / 风吹麦浪 / 性能结论 |
 | [`systems/grass-growth-pivot.md`](systems/grass-growth-pivot.md) | v9s.46 缓慢连续生长 + 枢轴顶点动画（每节 box 刚体旋转，实现正本） |
-| [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒、**仙人掌分段 / 碰撞盒 / 多判定轴（实现正本）** |
+| [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒、**仙人掌分段 / 碰撞盒 / 多判定轴 / 侧臂几何单一真源（实现正本）** |
+| [`systems/webview-perf.md`](systems/webview-perf.md) | 移动端「隔一段时间卡几秒」：桌面排除法、上下文丢失、质量档与自动降档、`?diag=1` 读数 |
 | [`systems/test-scene-policy.md`](systems/test-scene-policy.md) | 单一主测试场景 + 三条规则（规则正本） |
 | [`systems/plot-assembly.md`](systems/plot-assembly.md) | 地块拼合：整数格底板 / 自带物件 / 工位传送 / 测试按钮（实现正本） |
 | [`systems/voxel-forge.md`](systems/voxel-forge.md) | 造型工坊：JSON spec → 3D 预览 → 导出 TS 片段（只在本地用，不进 dist） |
