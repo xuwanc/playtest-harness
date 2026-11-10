@@ -193,6 +193,7 @@ export function createWardrobeView(opts: WardrobeOptions): WardrobeView {
         </div>
         <div class="wardrobe-side" id="wardrobe-side"></div>
       </div>
+      <div class="wardrobe-actions" id="wardrobe-actions"></div>
       <div class="wardrobe-toast" id="wardrobe-toast" aria-live="polite"></div>
     </div>`;
   document.body.appendChild(root);
@@ -202,37 +203,44 @@ export function createWardrobeView(opts: WardrobeOptions): WardrobeView {
   const charLabel = root.querySelector<HTMLElement>('#wardrobe-char')!;
   const toastEl = root.querySelector<HTMLElement>('#wardrobe-toast')!;
 
-  // 侧栏：武器段（chips）+ 合成台段（3×4 魔方 + 按钮 + 预览）
-  side.innerHTML = WARDROBE_SECTIONS.map((s) => {
+  // 侧栏（右）：只放合成台 —— 3×4 魔方 + 预览 + 已装备。
+  // 武器 chips 与「合成/清空」按钮统一挪到底部 .wardrobe-actions 一排（用户要求）。
+  const actions = root.querySelector<HTMLElement>('#wardrobe-actions')!;
+  let sideHtml = '';
+  let actionHtml = '';
+  for (const s of WARDROBE_SECTIONS) {
     if (s.kind === 'weapon') {
       const items = WARDROBE_WEAPONS.map(
         (w) => `<button type="button" class="wardrobe-chip" data-ui-button data-wp="${w.id}" aria-label="展示${w.label}">${w.label}</button>`,
       ).join('');
-      return `<section class="wardrobe-sec" data-sec="${s.id}">
+      actionHtml += `<section class="wardrobe-sec" data-sec="${s.id}">
         <div class="wardrobe-sec-head"><b>${s.label}</b><span>${s.hint}</span></div>
         <div class="wardrobe-items">${items}</div>
       </section>`;
-    }
-    // craft：12 格魔方 + 合成/清空 + 预览 + 已装备
-    const grid = Array.from({ length: CRAFT_CELLS }, (_, i) => `<button type="button" class="wardrobe-cell" data-ui-button data-cell="${i}" aria-label="合成格${i + 1}"></button>`).join('');
-    return `<section class="wardrobe-sec" data-sec="${s.id}">
-      <div class="wardrobe-sec-head"><b>${s.label}</b><span>${s.hint}</span></div>
-      <div class="wardrobe-grid" id="wardrobe-grid">${grid}</div>
-      <div class="wardrobe-craft-bar">
+    } else {
+      // craft：12 格魔方 + 预览 + 已装备（留在侧栏）；合成/清空按钮放底部一排
+      const grid = Array.from({ length: CRAFT_CELLS }, (_, i) => `<button type="button" class="wardrobe-cell" data-ui-button data-cell="${i}" aria-label="合成格${i + 1}"></button>`).join('');
+      sideHtml += `<section class="wardrobe-sec" data-sec="${s.id}">
+        <div class="wardrobe-sec-head"><b>${s.label}</b><span>${s.hint}</span></div>
+        <div class="wardrobe-grid" id="wardrobe-grid">${grid}</div>
+        <div class="wardrobe-craft-hint" id="wardrobe-craft-hint">可合成：—</div>
+        <div class="wardrobe-craft-equipped" id="wardrobe-equipped">已装备：—</div>
+      </section>`;
+      actionHtml += `<div class="wardrobe-craft-bar">
         <button type="button" class="wardrobe-craft-btn" data-ui-button data-craft>合成装备</button>
         <button type="button" class="wardrobe-craft-btn ghost" data-ui-button data-clear>清空</button>
-      </div>
-      <div class="wardrobe-craft-hint" id="wardrobe-craft-hint">可合成：—</div>
-      <div class="wardrobe-craft-equipped" id="wardrobe-equipped">已装备：—</div>
-    </section>`;
-  }).join('');
+      </div>`;
+    }
+  }
+  side.innerHTML = sideHtml;
+  actions.innerHTML = actionHtml;
 
   const gridEl = side.querySelector<HTMLElement>('#wardrobe-grid')!;
   const hintEl = side.querySelector<HTMLElement>('#wardrobe-craft-hint')!;
   const equippedEl = side.querySelector<HTMLElement>('#wardrobe-equipped')!;
 
   function syncChips(): void {
-    side.querySelectorAll<HTMLElement>('[data-wp]').forEach((el) => {
+    root.querySelectorAll<HTMLElement>('[data-wp]').forEach((el) => {
       el.classList.toggle('is-active', el.dataset.wp === weapon);
     });
   }
@@ -455,9 +463,11 @@ export function createWardrobeView(opts: WardrobeOptions): WardrobeView {
     syncEquipment();
     if (charLabel) charLabel.textContent = `当前角色：${charName}`;
 
+    // 相机「智能中心下移」：看向点压到躯干下半 + 拉远，让角色整体贴近画面**上半区**，
+    // 下方留出空当；配合更窄的竖屏舞台，待机角色一眼在上方、不会顶满整块画布。
     camera = new THREE.PerspectiveCamera(34, 1, 0.1, 50);
-    camera.position.set(0, 1.02, 2.75);
-    camera.lookAt(0, 0.58, 0);
+    camera.position.set(0, 0.72, 3.0);
+    camera.lookAt(0, 0.45, 0);
     resize();
     rendered = true;
   }
@@ -542,8 +552,9 @@ export function createWardrobeView(opts: WardrobeOptions): WardrobeView {
     lookTarget = { ...NEUTRAL };          // 移出预览区，视线缓缓回正
   });
 
-  // 侧栏按钮（武器 / 合成魔方）
-  side.addEventListener('pointerdown', (e) => {
+  // 按钮分发（武器 chips / 合成魔方 / 合成·清空）：武器与合成按钮分处底部一排与侧栏，
+  // 统一挂在 root 上，避免漏接。
+  root.addEventListener('pointerdown', (e) => {
     const t = e.target as Element;
     const wp = t.closest<HTMLElement>('[data-wp]');
     if (wp) {

@@ -75,6 +75,7 @@ export function makeGreatsword(colors: ColorConfig): THREE.Group {
  */
 export function makeShield(colors: ColorConfig): THREE.Group {
   const g = group();
+  g.name = 'shield';
   const plateW = 0.46, plateH = 0.54, plateD = 0.075;
   const plate = makeBox(plateW, plateH, plateD, colors.metal);
   plate.position.set(0, 0.02, 0.1);

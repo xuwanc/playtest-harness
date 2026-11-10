@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import * as THREE from 'three';
 import { step } from '../src/core';
 import { createVoxelRig } from '../src/presentation/voxel-rig';
 import { solveSwingPose } from '../src/presentation/swing-pose';
@@ -122,5 +123,32 @@ describe('v9s.55 剑盾：真实挥击的扫角', () => {
 
   it('段 2 扫角 ≥ 170°（旧版 121°）', () => {
     expect(sweepOf(2)).toBeGreaterThan(170);
+  });
+});
+
+describe('v9s.70 剑盾待机：盾面朝身前（不朝上）', () => {
+  it('idle 时盾的法线偏 +Z（朝身前），不再是朝上的 0.9', () => {
+    const w = makeWorld();
+    (w.combat as unknown as { weapon: string }).weapon = 'sword-shield';
+    const rig = createVoxelRig(
+      raw.view.voxel, raw.view.colors, w.config.moveSpeed,
+      raw.view.orientation, raw.view.gait, raw.view.weaponMount, raw.view.lean, raw.view.hurt,
+      raw.view.animation, { ...raw.view.ik, enabled: false },
+    );
+    // 多跑几帧，让待机姿态稳定（不按键 = 纯 idle）
+    for (let i = 0; i < 30; i++) {
+      step(w, w.config.fixedDt, intent({}));
+      (w.combat as unknown as { weapon: string }).weapon = 'sword-shield';
+      rig.update(w.character, w.combat, NONE, w.config.fixedDt, false, w.time);
+    }
+    rig.group.updateMatrixWorld(true);
+    const shield = rig.group.getObjectByName('shield');
+    expect(shield).toBeTruthy();
+    // 盾的局部 +Z 是正面；取世界法线看它指向哪
+    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(shield!.getWorldQuaternion(new THREE.Quaternion()));
+    // 旧 bug：shieldPitchDeg=8 → 法线 y≈0.91（正面朝天）；修正后应为朝身前（z 明显正、y 很小）
+    expect(normal.z).toBeGreaterThan(0.5);
+    expect(Math.abs(normal.y)).toBeLessThan(0.4);
+    rig.dispose();
   });
 });
