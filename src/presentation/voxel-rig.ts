@@ -58,7 +58,7 @@ import { beardAvoidAt, createBeardState, solveBeard } from './beard';
 import type { BeardState } from './beard';
 import {
   buildMurlocBelly, buildMurlocDorsalFin, buildMurlocFoot, buildMurlocHand, buildMurlocHead,
-  buildMurlocShoulderFin, buildMurlocTail, MURLOC_HEAD_SPIN, MURLOC_POSTURE,
+  buildMurlocHip, buildMurlocShoulderFin, buildMurlocTail, MURLOC_HEAD_SPIN, MURLOC_POSTURE,
 } from './murloc-parts';
 import {
   buildSentinelFoot, buildSentinelHand, buildSentinelHead, buildSentinelTorso,
@@ -428,6 +428,11 @@ export function createVoxelRig(
   // 更宽的体型同比例加厚，否则正面宽了、侧面还是一块薄板，反而更显扁。
   const torsoD = 0.28 * clamp(bodyW / 0.46, 1, 1.4);
 
+  // ---- v9s.69 髋块 ----
+  // 挂在 `pelvis`（不是 `upper`）：它是「髋」这个位置本身的质量，腿和腰都从它长出去。
+  // 只在鱼人身上加 —— 直立体型的腰段只压 10~20°，缺口 2cm 以内，加了反而显胖。
+  const hipMesh = murloc ? buildMurlocHip(pelvis, HS, bodyW, torsoD, colors) : null;
+
   // ---- v9s.33 脊柱分段 ----
   // 开启时：upper 只承担「腰段」，新增 chest 节点承担「胸段」，肩 / 头挂在 chest 下。
   // 同一份躯干总角按权重拆到两段（见 update() 末尾的 splitSpine），世界朝向不变，
@@ -451,9 +456,13 @@ export function createVoxelRig(
   if (spineOn) {
     abdomenH = Math.max(0.05, chestPivotY);
     chestH = Math.max(0.05, bodyH - chestPivotY);
-    torso = makeBox(bodyW, abdomenH, torsoD, colors.body);
+    // v9s.69：腰块向上多长一截，藏进更宽的胸块里（胸块宽 +8mm，所以看不出来）——
+    // 胸段折 17° 时背面会掀开 4.4cm 的楔形缝，靠这一截填上。与髋块同一个思路：
+    // 每一级台阶都要被上一级的方块盖住，链才读得连续。
+    const torsoPad = murloc ? Math.min(0.06, chestH * 0.3) : 0;
+    torso = makeBox(bodyW, abdomenH + torsoPad, torsoD, colors.body);
     torso.name = 'torsoLower';
-    torso.position.y = abdomenH / 2;
+    torso.position.y = (abdomenH + torsoPad) / 2;
     upper.add(torso);
     // 胸块略宽 8mm：两块的侧面不共面，避免 z-fighting；读起来也像胸甲。
     chestMesh = makeBox(bodyW + 0.008, chestH, torsoD + 0.008, colors.body);
@@ -1895,6 +1904,29 @@ export function createVoxelRig(
   }
 
   /**
+   * v9s.69：把躯干总偏航沿「髋 → 腰 → 胸」这条链重新摊一次。
+   *
+   * 不变量两条：**总角不变**（`upper + chest` 之和）、**胸的世界朝向不变**
+   * （`chest` 是 `upper` 的子节点，两者之和就是它的世界角）。变的只有一件事：
+   * 腰段停在髋与胸之间的哪个比例上。
+   *
+   * 为什么必须锚在髋上：旧版腰段从 0 起算（`总角 × 0.58`），下盘 40° 时链上是
+   * 40° → 7° → 24° —— 中间那节先「转回去」再「转出来」，读作腰被拧断。
+   * 锚在髋上之后恒为单调过渡（40° → 31° → 24°）。
+   * `chainBlend` 缺省 0.58：髋未转时 `hip + (总角 − hip) × 0.58` 恒等于 `总角 × 0.58`，
+   * 与 v9s.66 的姿态逐位相同 —— 只有「下盘带转」时才真正生效。
+   */
+  function distributeYaw(): void {
+    if (!spineOn) return;
+    const total = upper.rotation.y + chest.rotation.y;
+    const hip = lower.rotation.y;
+    const b = clamp(spineCfg!.chainBlend ?? 0.58, 0, 1);
+    const waist = hip + (total - hip) * b;
+    upper.rotation.y = waist;
+    chest.rotation.y = total - waist;
+  }
+
+  /**
    * v9s.34：本帧躯干「总」角（腰 + 胸）。
    *
    * **所有需要总角的代码都必须走这里，不要直接读 `upper.rotation`** ——
@@ -3105,21 +3137,16 @@ export function createVoxelRig(
       // 拆分必须早于腕部与剑身反解 —— 它们读的是「躯干实际朝到哪」。
       splitSpine();
 
-      // 3.01) v9s.66 胸随下盘带转 · 分账。
-      //   总角必须与旧版完全一致（`torsoYaw()` 的读数、帧尾泄漏守卫、既有测试都按总角验收），
-      //   变的只是「腰吃多少、胸吃多少」：默认 0.7 给胸段 —— 人转体主要发生在胸椎，
-      //   腰跟着扭反而是崴腰。之前写进 upper 再拆分，实际是腰 58% / 胸 42%。
-      //   为什么在 splitSpine 之后写：拆分之前写进去就会被 58/42 摊掉，这正是问题本身。
+      // 3.01) v9s.66/v9s.69 偏航沿链分配。
+      //   v9s.66 的教训：写进 `upper` 再拆分，胸段只吃到 42%，「胸的朝向根本没变」。
+      //   v9s.69 的教训：把总角按 58/42 摊开，腰段是**从 0 起算**的 —— 下盘一转，
+      //   链上就出现「髋 40° → 腰 7° → 胸 24°」的先减后增，读起来正是「腿根转了、
+      //   腰没转、胸又转了」。偏航必须像真脊柱一样**锚在髋上单调过渡**。
       if (chestYaw !== 0) {
-        if (spineOn) {
-          const yawChest = clamp(spineCfg!.yawChest ?? 0.7, 0, 1);
-          upper.rotation.y += chestYaw * (1 - yawChest);
-          chest.rotation.y += chestYaw * yawChest;
-          if (intendedTorso) intendedTorso.y += chestYaw;
-        } else {
-          upper.rotation.y += chestYaw;
-        }
+        upper.rotation.y += chestYaw;
+        if (intendedTorso) intendedTorso.y += chestYaw;
       }
+      distributeYaw();
 
       // 3.0) v9s.64 弓腰：拆分之后再把 waist 折在腰段（`upper` 就是腰段的节点）。
       //   为什么不在拆分前加：那会被 42/58 摊到胸段，读起来是「整根斜」而不是「腰塌了」。
@@ -3128,6 +3155,14 @@ export function createVoxelRig(
       if (postureWaist !== 0 && postureAppliedWaist !== 0) {
         upper.rotation.x += postureAppliedWaist;
         if (intendedTorso) intendedTorso.x += postureAppliedWaist;
+      }
+
+      // 3.05) v9s.69 髋块分担俯仰：骨盆 → 腰这一级台阶太陡（0° 对 37°），
+      //   背面裂开的楔形洞有 8.8cm，一块不转的髋块盖不住。让它吃 45%，
+      //   台阶变成 0° → 17° → 37°，每级缺口 4cm 以内，上一级顶面就能盖住。
+      //   只在有髋块时存在（目前仅鱼人）：直立体型没有这块。
+      if (hipMesh) {
+        hipMesh.rotation.x = upper.rotation.x * clamp(posture?.hipShare ?? 0.45, 0, 1);
       }
 
       // 3.1) v9s.65 手臂回正。躯干压平之后上臂跟着**胸段**一起倒向地面，
@@ -3406,6 +3441,18 @@ export function createVoxelRig(
         hipY: hip.y,
         headY: head.y,
         headZ: head.z,
+        /**
+         * v9s.69：头的**世界俯仰角**（度，正 = 脸朝上）。判断「抬头够不够」只看这一个数 ——
+         * `headLift` 是比例，看不出最终脸朝哪；0.98 时这里恰好 0°（脸水平）。
+         */
+        headPitchDeg: (() => {
+          const q = new THREE.Quaternion();
+          const rq = new THREE.Quaternion();
+          headPivot.getWorldQuaternion(q);
+          root.getWorldQuaternion(rq).invert();
+          const f = new THREE.Vector3(0, 0, 1).applyQuaternion(q).applyQuaternion(rq);
+          return (Math.asin(clamp(f.y, -1, 1)) * 180) / Math.PI;
+        })(),
         footY: Math.min(fl.y, fr.y),
         // 两骨 IK 的可达上限 = legLength：>1 即脚被拉离地面
         reachL: dl.length() / Math.max(1e-6, legLen),

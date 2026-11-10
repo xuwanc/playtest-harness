@@ -48,7 +48,9 @@ const MUR = {
 export const MURLOC_POSTURE: CharacterPosture = {
   pitch: 0.72,
   waist: 0.24,
-  headLift: 0.98,
+  // v9s.69：0.98 时脸正好水平（净俯仰 0°），38° 俯视下头把躯干全挡住、
+  // 只剩「一块绿方块」。抬到 1.12 = 脸朝上约 7°，头整体后仰，躯干从头顶露出来。
+  headLift: 1.12,
   headReach: 0.16,
   neckDrop: 0.02,
   // 屈膝：躯干压到 55° 后重心整个跑到脚尖前面，腿必须弯一点才站得住 ——
@@ -60,6 +62,8 @@ export const MURLOC_POSTURE: CharacterPosture = {
   // 手臂回正：躯干压平后上臂会跟着倒向地面，手垂到脚边、武器插进土里。
   // 0.55 把一半以上的前倾吃掉，剩下的留在手臂上（完全抵消会让胳膊穿进胸里）。
   armDrop: 0.55,
+  // v9s.69 髋块分担 45% 腰段俯仰：骨盆是空节点，不补一块的话背面会裂开 8.8cm 的洞。
+  hipShare: 0.45,
 };
 
 /**
@@ -204,6 +208,42 @@ export function buildMurlocBelly(
   const strip = makeBox(bodyW * 0.62, bodyH * 0.66, 0.012, MUR.throat);
   strip.position.set(0, baseY - bodyH * 0.44, torsoD / 2 + 0.006);
   parent.add(strip);
+}
+
+/**
+ * 髋块：跨在「骨盆 → 腰段」夹角上的补块（v9s.69）。
+ *
+ * 为什么需要它：`pelvis` 只是一个**空节点**（髋高这个位置本身），躯干从 y=0 起算。
+ * 直立时看不出来，但鱼人的体态把腰段压到 37°，腰块绕骨盆转走之后，背面就裂开一个
+ * 高 8cm 的楔形缺口 —— 俯视能直接看穿到身体另一侧，读作「身体断成两截」。
+ *
+ * 做法不是一个三角形补丁，而是**一块跟着腰段转 45% 的方块**：让骨盆与腰之间从
+ * 「0° 对 37°」变成 0° → 17° → 37° 的两级台阶，每级缺口 4~5cm，上一级的顶面
+ * 就能盖住下一级的缝。这也是 `CharacterPosture.hipShare` 存在的唯一理由。
+ *
+ * 尺寸取「比躯干窄 4%、比躯干深 10%」：窄是保证侧面看不出来（藏在腰块里），
+ * 深是让它在背面鼓出一点，读作「屁股 / 后腰」，顺便接住尾巴根部。
+ */
+export function buildMurlocHip(
+  parent: THREE.Object3D, HS: number, bodyW: number, torsoD: number, colors: ColorConfig,
+): THREE.Group {
+  const hip = new THREE.Group();
+  hip.name = 'hipMesh';
+  parent.add(hip);
+
+  // 高度 0.30HS ≈ 0.14m：必须够高才能盖住 37° 转角在背面掀开的 8.8cm 缺口
+  const block = makeBox(bodyW * 0.96, 0.30 * HS, torsoD * 1.10, colors.body);
+  block.name = 'hipBlock';
+  block.position.set(0, 0.02, 0);
+  hip.add(block);
+
+  // 下腹：夹在两腿之间的一小块，把胯下的空洞填掉（不然俯视能看穿裆部）
+  const groin = makeBox(bodyW * 0.52, 0.13 * HS, torsoD * 0.78, MUR.gill);
+  groin.name = 'groin';
+  groin.position.set(0, -0.055, 0.006);
+  hip.add(groin);
+
+  return hip;
 }
 
 /**

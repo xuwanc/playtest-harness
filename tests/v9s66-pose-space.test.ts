@@ -175,28 +175,35 @@ describe('v9s.66 脚锁：IK 只改腿，不拧脚', () => {
 });
 
 describe('v9s.66 偏航分账：胸真的会跟着下盘转', () => {
-  it('胸段吃 yawChest（默认 0.7），腰段只吃剩下的；总角不变', () => {
+  it('偏航沿链单调过渡：髋 → 腰 → 胸，腰段锚在髋上', () => {
     const { rig, w } = playerRig();
     const go = intent({ moveX: 1, moveZ: 0.2 });   // 侧移最容易把 hipYaw 拉起来
     run(w, 60, go);
+    const b = raw.view.animation.spine!.chainBlend ?? 0.58;
     let maxChest = 0;
+    let maxHip = 0;
     for (let i = 0; i < 30; i++) {
       run(w, 1, go);
       rig.update(w.character, w.combat, w.playerHurt, w.config.fixedDt, false);
       const d = rig.gaitDebug();
       const upper = rig.group.getObjectByName('upper')!;
       const chest = rig.group.getObjectByName('chest')!;
+      const lower = rig.group.getObjectByName('lower')!;
       const total = upper.rotation.y + chest.rotation.y;
-      expect(total).toBeCloseTo(d.chestYaw + (total - d.chestYaw), 6);
-      // 精确分账：除 chestYaw 之外的偏航按 42/58，chestYaw 那一份按 yawChest
-      const share = raw.view.animation.spine!.yawChest ?? 0.7;
-      expect(chest.rotation.y).toBeCloseTo((total - d.chestYaw) * 0.42 + d.chestYaw * share, 6);
-      expect(upper.rotation.y).toBeCloseTo(
-        (total - d.chestYaw) * 0.58 + d.chestYaw * (1 - share), 6,
-      );
-      maxChest = Math.max(maxChest, Math.abs(d.chestYaw) * share);
+      const hipYaw = lower.rotation.y;
+      // 腰段 = 髋 → 胸 的 chainBlend 处；胸的世界朝向恒等于总角
+      expect(upper.rotation.y).toBeCloseTo(hipYaw + (total - hipYaw) * b, 6);
+      expect(total).toBeCloseTo(hipYaw + (total - hipYaw), 6);
+      // 单调：腰段夹在髋与胸之间（v9s.66 那版会跑出区间）
+      const lo = Math.min(hipYaw, total);
+      const hi = Math.max(hipYaw, total);
+      expect(upper.rotation.y).toBeGreaterThanOrEqual(lo - 1e-9);
+      expect(upper.rotation.y).toBeLessThanOrEqual(hi + 1e-9);
+      maxChest = Math.max(maxChest, Math.abs(chest.rotation.y));
+      maxHip = Math.max(maxHip, Math.abs(hipYaw));
     }
-    expect(maxChest).toBeGreaterThan(0.02);   // 不只是 0.1 度级别的抖动
+    expect(maxHip).toBeGreaterThan(0.02);      // 下盘真的转了，否则这条测试是空转
+    expect(maxChest).toBeGreaterThan(0.02);    // 不只是 0.1 度级别的抖动
     rig.dispose();
   });
 
