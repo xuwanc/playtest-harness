@@ -26,6 +26,7 @@ v0.9.84：**鱼人（Murloc）不是新骨架，是同一套人形骨架换五�
 | 蜘蛛开局 | <https://xuwanc.github.io/playtest-harness/?hero=spider> |
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 鱼人开局 | <https://xuwanc.github.io/playtest-harness/?hero=murloc> |
+| 本轮线上核验 | `assets/main-t1aEvwxz.js` 本地 / 线上同一份（913382 B），徽标 `v0.9.84` 有 → PASS |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
