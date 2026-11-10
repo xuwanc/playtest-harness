@@ -43,6 +43,10 @@
 | 陪练打不死 / 打死了不消失 / 死了不刷新 | `core/health.ts`、`core/dummies.ts`、`three-scene.ts` 的 `applyDeathPose` | `damageDummy`、`killDummy`、`reviveDummy`、`updateHealth`、`REVIVE_GUARD` | [systems/damage-death.md](systems/damage-death.md) | `tests/v9s56-damage-blood.test.ts`、`__harness.deathDebug(id)` |
 | 血总喷在胸口（打头打腿一个位置） / 能穿过尸体 / 陪练没血条 | `core/hits.ts` 的 `hitU`、`core/separation.ts` 的尸体分支、`presentation/healthbar-layer.ts` | `hits.hitHeight`、`dummies.corpse`、`BodySample`、`healthBarDebug` | [systems/damage-death.md](systems/damage-death.md) §6–8 | `tests/v9s57-death-polish.test.ts`、`python3 tools/death-polish-shot.py` |
 | 脚掌穿地 / 脚在小腿中段 / 尾巴断节 / 头转得像锤子 | `rig-ik.ts` 的 `groundY`、`murloc-parts.ts` 的 `MURLOC_HEAD_SPIN`、`sentinel-parts.ts` 的 `ankleY` | `groundY`、`headYaw` 节点、`cc` | [systems/posture.md](systems/posture.md) | `tests/v9s65-rig-fix.test.ts` |
+| 胸的朝向补偿看不出 / 腿根转了胸没转 / 想改「谁吃这份偏航」 | `config/game.json` → `view.animation.spine.yawChest`、`voxel-rig.ts` 3.01 段 | `chestYaw`、`yawChest`、`splitSpine`、`torsoYaw()` | [systems/pose-layers.md](systems/pose-layers.md) §2 | `tests/v9s66-pose-space.test.ts`、`__harness.gaitDebug().chestYaw` |
+| 上臂回正后手朝斜前方支棱 / 补偿随父节点偏航而歪 | `presentation/rig-space.ts`、`voxel-rig.ts` 3.1 段 | `pitchInModelSpace`、`q_parentInModel⁻¹·R·q_parentInModel` | [systems/pose-layers.md](systems/pose-layers.md) §3 | `tests/v9s66-pose-space.test.ts` |
+| 脚钉住了但脚掌在地面上慢慢转向 / 脚腕被掰 / IK 拧脚 | `rig-ik.ts` 的 `footRest`、`voxel-rig.ts` 的 `ankleL/R` | `lockModelRotation`、`IKLimb.ankle` | [systems/pose-layers.md](systems/pose-layers.md) §4 | `tests/v9s66-pose-space.test.ts` |
+| 想给动作叠增量（攻击姿势 − 攻击基础姿势）/ 加 lean 层 | `presentation/rig-space.ts`、`voxel-rig.update()` 的 2.x→4 段 | `quatInModel`、`rotateInModelSpace`、`lockModelRotation` | [systems/pose-layers.md](systems/pose-layers.md) §5 | 设计稿（尚未实现增量层） |
 | 想让角色整体驼背 / 屁股高头压低 / 加一个「体态」而不是做新动画 | `core/types.ts` 的 `CharacterPosture`、`voxel-rig.ts` 2.96 / 3.0 段、`dummy-rig.ts` | `style.posture`、`MURLOC_POSTURE`、`postureDebug()`、`POSTURE_MAX_TOTAL` | [systems/posture.md](systems/posture.md) | `tests/v9s64-posture-sentinel.test.ts`、`__harness.view.postureDebug()` |
 | 想要一个机器人 / 单眼角色 | `presentation/sentinel-parts.ts`、`bodyTypes.sentinel` | `buildSentinelHead`、`buildSentinelTorso`、`bodyTypes.sentinel` | [systems/sentinel.md](systems/sentinel.md) | `?hero=sentinel`、`tests/v9s64-posture-sentinel.test.ts` |
 | 想加一个「怪物」角色 / 鱼人怎么做 | `presentation/murloc-parts.ts`、`voxel-rig.ts` / `dummy-rig.ts` 的挂点、`DummySpawn.variant` | `buildMurlocHead`、`buildMurlocDorsalFin`、`DummyVariant`、`bodyTypes.murloc` | [systems/murloc.md](systems/murloc.md) §1–4 | `tests/v9s63-murloc.test.ts`、`?hero=murloc`、`y-murloc` 工位 |
@@ -154,7 +158,7 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（121 文件 / 1240 例） | 提交前 |
+| `npm test` | vitest 全量（122 文件 / 1250 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
 | `npm run smoke` | 起 `dist/`，跑 77 项画面层 + 契约自检 | 发布前 |
@@ -217,7 +221,8 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/grass.md`](systems/grass.md) | 体素草块：压开 / 割断 / 实例化渲染 / 风吹麦浪 / 性能结论 |
 | [`systems/grass-growth-pivot.md`](systems/grass-growth-pivot.md) | v9s.46 缓慢连续生长 + 枢轴顶点动画（每节 box 刚体旋转，实现正本） |
 | [`systems/destructibles.md`](systems/destructibles.md) | 可破坏物件：按命中位置斜切、切口朝攻击方向、上半截刚体翻倒、**仙人掌分段 / 碰撞盒 / 多判定轴 / 侧臂几何单一真源（实现正本）** |
-| [`systems/posture.md`](systems/posture.md) | 基础体态层：插入点、七个旋钮、三条硬边界（抬胯 / 屈膝 / 前倾预算）、验收读数 |
+| [`systems/posture.md`](systems/posture.md) | 基础体态层：插入点、八个旋钮、三条硬边界（抬胯 / 屈膝 / 前倾预算）、补偿的坐标系 |
+| [`systems/pose-layers.md`](systems/pose-layers.md) | 姿态分层：骨架里胸/腰/胯分别是谁、偏航分账、局部 vs 模型空间、脚锁、additive 目标形态 |
 | [`systems/sentinel.md`](systems/sentinel.md) | 哨兵机：大块抓型 + 小块点缀、单眼为什么是一条灯带、两处弯路 |
 | [`systems/murloc.md`](systems/murloc.md) | 鱼人造型：换几何不换骨架、四个辨识点、两种出场、单只假人血量（实现正本） |
 | [`systems/webview-perf.md`](systems/webview-perf.md) | 移动端「隔一段时间卡几秒」：桌面排除法、上下文丢失、质量档与自动降档、`?diag=1` 读数 |

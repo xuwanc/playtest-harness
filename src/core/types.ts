@@ -2919,6 +2919,15 @@ export type SpineViewConfig = {
   neck: number;
   /** 胸段枢轴高度（相对躯干高度 0..1）；越大，弯折点越靠上 */
   chestPivot: number;
+  /**
+   * v9s.66：**偏航**的分账比例（0..1）—— 「胸随下盘带转」的总角里给胸段多少。
+   *
+   * 与 `waist` / `chest` 分开：那两个是**俯仰**的分账（大幅挥击时弯折点靠上），
+   * 而偏航的解剖学答案正好相反 —— 人转体主要发生在胸椎，腰跟着扭会崴。
+   * 旧版把 chestYaw 写进 `upper` 再按 58/42 摊，胸段只吃到 42%，
+   * 40° 下盘偏转时胸只转 10°，看起来「胸根本没动」。缺省 0.7。
+   */
+  yawChest?: number;
 };
 
 export type ProgramAnimViewConfig = {

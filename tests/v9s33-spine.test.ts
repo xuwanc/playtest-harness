@@ -55,8 +55,14 @@ describe('v9s.33 脊柱分段', () => {
       const upper = on.rig.group.getObjectByName('upper')!;
       const chest = on.rig.group.getObjectByName('chest')!;
       const total = upper.rotation.y + chest.rotation.y;
-      expect(chest.rotation.y).toBeCloseTo(total * 0.42, 5);
-      expect(upper.rotation.y).toBeCloseTo(total * 0.58, 5);
+      // v9s.66：偏航不再整块按 42/58 摊 —— 「胸随下盘带转」那一份单独分账（默认胸 70%），
+      // 否则 40° 下盘偏转时胸只转 10°，看起来「胸根本没动」而腿根转满。
+      // 剩下不属于 chestYaw 的偏航（攻击旋身 / 站姿）仍走 spine.waist/chest。
+      const cy = on.rig.gaitDebug().chestYaw;
+      const share = raw.view.animation.spine!.yawChest ?? 0.7;
+      expect(chest.rotation.y).toBeCloseTo((total - cy) * 0.42 + cy * share, 5);
+      expect(upper.rotation.y).toBeCloseTo((total - cy) * 0.58 + cy * (1 - share), 5);
+      // 总角与旧骨架（无拆分）逐帧一致 —— 分账只改「谁吃」，不改「吃多少」。
       const oldUpper = off.rig.group.getObjectByName('upper')!;
       expect(total).toBeCloseTo(oldUpper.rotation.y, 6);
       expect(upper.rotation.x + chest.rotation.x).toBeCloseTo(oldUpper.rotation.x, 6);

@@ -47,6 +47,7 @@ import { solveInertiaPose } from './inertia';
 import { applyFootIK, captureIKBase, EMPTY_IK_DIAGNOSTICS } from './rig-ik';
 import { blendIKAngles, solveTwoBoneIK } from './ik';
 import type { IKDiagnostics, IKLimb } from './rig-ik';
+import { pitchInModelSpace } from './rig-space';
 import {
   decayImpact, NEUTRAL_STRETCH, smoothStretch, solveStretch,
 } from './limb-stretch';
@@ -277,7 +278,7 @@ type Limb = {
   segLen: number;
 };
 /** 腿额外带一个末端标记，供 IK 取世界锚点（小腿末端，不含鞋的视觉偏移）。 */
-type Leg = Limb & { tip: THREE.Object3D };
+type Leg = Limb & { tip: THREE.Object3D; ankle: THREE.Group };
 
 /** v9s.29：一条刃身的几何读数（供拖尾 / clip 工具 / 验收）。 */
 export type BladeGeom = {
@@ -620,27 +621,33 @@ export function createVoxelRig(
     shin.position.y = -legLen / 4;
     knee.add(shin);
 
+    // v9s.66：踝关节。脚掌几何挂在它下面，于是足部 IK 反解完髋 / 膝之后，
+    // 可以把踝的朝向拧回 IK 之前（`lockModelRotation`）—— 否则脚掌跟着小腿转，
+    // 读作「脚在地上打滑 / 脚腕被掰」。默认 identity，脚锁不介入时与旧版逐帧一致。
+    const ankle = group();
+    ankle.name = sx < 0 ? 'ankleL' : 'ankleR';
+    ankle.position.y = -legLen / 2;
+    knee.add(ankle);
+
     if (murloc) {
       // 蹼足：脚掌前后拉到 0.26m（人形是 t×1.7≈0.18），压在同一踝高上
-      buildMurlocFoot(knee, t, legLen, colors);
+      buildMurlocFoot(ankle, t, 0, colors);
     } else if (sentinel) {
       // 机械脚：扁底板 + 两片前爪（比人脚宽，读作「站不稳但站得住」）
-      buildSentinelFoot(knee, t * 3.4, colors, -legLen / 2);
+      buildSentinelFoot(ankle, t * 3.4, colors, 0);
     } else {
       const shoe = makeBox(t * 1.15, 0.07, t * 1.7, colors.shoe);
-      shoe.position.set(0, -legLen / 2 + 0.035, 0.045); // 脚尖朝 +Z
-      knee.add(shoe);
+      shoe.position.set(0, 0.035, 0.045); // 脚尖朝 +Z（相对踝点）
+      ankle.add(shoe);
     }
 
-    // IK 末端锚点：小腿末端（脚踝）。不含鞋的视觉偏移，FK / IK 才能精确互为逆运算。
+    // IK 末端锚点：踝点本身（不含鞋的视觉偏移），FK / IK 才能精确互为逆运算。
     const tip = new THREE.Object3D();
     tip.name = 'footTip';
-    tip.position.y = -legLen / 2;
-    knee.add(tip);
+    ankle.add(tip);
 
-    const ankle = group();
     return {
-      root: hip, joint: knee, hand: ankle, wrist: ankle, tip,
+      root: hip, joint: knee, hand: ankle, wrist: ankle, tip, ankle,
       upperMesh: thigh, lowerMesh: shin, segLen: legLen / 2,
     };
   };
@@ -743,6 +750,7 @@ export function createVoxelRig(
     root: leg.root,
     joint: leg.joint,
     tip: leg.tip,
+    ankle: leg.ankle,
     upperLen: legLen / 2,
     lowerLen: legLen / 2,
     bend: 1 as const,
@@ -1252,7 +1260,9 @@ export function createVoxelRig(
       leg.joint.position.y = -leg.segLen * s.leg;
       leg.lowerMesh.scale.set(s.girthLeg, s.leg, s.girthLeg);
       leg.lowerMesh.position.y = (-leg.segLen / 2) * s.leg;
-      leg.tip.position.y = -leg.segLen * s.leg;
+      // v9s.66：脚踝（= IK 的 footTip 所在处）跟着骨长走；tip 本身固定挂在踝原点上，
+      // 再动它就会与脚锁打架（实测误差正好等于腿长一半）。
+      leg.ankle.position.y = -leg.segLen * s.leg;
     }
     // v9s.33：躯干可能是「腰块 + 胸块」两块，各自按自己的基准高度缩放，
     // 叠放顺序不能错（胸块要跟着腰块一起抬）。
@@ -3043,7 +3053,10 @@ export function createVoxelRig(
       // v9o：胸随下盘按配置比例带转（下盘转得多、胸转得少），避免「只有腿在偏、
       // 上身还正对前方」的拧巴感。hipYaw 已平滑，线性缩放不会引入跳变。
       chestYaw = chestYawFromHip(hipYaw, gaitCfg.chestYawScale, gaitCfg.chestYawMaxDeg);
-      upper.rotation.y += chestYaw;
+      // v9s.66：这里**不再直接写 upper**，改到 splitSpine 之后按腰 / 胸分账（见 3.01）。
+      //   原因：写进 upper 会被 splitSpine 按腰 / 胸（58/42）摊掉，胸段实际只吃到
+      //   `chestYaw × 0.42`（40° 下盘 → 胸只转 10°），看起来「胸的朝向根本没变」，
+      //   而腿根却跟着下盘转满 40°。分账之后总角不变，胸段吃大头。
       // 只补偿主动攻击旋身，不含受击扭转（见 2.5 说明）；v9o 再补偿胸偏转，
       // 让头仍朝 Core 给的 headYaw（目标方向）而不是跟着胸一起偏走。
       const spin = combatSpin;
@@ -3092,6 +3105,22 @@ export function createVoxelRig(
       // 拆分必须早于腕部与剑身反解 —— 它们读的是「躯干实际朝到哪」。
       splitSpine();
 
+      // 3.01) v9s.66 胸随下盘带转 · 分账。
+      //   总角必须与旧版完全一致（`torsoYaw()` 的读数、帧尾泄漏守卫、既有测试都按总角验收），
+      //   变的只是「腰吃多少、胸吃多少」：默认 0.7 给胸段 —— 人转体主要发生在胸椎，
+      //   腰跟着扭反而是崴腰。之前写进 upper 再拆分，实际是腰 58% / 胸 42%。
+      //   为什么在 splitSpine 之后写：拆分之前写进去就会被 58/42 摊掉，这正是问题本身。
+      if (chestYaw !== 0) {
+        if (spineOn) {
+          const yawChest = clamp(spineCfg!.yawChest ?? 0.7, 0, 1);
+          upper.rotation.y += chestYaw * (1 - yawChest);
+          chest.rotation.y += chestYaw * yawChest;
+          if (intendedTorso) intendedTorso.y += chestYaw;
+        } else {
+          upper.rotation.y += chestYaw;
+        }
+      }
+
       // 3.0) v9s.64 弓腰：拆分之后再把 waist 折在腰段（`upper` 就是腰段的节点）。
       //   为什么不在拆分前加：那会被 42/58 摊到胸段，读起来是「整根斜」而不是「腰塌了」。
       //   为什么必须回写 intendedTorso：帧尾的泄漏守卫拿它比对总角，
@@ -3114,8 +3143,11 @@ export function createVoxelRig(
       const armDrop = posture?.armDrop ?? 0;
       if (armDrop > 0 && chest.rotation.x > 1e-4) {
         const back = chest.rotation.x * armDrop;
-        armL.root.rotation.x -= back;
-        armR.root.rotation.x -= back;
+        // v9s.66：在模型空间里往回压。局部 X 只在「胸段没偏航」时才指向角色左右；
+        // 走路带转 / 攻击旋身之后局部 X 已经歪了，`rotation.x -= back` 会变成斜着掰手臂 ——
+        // 鱼人这种扁宽躯干上尤其明显（手会朝侧前方支出去）。
+        pitchInModelSpace(armL.root, root, -back);
+        pitchInModelSpace(armR.root, root, -back);
       }
 
       // 3.4) v9s.24 腕部滞后：放在朝向 / 胸偏转之后 —— 它读的就是「躯干已经转到哪」，

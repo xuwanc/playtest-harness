@@ -249,13 +249,14 @@ export function buildMurlocHand(parent: THREE.Object3D, t: number, colors: Color
 /**
  * 蹼足：前后拉长的大脚掌 + 三趾。
  *
- * `parent` 是 `knee` 节点，踝点在局部 `y = -legLen/2`；脚掌压在这个高度上，
+ * `parent` 是**踝关节**（v9s.66 起，挂在 `knee` 末端），脚掌压在这个节点原点上，
  * 与 IK 的 `footTip` 严格对齐（否则脚会悬空或插地 —— 换鞋最容易出的 bug）。
+ * `ankleY` 是踝点相对 parent 的偏移，正常传 0（几何直接以踝为原点摆）。
  */
 export function buildMurlocFoot(
-  parent: THREE.Object3D, t: number, legLen: number, colors: ColorConfig,
+  parent: THREE.Object3D, t: number, ankleY: number, colors: ColorConfig,
 ): void {
-  const ankle = -legLen / 2;
+  const ankle = ankleY;
   const sole = makeBox(t * 1.30, 0.052, 0.26, colors.shoe);
   sole.position.set(0, ankle + 0.026, 0.095);
   parent.add(sole);

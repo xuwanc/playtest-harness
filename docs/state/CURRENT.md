@@ -32,10 +32,10 @@ v0.9.88：**把本地的「剑盾盾放大 + 装备展示界面 Wardrobe」并�
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 121 文件 / 1240 例全绿 |
+| `npx vitest run` | 122 文件 / 1250 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
 | `npm run smoke` | 77/77 PASS |
-| `npm run docs:check` | PASS（103 份文档 ≤300 行，README 99 行） |
+| `npm run docs:check` | PASS（105 份文档 ≤300 行，README 99 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 | `python3 tools/check-online.py --wait 180` | 发布后核验线上 JS 与本地 `dist` 同一份 |
