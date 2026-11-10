@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { IKViewConfig } from '../core';
 import { blendIKAngles, solveTwoBoneIK } from './ik';
+import { lockModelRotation, quatParentInModel } from './rig-space';
 
 /**
  * 足部 IK 锚定的 THREE 适配层（v8g）。
@@ -26,6 +27,12 @@ export type IKLimb = {
   joint: THREE.Group;
   /** 末端标记（小腿末端），用于取世界锚点 */
   tip: THREE.Object3D;
+  /**
+   * v9s.66：踝关节（脚掌的父节点，挂在 knee 末端）。给出时 IK 会做「脚锁」：
+   * 髋 / 膝被反解完之后，把踝的**模型空间**朝向拧回 IK 之前 —— 否则脚掌会跟着
+   * 小腿一起被拧，读作「脚在地上打滑 / 掰脚腕」。缺省（老骨架）时退化为旧行为。
+   */
+  ankle?: THREE.Object3D;
   upperLen: number;
   lowerLen: number;
   bend: 1 | -1;
@@ -134,6 +141,11 @@ export function applyFootIK(input: FootIKInput): IKDiagnostics {
   const maxCorrection = (Math.max(0, cfg.maxCorrectionDeg) * Math.PI) / 180;
   let clamped = 0;
 
+  // 脚锁的参考朝向：此刻髋 / 膝还是本帧的 FK 值。**只取踝的父链**，不含踝自己的局部旋转 ——
+  // 否则上一帧写进去的补偿会被当成「基准」，逐帧累加，脚腕会一直往里拧。
+  // 契约：踝节点的局部旋转归 IK 独占，其它层不要写它。
+  const footRest = limbs.map((limb) => (limb.ankle ? quatParentInModel(limb.ankle, root) : null));
+
   for (let i = 0; i < limbs.length; i++) {
     const limb = limbs[i];
     // 锚点转到下盘局部；再减去 hip 的固定局部位置 → 相对 hip 原点（未旋转）的目标向量
@@ -158,6 +170,10 @@ export function applyFootIK(input: FootIKInput): IKDiagnostics {
     limb.root.rotation.x = angles.rootPitch;
     limb.root.rotation.z = angles.rootRoll;
     limb.joint.rotation.x = angles.jointPitch;
+    // 脚锁放在最后：髋 / 膝的新角度已经在链上，此刻算出来的局部四元数才把「被拧掉的那部分」抵消掉。
+    if (footRest[i] && limb.ankle) {
+      lockModelRotation(limb.ankle, root, footRest[i]!, weight);
+    }
   }
 
   // 4) 诊断：钉地后脚位与锚点的残差（权重 1 且目标可达时应趋近 0）

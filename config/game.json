@@ -1940,7 +1940,8 @@
         "waist": 0.58,
         "chest": 0.42,
         "neck": 0.16,
-        "chestPivot": 0.42
+        "chestPivot": 0.42,
+        "yawChest": 0.7
       }
     },
     "weaponMount": {

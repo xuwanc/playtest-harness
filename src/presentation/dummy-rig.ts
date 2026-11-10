@@ -28,6 +28,7 @@ import type { GaitInput } from './gait';
 import { solveHurtPose } from './hurt-pose';
 import { solveInertiaPose } from './inertia';
 import { applyFootIK, captureIKBase, EMPTY_IK_DIAGNOSTICS } from './rig-ik';
+import { pitchInModelSpace } from './rig-space';
 import type { IKDiagnostics, IKLimb } from './rig-ik';
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -177,7 +178,7 @@ export function createDummyRig(
     buildMurlocTail(pelvis, H, 0.28);
   }
 
-  type Limb = { root: THREE.Group; joint: THREE.Group; tip?: THREE.Object3D };
+  type Limb = { root: THREE.Group; joint: THREE.Group; tip?: THREE.Object3D; ankle?: THREE.Group };
   const makeLimb = (sx: number, isArm: boolean): Limb => {
     const len = isArm ? armLen : legLen;
     const jointRoot = new THREE.Group();
@@ -208,19 +209,24 @@ export function createDummyRig(
     joint.add(lowerSeg);
 
     if (!isArm) {
+      // v9s.66：与主角同构的踝关节 —— 足部 IK 反解髋 / 膝后把它的朝向拧回 IK 之前
+      const ankle = new THREE.Group();
+      ankle.name = sx < 0 ? 'ankleL' : 'ankleR';
+      ankle.position.y = -len / 2;
+      joint.add(ankle);
+
       if (murloc) {
-        buildMurlocFoot(joint, t, len, mc);
+        buildMurlocFoot(ankle, t, 0, mc);
       } else {
         const shoe = mk(t * 1.15, 0.07, t * 1.7, cc.shoe);
-        shoe.position.set(0, -len / 2 + 0.035, 0.045);
-        joint.add(shoe);
+        shoe.position.set(0, 0.035, 0.045);
+        ankle.add(shoe);
       }
-      // 小腿末端锚点（不含鞋的视觉偏移），FK / IK 精确互逆
+      // 踝点锚点（不含鞋的视觉偏移），FK / IK 精确互逆
       const tip = new THREE.Object3D();
       tip.name = 'footTip';
-      tip.position.y = -len / 2;
-      joint.add(tip);
-      return { root: jointRoot, joint, tip };
+      ankle.add(tip);
+      return { root: jointRoot, joint, tip, ankle };
     }
     return { root: jointRoot, joint };
   };
@@ -235,6 +241,7 @@ export function createDummyRig(
     root: leg.root,
     joint: leg.joint,
     tip: leg.tip!,
+    ankle: leg.ankle,
     upperLen: legLen / 2,
     lowerLen: legLen / 2,
     bend: 1 as const,
@@ -712,8 +719,10 @@ export function createDummyRig(
         const armDrop = posture.armDrop ?? 0;
         if (armDrop > 0 && posturePitch > 0) {
           const back = posturePitch * armDrop;
-          armL.root.rotation.x -= back;
-          armR.root.rotation.x -= back;
+          // v9s.66：在**模型空间**里往回压。局部 X 只在「躯干没偏航」时才指向角色左右，
+          // 假人的胸随下盘带转之后局部 X 已经歪了，直接 -= 会变成斜着掰手臂。
+          pitchInModelSpace(armL.root, root, -back);
+          pitchInModelSpace(armR.root, root, -back);
         }
       }
 
