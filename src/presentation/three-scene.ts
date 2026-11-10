@@ -42,6 +42,7 @@ import { createSpiderRig } from './spider-rig';
 import { createYawSmoother } from './yaw-smooth';
 import { createWeaponTrail } from './weapon-trail';
 import { createAfterimage } from './elder-afterimage';
+import { createRtAfterimage } from './rt-afterimage';
 import { createGrassLayer } from './grass-layer';
 import type { GrassDebug } from './grass-layer';
 import { createDestructibleLayer } from './destructible-layer';
@@ -1036,6 +1037,10 @@ export function createSceneView(
 
   // ---- 2.5D 相机（叠加 Core 的智能构图意图） ----
   const cam = createCameraRig(view.camera, view.smartCamera, view.zoom, w0 / h0);
+  // v9s.57：RT 反馈残影（机器人对照测试）。renderer / scene / camera 在创建点都已就绪。
+  const rtAfterimage = createRtAfterimage(
+    { renderer, scene, camera: cam.camera }, view.rtAfterimage,
+  );
   // v9s.57：陪练头顶血条（DOM 覆盖层）。只画有血量的单位，死亡隐藏、重生重现。
   const healthBars = createHealthBarLayer(
     container, view,
@@ -1939,6 +1944,10 @@ export function createSceneView(
 
       cam.update(c.position.x, c.position.y, c.position.z, frameDt, w.camera);
       renderer.render(scene, cam.camera);
+      // v9s.57：RT 反馈残影（机器人）。必须在主渲染之后合成到屏幕。
+      if (view.rtAfterimage.enabled) {
+        rtAfterimage.update(frameDt, hero.group, playerRoot, true, bodyTypeId);
+      }
     },
     resize(): void {
       const w = Math.max(1, container.clientWidth);
@@ -2132,6 +2141,7 @@ export function createSceneView(
       playerMeter.dispose();
       playerTrail.dispose();
       elderAfterimage.dispose();
+      rtAfterimage.dispose();
       for (const m of dummyWarns) m.dispose();
       landingPreview.dispose();
       slashGeo.dispose();
