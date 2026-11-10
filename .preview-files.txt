@@ -1,4 +1,0 @@
-.nojekyll
-assets/main-BOPvYmvq.css
-assets/main-u8JM04JK.js
-index.html
