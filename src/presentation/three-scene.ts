@@ -27,6 +27,7 @@ import type { FighterGaitDebug } from './fighter-rig';
 import { createLabLayer } from './lab-scene';
 import { createBurstFx } from './scene-burst-fx';
 import { createBloodFx } from './blood-fx';
+import { createHealthBarLayer } from './healthbar-layer';
 import {
   areaOpen, createArcMeter, createAreaRing, createGroundRing, dummyWindupWarning, fadeTowards,
   ringGroundHeight,
@@ -109,6 +110,8 @@ export type SceneView = {
    * 验收「打死后是不是真躺下了、重生是不是从地里升起来」直接读这里，不靠肉眼猜。
    */
   deathDebug(id: number): { dead: boolean; fall: number; sink: number; rise: number; y: number } | null;
+  /** v9s.57：头顶血条读数（总条数 / 当前可见条数）。 */
+  healthBarDebug(): { total: number; shown: number };
   /**
    * v9s.38：特效层级读数（发布自检用）。
    * `boxOpaque` = 地块是否走不透明通道（旧版透明地面会盖掉刀光）；
@@ -883,11 +886,22 @@ export function createSceneView(
   const burstFx = createBurstFx(scene, view, world, groundFxY);
   // v9s.56：命中飙血（血珠 / 血雾 / 地面血迹）。数据源是 Core 的 hitMarks 环形，
   // 不读事件队列 —— 低帧率一帧多步时事件会被覆盖，血花就会漏。
-  const bloodFx = createBloodFx(scene, view, groundFxY);
+  // v9s.57：Core 只给归一化部位 u，这里换算成骨架上的实际点（打头在头、打腿在腿）。
+  const bloodFx = createBloodFx(scene, view, groundFxY, (id, u, fx, fy, fz) => {
+    const i = world.dummies.findIndex((d) => d.id === id);
+    if (i < 0 || !dummyRigs[i]) return null;
+    const s = world.dummies[i];
+    const y = s.position.y + u * world.config.dummies.height;
+    const hit = dummyRigs[i].boneAtWorld(s.position.x, y, s.position.z);
+    if (!hit) return { x: fx, y, z: fz };
+    return { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+  });
 
 
   // ---- 2.5D 相机（叠加 Core 的智能构图意图） ----
   const cam = createCameraRig(view.camera, view.smartCamera, view.zoom, w0 / h0);
+  // v9s.57：陪练头顶血条（DOM 覆盖层）。只画有血量的单位，死亡隐藏、重生重现。
+  const healthBars = createHealthBarLayer(container, view);
   const p0 = world.character.position;
   cam.update(p0.x, p0.y, p0.z, 1, world.camera);
 
@@ -1092,6 +1106,9 @@ export function createSceneView(
     },
     bloodDebug() {
       return bloodFx.debug();
+    },
+    healthBarDebug() {
+      return healthBars.debug();
     },
     deathDebug(id) {
       const i = world.dummies.findIndex((d) => d.id === id);
@@ -1392,6 +1409,8 @@ export function createSceneView(
       burstFx.update(w, frameDt, (amount) => cam.addShake(amount));
       // 飙血用真实帧时长：卡肉只冻结角色姿态，血已经溅出去了，跟着冻反而读作「时间停了」
       bloodFx.update(w, frameDt);
+      // 血条跟着相机投影，用同一帧相机（渲染前更新，避免比画面晚一帧）
+      healthBars.update(w, cam.camera);
 
       // v9s.22：轻击不再画「斩击弧」—— 那是一个固定在身前的白色环，和真实刀轨
       // 没关系，反而会盖住贴刀身的拖尾。只有 comboIndex >= 3 的重击保留弧光，
@@ -1700,6 +1719,7 @@ export function createSceneView(
       trailTex.dispose();
       burstFx.dispose();
       bloodFx.dispose();
+      healthBars.dispose();
       boxGroup.traverse((obj) => {
         if (obj instanceof THREE.Mesh) obj.geometry.dispose();
       });

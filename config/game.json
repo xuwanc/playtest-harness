@@ -570,6 +570,11 @@
         "greatsword": 1.4,
         "staff": 1.0,
         "bow": 0.9
+      },
+      "hitHeight": {
+        "light": 0.6,
+        "heavy": 0.5,
+        "knock": 0.4
       }
     },
     "separation": {
@@ -844,6 +849,11 @@
       "attackRecovery": 0.4,
       "health": 0,
       "respawnSec": 3,
+      "corpse": {
+        "enabled": true,
+        "radius": 0.62,
+        "offset": 0.55
+      },
       "fighters": {
         "weapons": ["sword-shield", "dual-swords", "greatsword"],
         "spawn": [],
@@ -2111,6 +2121,10 @@
       "stainLife": 6.5,
       "stainRadius": 0.2,
       "stainOpacity": 0.5
+    },
+    "healthBar": {
+      "enabled": true,
+      "lift": 0.12
     },
     "balance": {
       "enabled": true,

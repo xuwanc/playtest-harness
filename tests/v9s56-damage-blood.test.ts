@@ -224,7 +224,9 @@ describe('v9s.56 命中记录（飙血数据源）', () => {
     expect(w.hitMarks.length).toBe(1);
     const m = w.hitMarks[0];
     expect(m.id).toBe(d.id);
-    expect(m.y).toBeCloseTo(d.position.y + w.config.dummies.height * 0.46, 5);
+    // v9s.57 起部位由 `hits.hitHeight[type]` 决定，y = 身高 × u（不再是写死的 0.46）
+    expect(m.u).toBeCloseTo(w.config.hits.hitHeight!.knock, 6);
+    expect(m.y).toBeCloseTo(d.position.y + w.config.dummies.height * m.u, 5);
     expect(m.dx).toBeCloseTo(0.6, 5);
     expect(m.dz).toBeCloseTo(0.8, 5);
     expect(m.power).toBeGreaterThan(0.3);

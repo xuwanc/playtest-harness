@@ -31,30 +31,17 @@ GIT_TERMINAL_PROMPT=0 git push --dry-run origin HEAD:refs/heads/__probe 2>&1 | t
 # 能写 → "Everything up-to-date"；不能写 → 立刻报 could not read Username（不加 GIT_TERMINAL_PROMPT=0 会挂住等输入）
 ```
 
-2026-11-09 实测：`github.com:443` **读**可用（`fetch` / `clone` / `ls-remote`），
-但 `git push` **没有写凭证**（`could not read Username for 'https://github.com'`），
-`gh` 未登录、环境里也没有 `GITHUB_TOKEN`。此时写操作走已授权的 **GitHub MCP 网关**
-（`~/.codebuddy/.mcp.json` 的 `github` connector），固化脚本 `tools/push-branch.py`：
-
-```bash
-python3.11 tools/push-branch.py --dry         # 先看计划
-python3.11 tools/push-branch.py               # 推同名功能分支（不存在则基于 main 建，绝不动 main）
-git fetch origin <分支>
-git diff --stat HEAD origin/<分支>            # 必须为空 → tree 逐字节一致
-git reset --hard origin/<分支>                # 本地与远端对齐
-```
+**结论随环境变，先测再选**（2026-11-10 复核：本环境 `git push` 与 `gh` 都可写，
+写通道已切到本地优先，见 §12）。2026-11-09 时只有 MCP 网关可写：
 
 | 通道 | 读 | 写 | 备注 |
 |---|---|---|---|
-| 标准 git | ✅ `fetch` / `ls-remote` | ❌ `push` 无凭证 | 拉分支、看远端状态用它 |
-| `tools/push-branch.py`（MCP 网关） | — | ✅ | **协同推送首选**；内容从磁盘读，可搬大文件，不需要 token |
-| `tools/gh-commit.mjs`（REST 网关） | — | ✅ 需自备 token | 兜底；且只提交「工作区未提交的差异」，推不了本地 commit 链 |
+| 标准 git | ✅ | ✅（现环境）/ ❌ 无凭证（旧环境） | 首选，历史线性、SHA 稳定 |
+| `tools/push-branch.py`（MCP 网关） | — | ✅ | 兜底；commit 由 API 重建，推完要 `diff` + `reset --hard` 对齐 |
+| `tools/gh-commit.mjs`（REST 网关） | — | ✅ 需 token | 只提交工作区差异，推不了本地 commit 链 |
 
-> **重要**：MCP 网关推上去的 commit 是 API 重建的，SHA 与本地不同，但 **tree 一致**。
-> 所以推完必须 `fetch` + `git diff --stat`（应为空）+ `reset --hard` 对齐，
-> 否则本地会显示「ahead N / behind M」的假分叉。推送前把本地分层 commit
-> `git branch backup/<名字> <SHA>` 留个备份，可随时找回。
-> 2026-11-09 首次实战：`feat/integration-grass-wind` 主干树 `4843ea5b…` 与本地完全一致。
+> MCP 网关推上去的 commit **tree 一致、SHA 不同**，本地会显示假的 ahead/behind。
+> 推送前留 `git branch backup/<名字> <SHA>`，出问题可整体找回。
 
 早期工作区是 `codeload` 归档 + `git init` 的**独立快照**，与远端无共同祖先，
 直接 `git merge` 会走 unrelated-histories，把几十个文件误判成「双方新增」。
@@ -292,8 +279,21 @@ npm run publish:preview   # tools/publish-preview.mjs（站点 skill 实时隧�
   重跑带 `--pr-number` 断点续跑。
 
 ```bash
-python3.11 tools/agent-sync.py status
-python3.11 tools/agent-sync.py start  --agent b --topic destructibles
-python3.11 tools/agent-sync.py finish --dry       # 只看计划，不写远端
-python3.11 tools/agent-sync.py finish             # 真跑闭环
+npm run feat:status                               # 当前分支 / 落后 main 多少 / 队列
+npm run feat:start -- --topic death-polish --agent a
+npm run feat:finish -- --dry                      # 只看计划，不写远端
+npm run feat:finish                               # 真跑闭环
 ```
+
+## 12. 2026-11-10 复核：通道换成「本地 git / gh 优先」（v9s.57）
+
+§1 的结论（`git push` 无凭证）在这个环境已不成立：`gh auth status` 已登录、`git push` 能写。
+`agent-sync.py` 的写通道改成两级 —— 推分支 `git push`（重试 5 次）→ `push-branch.py`；
+建 PR `gh pr create` → MCP；合 PR `gh pr merge --match-head-commit` → MCP `expectedHeadSha`；
+发布 `ship.sh --no-build` → `publish-pages.py`。
+
+**为什么优先本地 git**：MCP 推上去的 commit 由 API 重建，SHA 与本地不同，
+`git log` 看起来像「同一批改动重复提交」，排查冲突前得先比对树的 hash。**收尾多了一步切回 main**：旧版只 `git branch -f main origin/main`（不切工作区），
+下一个 agent 忘 fetch 就会基于旧 main 建分支 —— 这次合并对方分支正是这个局面
+（分支基于 v0.9.76，main 已到 v0.9.77，PR 直接 `CONFLICTING`）。现在 finish 会切回 main 并对齐。
+护栏没变：只允许 `feat/*` / `fix/*` 收尾；源码没提交就停；合并带 head 校验。

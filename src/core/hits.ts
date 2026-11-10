@@ -20,6 +20,11 @@ export type HitSpec = {
    * 显式给值只用于「同一把武器不同招式伤害不同」的场合（目前没有），保留接口。
    */
   damage?: number;
+  /**
+   * v9s.57：本次命中的**部位**（0 = 脚底，1 = 头顶）。缺省按 `hits.hitHeight[type]` 查表。
+   * 显式给值用于「同一受击类型、不同招式打在不同高度」（击地 / 斜劈 / 突刺）。
+   */
+  hitU?: number;
 };
 
 const EPS = 1e-6;
@@ -99,11 +104,19 @@ export function applyHit(world: World, target: HitTarget, spec: HitSpec): void {
   // v9s.56：只有「有血可流」的单位才记命中（maxHp = 0 的测试桩是被砍的木桩，
   // 喷血反而读错）。卡肉 / 命中计数 / 受击动画仍照旧 —— 所以不能在这里提前 return。
   if (s.health.maxHp > EPS) {
+    // v9s.57：部位按「显式指定 → 受击类型表 → 旧默认」三级取，再夹到 [0.05, 0.98]。
+    // 夹紧是因为表现层要拿它乘骨架身高再吸骨骼，u = 0 会落到脚底、u = 1 会出头顶。
+    const hh = world.config.hits.hitHeight;
+    const tableU = hh && spec.type !== 'none' ? hh[spec.type] : undefined;
+    const u = clamp(
+      spec.hitU ?? tableU ?? (spec.type === 'knock' ? 0.42 : 0.56),
+      0.05, 0.98,
+    );
     pushHitMark(world, {
       x: s.position.x,
-      // 命中点抬到胸腹高度：血从脚底喷出来是最常见的「一眼假」
-      y: s.position.y + world.config.dummies.height * (spec.type === 'knock' ? 0.46 : 0.52),
+      y: s.position.y + world.config.dummies.height * u,
       z: s.position.z,
+      u,
       dx: spec.dirX,
       dz: spec.dirZ,
       power: clamp(0.3 + dmg / 30 + (fatal ? 0.35 : 0), 0.3, 1.5),
@@ -393,12 +406,21 @@ function playerHits(world: World): void {
     if (kb > 0) targetDist = Math.max(dist + kb, ideal);
     const push = Math.max(0, targetDist - dist);
 
+    // v9s.57：血位按招式档位再压一档 —— 三连收招是下劈、大剑本来就砍腰腹，
+    // 不能和第一段平挥喷在同一个高度。
+    const baseU = cfg.hitHeight?.[type] ?? (type === 'knock' ? 0.42 : 0.56);
+    const hitU = clamp(
+      baseU - (cb.comboIndex >= 3 ? 0.14 : 0) - (cb.weapon === 'greatsword' ? 0.05 : 0),
+      0.18, 0.92,
+    );
+
     dealHit(world, world.dummies.indexOf(s), {
       type,
       duration: hurtDuration(world, type),
       dirX: nx,
       dirZ: nz,
       knockback: push,
+      hitU,
     });
     cb.hitIds.push(s.id);
   }
@@ -461,6 +483,8 @@ function playerGroundSlam(world: World): void {
       dirZ: nz,
       knockback: push,
       holdMul,
+      // v9s.57：贴地砸出来的血在脚踝 / 小腿，不是胸口
+      hitU: 0.26,
     });
     cb.hitIds.push(s.id);
   }
