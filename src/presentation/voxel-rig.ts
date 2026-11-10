@@ -55,6 +55,10 @@ import { autoSegBlend, blendSwingPose, segEase, solveSwingPose } from './swing-p
 import type { SwingPose } from './swing-pose';
 import { beardAvoidAt, createBeardState, solveBeard } from './beard';
 import type { BeardState } from './beard';
+import {
+  buildMurlocBelly, buildMurlocDorsalFin, buildMurlocFoot, buildMurlocHand, buildMurlocHead,
+  buildMurlocShoulderFin, buildMurlocTail,
+} from './murloc-parts';
 
 export type VoxelRig = {
   group: THREE.Group;
@@ -368,6 +372,14 @@ export function createVoxelRig(
   const hunch = Math.max(0, style?.hunch ?? 0);
   const kneeSink = Math.max(0, style?.kneeSink ?? 0);
   const breathOn = !!style?.breath;
+  /**
+   * v9s.63 · 鱼人造型。
+   *
+   * 只换「头 / 手 / 脚 / 背鳍 / 尾」五处几何，骨架层级、IK、步态、挥击、断肢、
+   * 倒地物理**一行不改** —— 鱼人因此天生拥有全套动作与死亡表现。
+   * 为 false 时所有分支都不进，几何与逐帧姿态与旧版逐字节一致（既有快照不用改）。
+   */
+  const murloc = !!style?.murloc;
   const legLen = v.legLength;
   const armLen = v.armLength;
   const t = v.limbThickness;
@@ -427,20 +439,25 @@ export function createVoxelRig(
   headPivot.position.y = Math.min(ori.headPivotHeight, bodyH) - chestPivotY;
   torsoRoot.add(headPivot);
 
-  const head = makeBox(HS, HS, HS, colors.head);
-  head.position.y = HS / 2;
-  headPivot.add(head);
+  if (murloc) {
+    // 鱼头：三层颅骨 + 前突吻部 + 侧置凸眼 + 头冠鳍 + 鳃（`murloc-parts` 里全是比例值）
+    buildMurlocHead(headPivot, HS, colors);
+  } else {
+    const head = makeBox(HS, HS, HS, colors.head);
+    head.position.y = HS / 2;
+    headPivot.add(head);
 
-  // 眼睛：贴在 +Z 面，跟随头部枢轴，用于验收「面朝向」是否正确
-  const eyeMat = new THREE.MeshLambertMaterial({ color: '#1b2733' });
-  for (const sx of [-1, 1]) {
-    const eye = new THREE.Mesh(
-      new THREE.BoxGeometry(0.06 * headScale, 0.07 * headScale, 0.02 * headScale), eyeMat,
-    );
-    eye.position.set(
-      sx * 0.09 * headScale, (H / 2 + 0.03) * headScale, (H / 2 + 0.011) * headScale,
-    );
-    headPivot.add(eye);
+    // 眼睛：贴在 +Z 面，跟随头部枢轴，用于验收「面朝向」是否正确
+    const eyeMat = new THREE.MeshLambertMaterial({ color: '#1b2733' });
+    for (const sx of [-1, 1]) {
+      const eye = new THREE.Mesh(
+        new THREE.BoxGeometry(0.06 * headScale, 0.07 * headScale, 0.02 * headScale), eyeMat,
+      );
+      eye.position.set(
+        sx * 0.09 * headScale, (H / 2 + 0.03) * headScale, (H / 2 + 0.011) * headScale,
+      );
+      headPivot.add(eye);
+    }
   }
 
   // ---- v9s.52 造型特征：地中海发型 / 长白胡子（盒数刻意压到 6 个） ----
@@ -537,9 +554,14 @@ export function createVoxelRig(
     shin.position.y = -legLen / 4;
     knee.add(shin);
 
-    const shoe = makeBox(t * 1.15, 0.07, t * 1.7, colors.shoe);
-    shoe.position.set(0, -legLen / 2 + 0.035, 0.045); // 脚尖朝 +Z
-    knee.add(shoe);
+    if (murloc) {
+      // 蹼足：脚掌前后拉到 0.26m（人形是 t×1.7≈0.18），压在同一踝高上
+      buildMurlocFoot(knee, t, legLen, colors);
+    } else {
+      const shoe = makeBox(t * 1.15, 0.07, t * 1.7, colors.shoe);
+      shoe.position.set(0, -legLen / 2 + 0.035, 0.045); // 脚尖朝 +Z
+      knee.add(shoe);
+    }
 
     // IK 末端锚点：小腿末端（脚踝）。不含鞋的视觉偏移，FK / IK 才能精确互为逆运算。
     const tip = new THREE.Object3D();
@@ -590,9 +612,14 @@ export function createVoxelRig(
     hand.position.y = -armLen / 2;
     elbow.add(hand);
 
-    const palm = makeBox(t * 1.1, 0.09, t * 1.1, colors.head);
-    palm.position.y = 0.045;
-    hand.add(palm);
+    if (murloc) {
+      // 蹼掌：宽掌 + 三指 + 指间薄蹼；挂点与 palm 相同，握持 IK 的靶点不变
+      buildMurlocHand(hand, t, colors);
+    } else {
+      const palm = makeBox(t * 1.1, 0.09, t * 1.1, colors.head);
+      palm.position.y = 0.045;
+      hand.add(palm);
+    }
 
     // v9s.24：腕关节。默认 identity，所以「不给它写值」= 与旧版逐帧一致；
     // 只有 applyWrist 会在攻击 / 快速摆臂时给它一个滞后角。
@@ -621,6 +648,17 @@ export function createVoxelRig(
       sp.position.set(sx * (bodyW / 2 + t * 0.4), bodyH - 0.05 - chestPivotY, 0);
       torsoRoot.add(sp);
     }
+  }
+
+  // ---- v9s.63 鱼人的「非人类」两件：背鳍 + 短尾 ----
+  if (murloc) {
+    // 背鳍挂 `torsoRoot`（开脊柱分段时就是 chest）并与肩共用 baseY：
+    // 挂 `upper` 的话大幅挥击时背鳍不跟着胸段弯折，会在背上浮起来。
+    buildMurlocDorsalFin(torsoRoot, bodyH, torsoD, bodyH - chestPivotY);
+    buildMurlocShoulderFin(torsoRoot, bodyW, bodyH, bodyH - chestPivotY);
+    buildMurlocBelly(torsoRoot, bodyW, torsoD, bodyH, bodyH - chestPivotY);
+    // 短尾挂 `pelvis`：跟着屁股走。挂 `lower` 会被腿的转体甩到一侧。
+    buildMurlocTail(pelvis, HS, torsoD);
   }
 
   // v8g：两骨 IK 的腿描述（大腿 / 小腿各 legLen/2，膝向后折）。

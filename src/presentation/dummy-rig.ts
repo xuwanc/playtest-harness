@@ -11,9 +11,13 @@
 import * as THREE from 'three';
 import { wrapAngle } from '../core';
 import type {
-  ColorConfig, DummyMode, DummyState, DummyViewConfig, GaitViewConfig, HurtViewConfig,
-  IKViewConfig, LeanViewConfig, VoxelConfig,
+  ColorConfig, DummyMode, DummyState, DummyVariant, DummyViewConfig, GaitViewConfig,
+  HurtViewConfig, IKViewConfig, LeanViewConfig, VoxelConfig,
 } from '../core';
+import {
+  buildMurlocBelly, buildMurlocDorsalFin, buildMurlocFoot, buildMurlocHead,
+  buildMurlocShoulderFin, buildMurlocTail,
+} from './murloc-parts';
 import {
   solveGait, solveStopGait, nextFeetTogetherPhase, strafeHipYaw, backStrafeKeep,
   backHipYawTarget,
@@ -68,6 +72,9 @@ export function createDummyRig(
    *  线上由 three-scene 传入 view.lean / view.ik 开启。 */
   leanCfg?: LeanViewConfig,
   ikCfg?: IKViewConfig,
+  /** v9s.63：造型变体。`murloc` 只换头 / 脚 / 背鳍 / 尾，骨架与骨骼名不变 ——
+   *  断肢映射（`SEVER_NODE` 按节点名查找）、步态、受击、倒地全部直接复用。 */
+  variant: DummyVariant = 'human',
 ): DummyRig {
   const ikConfig: IKViewConfig = ikCfg ?? {
     enabled: false, weight: 0, attackScale: 1, maxCorrectionDeg: 70,
@@ -97,6 +104,13 @@ export function createDummyRig(
     return mesh;
   };
 
+  // v9s.63：鱼人不吃 tint（每个假人一种专属色），四条鱼人统一是青绿色 ——
+  // 「鱼人是一群同种生物」，颜色区分交给别的手段。
+  const murloc = variant === 'murloc';
+  const mc: ColorConfig = murloc
+    ? { ...colors, body: '#4f9c78', head: '#5fb692', limb: '#3d7f61', shoe: '#2b5d49' }
+    : colors;
+
   const H = v.headSize;
   const legLen = v.legLength;
   const armLen = v.armLength;
@@ -104,7 +118,7 @@ export function createDummyRig(
   const bodyH = v.bodyHeight;
   const bodyW = v.bodyWidth;
 
-  const torso = mk(bodyW, bodyH, 0.28, tint);
+  const torso = mk(bodyW, bodyH, 0.28, murloc ? mc.body : tint);
   torso.position.y = bodyH / 2;                 // 相对骨盆
   upper.add(torso);
 
@@ -115,16 +129,34 @@ export function createDummyRig(
   headPivot.position.y = bodyH;                  // 相对骨盆（脖子在躯干顶）
   upper.add(headPivot);
 
-  // 头也用该假人的专属色：2.5D 俯视角主要看到头顶，这样四个假人一眼可分辨
-  const head = mk(H, H, H, tint);
-  head.position.y = H / 2;
-  headPivot.add(head);
+  if (murloc) {
+    buildMurlocHead(headPivot, H, mc);
+    // 鱼人零件自带材质，不受击闪光的话头会是唯一不闪的部位 —— 明显。
+    // 瞳孔（userData.glow）除外：染红就丢了「暗处发亮」这个唯一的非人信号。
+    headPivot.traverse((o) => {
+      const mat = (o as THREE.Mesh).material;
+      if (mat instanceof THREE.MeshLambertMaterial && !mat.userData.glow) mats.push(mat);
+    });
+  } else {
+    // 头也用该假人的专属色：2.5D 俯视角主要看到头顶，这样四个假人一眼可分辨
+    const head = mk(H, H, H, tint);
+    head.position.y = H / 2;
+    headPivot.add(head);
 
-  // 眼睛贴在 +Z 面，用来验收朝向
-  for (const sx of [-1, 1]) {
-    const eye = mk(0.06, 0.07, 0.02, colors.shoe);
-    eye.position.set(sx * 0.09, H / 2 + 0.03, H / 2 + 0.011);
-    headPivot.add(eye);
+    // 眼睛贴在 +Z 面，用来验收朝向
+    for (const sx of [-1, 1]) {
+      const eye = mk(0.06, 0.07, 0.02, colors.shoe);
+      eye.position.set(sx * 0.09, H / 2 + 0.03, H / 2 + 0.011);
+      headPivot.add(eye);
+    }
+  }
+
+  // v9s.63 鱼人的背鳍 / 肩鳍 / 腹甲：挂 `upper`（dummy 没有脊柱分段，upper 就是躯干）
+  if (murloc) {
+    buildMurlocDorsalFin(upper, bodyH, 0.28, bodyH);
+    buildMurlocShoulderFin(upper, bodyW, bodyH, bodyH);
+    buildMurlocBelly(upper, bodyW, 0.28, bodyH, bodyH);
+    buildMurlocTail(pelvis, H, 0.28);
   }
 
   type Limb = { root: THREE.Group; joint: THREE.Group; tip?: THREE.Object3D };
@@ -158,9 +190,13 @@ export function createDummyRig(
     joint.add(lowerSeg);
 
     if (!isArm) {
-      const shoe = mk(t * 1.15, 0.07, t * 1.7, colors.shoe);
-      shoe.position.set(0, -len / 2 + 0.035, 0.045);
-      joint.add(shoe);
+      if (murloc) {
+        buildMurlocFoot(joint, t, len, mc);
+      } else {
+        const shoe = mk(t * 1.15, 0.07, t * 1.7, colors.shoe);
+        shoe.position.set(0, -len / 2 + 0.035, 0.045);
+        joint.add(shoe);
+      }
       // 小腿末端锚点（不含鞋的视觉偏移），FK / IK 精确互逆
       const tip = new THREE.Object3D();
       tip.name = 'footTip';

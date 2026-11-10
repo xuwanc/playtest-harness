@@ -1,7 +1,7 @@
 import type {
   AssembledPlot, Bounds, CoreConfig, DestructibleSpec, DoorwaySpec, GrassPlotSpec, ObstacleSpec,
-  PlotAssembly, PlotDef, PlotDiagnostics, PlotLayout, PlotSpan, SceneConfig, SlabSpec, StationSpec,
-  StepSpec,
+  DummySpawn, PlotAssembly, PlotDef, PlotDiagnostics, PlotLayout, PlotSpan, SceneConfig, SlabSpec,
+  StationSpec, StepSpec,
 } from './types';
 
 /**
@@ -329,6 +329,8 @@ export function assemblePlots(
       if (d.mode !== undefined) spawn.mode = d.mode;
       if (d.fighter) spawn.fighter = true;
       if (d.weapon !== undefined) spawn.weapon = d.weapon;
+      if (d.variant !== undefined) spawn.variant = d.variant;
+      if (d.health !== undefined) spawn.health = d.health;
       dummySpawns.push(spawn);
     }
 
@@ -449,7 +451,12 @@ export function applyPlotAssembly(
   const fighters = assembly.dummySpawns.filter((d) => d.fighter);
   const fallbackModes = core.dummies.initialModes;
   core.dummies.count = plain.length;
-  core.dummies.spawn = plain.map((d) => ({ x: d.x, z: d.z }));
+  core.dummies.spawn = plain.map((d) => {
+    const s: DummySpawn = { x: d.x, z: d.z };
+    if (d.variant !== undefined) s.variant = d.variant;
+    if (d.health !== undefined) s.health = d.health;
+    return s;
+  });
   core.dummies.initialModes = plain.map(
     (d, i) => (d.mode as typeof fallbackModes[number] | undefined) ?? fallbackModes[i] ?? 'idle',
   );

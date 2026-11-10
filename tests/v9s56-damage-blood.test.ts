@@ -49,8 +49,19 @@ describe('v9s.56 伤害与血量', () => {
       expect(f.health.dead).toBe(false);
       expect(f.health.kills).toBe(0);
     }
-    // 普通假人的血量是 0 —— 它们是测试桩，被打死会让「测距离 / 测 AI」的工位失效
-    for (const d of w.dummies.filter((x) => !x.weapon)) expect(d.health.maxHp).toBe(0);
+    // 普通假人**默认**血量 0 —— 它们是测试桩，被打死会让「测距离 / 测 AI」的工位失效。
+    // v9s.63 起单只可以自带血量（鱼人有血条，否则看不到断头），所以按配置逐只核对：
+    // 「没声明 health 的才必须是 0」。
+    for (let i = 0; i < w.dummies.length; i++) {
+      const d = w.dummies[i];
+      if (d.weapon) continue;
+      const own = w.config.dummies.spawn[i]?.health;
+      if (own !== undefined) {
+        expect(d.health.maxHp).toBe(own);
+        continue;
+      }
+      expect(d.health.maxHp).toBe(0);
+    }
   });
 
   it('木桩（maxHp 0）砍多少下都不死，也不喷血', () => {

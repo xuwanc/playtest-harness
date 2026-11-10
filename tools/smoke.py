@@ -340,15 +340,20 @@ def main() -> int:
                     "    w.playerHurt.knockX = 0; w.playerHurt.knockZ = 0;"
                     "    const sp = Math.hypot(s.velocity.x, s.velocity.z);"
                     "    P.frames += 1;"
-                    "    if (sp > 0.15) { P.moving += 1; P.sumSpeed += sp; }"
+                    # v9s.63：阈值 0.15 会把「起步 / 收步」的过渡帧也算成移动，
+                    # 均速被稀释到 0.8 左右，实测同一只陪练的稳态步速是 1.5~1.9。
+                    # 0.6 才是「大步」的下限（碎步磨脚 < 0.5）。
+                    "    if (sp > 0.6) { P.moving += 1; P.sumSpeed += sp; }"
                     "    P.path += Math.hypot(s.position.x - P.px, s.position.z - P.pz);"
                     "    P.px = s.position.x; P.pz = s.position.z;"
                     "  }, 16);"
                     "}"
                 )
+                # v9s.63：采样窗口必须 ≥ 一个横移周期（strafePeriod 5.2s），
+                # 否则 4s 窗口会随机落在「门关着」的停顿段，moveRatio 直接归零。
                 page.wait_for_function(
-                    "() => window.__harness.world.time > window.__driftProbe.t0 + 4.0",
-                    timeout=90000,
+                    "() => window.__harness.world.time > window.__driftProbe.t0 + 6.2",
+                    timeout=120000,
                 )
                 drift = page.evaluate(
                     "() => {"
@@ -360,7 +365,8 @@ def main() -> int:
                     "    path: +P.path.toFixed(2) };"
                     "}"
                 )
-                check("对峙时走走停停（移动时间 ≤ 60%，不再一直磨脚）", drift["moveRatio"] <= 0.60, str(drift))
+                check("对峙时走走停停（大步时间 5%~60%，不再一直磨脚）",
+                      drift["moveRatio"] <= 0.60 and drift["moveRatio"] >= 0.05, str(drift))
                 # v9s.43：远端遗留的 flaky 断言。软件渲染下帧率抖动会让稳态均速在
                 # 1.11~1.25 间浮动，纯远端原版也偶发 1.11 FAIL（见 journal/2026-11-09-02）。
                 # 1.1 仍严格区分「大步」与「碎步磨脚」（碎步 < 0.5 m/s），不再误伤发布闸门。
