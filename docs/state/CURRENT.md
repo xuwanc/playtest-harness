@@ -1,16 +1,18 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-11 01:34。
+> 最后更新：2026-11-11 07:10。
 
 ## 一句话
 
-v0.9.93：**躯干从「两级台阶」变成一条曲线**（脊柱链 3 段化）+ **老头移动残影**（克隆浅拷贝 + 半透明淡出，纯表现对象池）。
+v0.9.94：**残影方案双轨**（克隆 ghost 池 + RT 反馈）+ **残影通用化与碎裂无序化**。
 ① 本轮（表现层）：`spine.segments` / `spine.pivots`（缺省 3 段、`[0.42, 0.72]`），
 分配数学抽成 `presentation/spine-chain.ts`（俯仰按 waist→chest 线性权重、偏航按 `x^p` 累计曲线，
 两段时逐位退化成 v9s.70）。每级折角降到 1/3，接缝缝宽从 8.8cm 收到 ~3.2cm，补块退回兜底；
 `dummy-rig` 的假人暂时不参与分段。
-② 本轮（纯表现层）新增：老头移动残影 —— 切到 `elder` 移动时按 `spawnInterval`(0.045s) 节流浅克隆 rig 顶层 group（共享几何体与原材质引用），冻结生成时刻的世界位姿、整树换成半透明 `MeshBasicMaterial`（同原材质只建一份副本），按 `baseOpacity*(1-age/life)^fadeExp` 淡出并回收到对象池（`maxGhosts=6`、`life=0.28s`），仅位移 ≥ `minMove` 时生成、静止不残留。
+② 本轮（纯表现层）残影双轨：
+  - **克隆 ghost 池（通用化）**：`bodyTypes` 取数组（空 = 所有角色；v9s.56 只在老头 `elder` 验证，但设计上不绑定某个角色）。移动时浅克隆 rig 顶层 group + 半透明淡出对象池；新增 `spacing`（相邻残影最小世界间距，过密就拉开距离）与随年龄的**碎裂无序化**——子部件沿生成时定死的随机方向散开（`fragment`）+ 各自自转（`fragmentSpin`），越老越碎，`fragmentStart` 控制开始时机。
+  - **RT 反馈（v9s.57，机器人对照测试）**：`sentinel`（哨兵机）单独渲到离屏 `WebGLRenderTarget`（layer 隔离、背景透明），旧帧乘 `decay` + 轻微放大 `scale` 后叠回、当前角色正常混合压上，再合成到屏幕。角色移动时旧帧持续复用 → 自然拉出跟随拖尾 / 雾化残影，且随衰减消散；纯表现、不碰 Core、不引入命中。
 ② 主干已含：Wardrobe 底部抽屉改版 + 待机盾面朝向修正（v0.9.92，`shieldPitchDeg` 8°→70°，见 `systems/wardrobe.md`）、脊柱链偏航沿「髋 → 腰 → 胸」单调 + 髋块 + 鱼人抬头（v0.9.91）、模型空间补偿 + 脚锁（v0.9.89）、鱼人爬姿体态层、哨兵机角色、`rig-fix` 七条造型修正。
 ③ 更早：竖屏操作簇、震屏分档、技能指示器统一口径、文档事实守卫 / 推送护栏 / 四层 CI。
 
@@ -20,15 +22,15 @@ v0.9.93：**躯干从「两级台阶」变成一条曲线**（脊柱链 3 段化
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.93`（内部代号 v9s.72） |
-| 线上徽标 | `v0.9.93`（构建时间随发布变化） |
+| `package.json` 版本 | `0.9.94`（内部代号 v9s.72） |
+| 线上徽标 | `v0.9.94`（构建时间随发布变化） |
 | 发布方式 | `npm run ship`（构建 → 推 main → 重建 `preview` 产物；带凭证自恢复与推送重试） |
 | 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— 此链接固定不变 |
 | 蜘蛛开局 | <https://xuwanc.github.io/playtest-harness/?hero=spider> |
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 鱼人开局 | <https://xuwanc.github.io/playtest-harness/?hero=murloc> |
 | 哨兵机开局 | <https://xuwanc.github.io/playtest-harness/?hero=sentinel> |
-| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 `v0.9.93`（不写死 js 名，构建期注入会变） |
+| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 `v0.9.94`（不写死 js 名，构建期注入会变） |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
@@ -36,7 +38,7 @@ v0.9.93：**躯干从「两级台阶」变成一条曲线**（脊柱链 3 段化
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 124 文件 / 1278 例全绿 |
+| `npx vitest run` | 125 文件 / 1285 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
 | `npm run smoke` | 77/77 PASS |
 | `npm run docs:check` | PASS（107 份文档 ≤300 行，README 99 行） |

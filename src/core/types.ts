@@ -3160,12 +3160,17 @@ export type TrailViewConfig = {
 };
 
 /**
- * 角色移动残影（v9s.56，纯表现层）。
+ * 角色移动残影 · 克隆 ghost 池方案（v9s.56，纯表现层）。
  *
- * 不做后处理、不动主渲染循环：老头移动时按节流间隔浅克隆一次 rig 顶层 group
+ * 不做后处理、不动主渲染循环：移动时按节流间隔浅克隆一次 rig 顶层 group
  * （共享几何体、共享各部件原材质引用），冻结在生成时刻的世界位姿，再统一换成
- * 半透明材质、按年龄淡出后回收进对象池。只对指定 bodyType（默认 `elder`）生效，
+ * 半透明材质、按年龄淡出后回收进对象池。作用于 `bodyTypes`（空 = 所有角色），
  * 站着不动不生成，完全贴合「移动的时候后面有前几帧残影」。
+ *
+ * v9s.57 增强：
+ *  - `spacing` 控制相邻残影的最小世界间距，避免过密（残影「拉一点距离」）；
+ *  - `fragment` / `fragmentExp` / `fragmentStart` / `fragmentSpin` 让残影随年龄
+ *    沿固定随机方向散开 + 自转，读感即「随时间流逝变碎裂无序化」。
  */
 export type AfterimageViewConfig = {
   enabled: boolean;
@@ -3173,6 +3178,8 @@ export type AfterimageViewConfig = {
   maxGhosts: number;
   /** 生成间隔（秒）：移动时每隔这么久生成一张快照，避免每帧堆残影 */
   spawnInterval: number;
+  /** 相邻残影最小世界间距（m）：距离没拉开就不生成，避免过密；0 = 只按时间 */
+  spacing: number;
   /** 单张残影存活时长（秒，≈ 前几帧） */
   life: number;
   /** 触发残影的最低单帧位移（m），低于此值视为静止、不生成 */
@@ -3185,8 +3192,43 @@ export type AfterimageViewConfig = {
   tint: 'keep' | 'tint' | 'mono';
   /** tint / mono 时的颜色（十六进制） */
   color: string;
-  /** 仅对该 bodyType id 生效；缺省（空串）则所有角色都生残影 */
-  bodyType: string;
+  /** 作用角色：空数组 = 所有角色都生残影；否则只对这些 bodyType 生效 */
+  bodyTypes: string[];
+  /** 随年龄的碎裂无序化强度（m）：子部件沿固定随机方向散开的最大距离 */
+  fragment: number;
+  /** 碎裂增长曲线指数（>1 = 越老散得越快） */
+  fragmentExp: number;
+  /** 碎裂开始时机：残影年龄占 life 的比例，超过后才开始散开 */
+  fragmentStart: number;
+  /** 碎裂时的随机自转幅度（弧度）：子部件各自绕固定轴旋转 */
+  fragmentSpin: number;
+};
+
+/**
+ * 角色移动残影 · RT 反馈方案（v9s.57，纯表现层，测试用）。
+ *
+ * 与克隆 ghost 池不同，这里走「离屏 RenderTarget + 逐帧反馈」：每帧把目标角色
+ * 单独渲到一张 RT，再让上一帧的累积残影乘衰减、轻微放大后叠回，最后合成到屏幕。
+ * 角色移动时旧帧被不断复用 → 自然拉出跟随的拖尾 / 雾化残影，且天然「随时间消散」。
+ *
+ * 默认作用于机器人（`sentinel`）做对照测试；纯表现，不碰 Core、不引入命中。
+ */
+export type AfterimageRtViewConfig = {
+  enabled: boolean;
+  /** 作用角色：空数组 = 所有角色；否则只对这些 bodyType 生效 */
+  bodyTypes: string[];
+  /** 反馈衰减：每帧旧残影乘以该系数（<1 表示逐渐消失） */
+  decay: number;
+  /** 反馈时的轻微放大（>1）：让残影向外扩散、产生无序拖尾 smear */
+  scale: number;
+  /** 合成到屏幕的强度（0..1+） */
+  intensity: number;
+  /** 合成混合模式：'add' 叠加发光 / 'normal' 正常混合 */
+  mode: 'add' | 'normal';
+  /** 着色：'keep' 保留原色 / 'tint' 用 color 着色 / 'mono' 单色 */
+  tint: 'keep' | 'tint' | 'mono';
+  /** tint / mono 时的颜色（十六进制） */
+  color: string;
 };
 
 /**
@@ -3563,8 +3605,10 @@ export type ViewConfig = {
   projectiles: ProjectileViewConfig;
   /** v9s.22：挥击拖尾（刀光） */
   weaponTrail: TrailViewConfig;
-  /** v9s.56：角色移动残影（纯表现，克隆浅拷贝 + 半透明淡出，默认仅老头） */
+  /** v9s.56：角色移动残影 · 克隆 ghost 池（纯表现） */
   afterimage: AfterimageViewConfig;
+  /** v9s.57：角色移动残影 · RT 反馈（纯表现，机器人对照测试） */
+  rtAfterimage: AfterimageRtViewConfig;
   /** v9s.22：命中定格（纯表现，只冻角色姿态，不冻 Core） */
   hitstop: HitstopViewConfig;
   /** v9s.37 · 击地冲击（大剑第三击）的尘环 / 震动 */

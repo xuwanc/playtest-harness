@@ -12,13 +12,18 @@ const baseCfg: AfterimageViewConfig = {
   enabled: true,
   maxGhosts: 6,
   spawnInterval: 0.045,
+  spacing: 0,
   life: 0.28,
   minMove: 0.012,
   baseOpacity: 0.34,
   fadeExp: 1.8,
   tint: 'keep',
   color: '#9fdcff',
-  bodyType: 'elder',
+  bodyTypes: ['elder'],
+  fragment: 0,
+  fragmentExp: 1,
+  fragmentStart: 0,
+  fragmentSpin: 0,
 };
 
 function makeTarget() {
@@ -151,5 +156,43 @@ describe('v9s.56 老头移动残影：对象池与半透明淡出', () => {
     for (let i = 0; i < 3; i++) step(ai, target, root, 0.1);
     ai.reset();
     expect(ai.debug().active).toBe(0);
+  });
+
+  it('spacing：距离没拉开（< spacing）时不生成残影，避免过密', () => {
+    const cfg = { ...baseCfg, spacing: 0.5 };
+    const { root, target } = makeTarget();
+    const ai = createAfterimage(cfg);
+    root.position.x += 0.3; // 单帧位移 0.3m < spacing 0.5，即便时间已够也不生成
+    ai.update(0.2, target, root, true, 'elder');
+    expect(ai.debug().active).toBe(0);
+  });
+
+  it('spacing：位移拉开到 ≥ spacing 才生成残影', () => {
+    const cfg = { ...baseCfg, spacing: 0.1 };
+    const { root, target } = makeTarget();
+    const ai = createAfterimage(cfg);
+    root.position.x += 0.15; // ≥ spacing 0.1 且时间够
+    ai.update(0.2, target, root, true, 'elder');
+    expect(ai.debug().active).toBe(1);
+  });
+
+  it('碎裂无序化：残影随年龄沿固定方向散开 + 自转，生成瞬间不散', () => {
+    const cfg = {
+      ...baseCfg, spacing: 0, fragment: 0.2, fragmentExp: 1, fragmentStart: 0.3, fragmentSpin: 0.8,
+    };
+    const { root, target } = makeTarget();
+    const ai = createAfterimage(cfg);
+    step(ai, target, root, 0.1); // 生成一张，t=0：不应散开
+    const holder = ai.container.children.find((h) => h.visible)!;
+    const snap = holder.children[0]!;
+    const mesh = snap.children[0] as THREE.Mesh;
+    const basePos = (mesh.userData._basePos as THREE.Vector3).clone();
+    const baseQuat = (mesh.userData._baseQuat as THREE.Quaternion).clone();
+    expect((mesh.position as THREE.Vector3).distanceTo(basePos)).toBeCloseTo(0, 5);
+
+    // 推进到 age > life*fragmentStart（0.28*0.3≈0.084s）
+    ai.update(0.2, target, root, false, 'elder');
+    expect((mesh.position as THREE.Vector3).distanceTo(basePos)).toBeGreaterThan(0.001);
+    expect((mesh.quaternion as THREE.Quaternion).angleTo(baseQuat)).toBeGreaterThan(0.001);
   });
 });
