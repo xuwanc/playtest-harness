@@ -12,6 +12,13 @@
     <!-- v9f：徽标同时是诊断入口，点开可「复制摘要」导出最近 20 秒的输入 / 位移 / 异常 -->
     <button id="version-badge" type="button" data-ui-button aria-label="打开诊断记录"></button>
 
+    <!-- v9s.x：装备 / 外观展示界面入口。玩家向功能，刻意不塞进顶部「调试胶囊行」——
+         那排 7 个胶囊在横屏下已与居中武器条重叠，再加一个会被武器条拦截点击。
+         独立浮标固定在右侧垂直居中（横竖屏都不与操作簇 / 性能条 / 武器条相撞），
+         打开的是独立浮层（惰性第二 WebGL 上下文），与互斥读数面板无关。 -->
+    <button id="wardrobe-toggle" type="button" data-ui-button data-ui-region
+            aria-expanded="false" aria-controls="wardrobe" aria-label="打开装备展示界面">装备</button>
+
     <!-- v9r：三个调试入口收成一排胶囊，默认全部收起；点开才在下方展开对应面板。
          旧「操作说明」#hint 判定为不必要已移除：手机有屏幕按钮、按钮带 aria-label，
          完整按键表见 docs/systems/input-controls.md，版本说明见 README；那块默认收起、8s 自动收回的长文案从未被看到。 -->

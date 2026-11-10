@@ -185,6 +185,40 @@ html, body {
   font-weight: 400;
 }
 
+/* v9s.x：装备展示入口 —— 独立浮标，不进顶部调试胶囊行（那排在横屏已与武器条
+   重叠，再加一个会被武器条拦截点击）。固定在右侧垂直居中：横屏避开居中的武器条
+   与右上性能条，竖屏避开右下操作簇，两边都不相撞。琥珀色区分「打开一个界面」。 */
+#wardrobe-toggle {
+  position: fixed;
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 22;                 /* 高于胶囊行/武器条(20)/性能条(21) */
+  width: 46px;
+  padding: 10px 0;
+  border: 1px solid rgba(224, 178, 110, 0.7);
+  border-radius: 10px;
+  background: rgba(92, 66, 34, 0.82);
+  color: #ffe6c2;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 1px;
+  writing-mode: vertical-rl;    /* 竖排两字，像抽屉把手 */
+  text-orientation: upright;
+  cursor: pointer;
+  touch-action: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+}
+#wardrobe-toggle:active { background: rgba(130, 92, 40, 0.95); }
+#wardrobe-toggle[aria-expanded='true'] {
+  border-color: rgba(255, 205, 130, 0.9);
+  color: #fff2dc;
+  background: rgba(120, 84, 34, 0.95);
+}
+
 /* ---- v9s.15：测试工位面板（点名字传送） ---- */
 #lab-panel {
   width: min(272px, 80vw);
@@ -1027,4 +1061,151 @@ html, body {
 @media (orientation: portrait) and (max-width: 620px) {
   #perf-meter { top: 100px; right: calc(6px + env(safe-area-inset-right, 0px)); }
   #perf-meter .perf-spark { width: 64px; height: 18px; }
+}
+/* =====================================================   v9s.x：装备 / 外观展示界面（Wardrobe）
+   独立浮层 —— 遮罩盖住主场景但不暂停它；卡片内左侧是惰性创建的
+   3D 转台（#wardrobe-stage），右侧是数据驱动的外观 / 装备槽位。
+   ============================================================ */
+#wardrobe {
+  position: fixed;
+  inset: 0;
+  z-index: 40;                 /* 高于胶囊行(20)/性能条(21)/武器条(20)，低于 toast(99) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  background: rgba(6, 9, 14, 0.72);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+#wardrobe.is-off { display: none; }
+#wardrobe.is-open { display: flex; }
+
+.wardrobe-card {
+  width: min(900px, 96vw);
+  height: min(600px, 88vh);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(150, 190, 225, 0.32);
+  border-radius: 10px;
+  background: linear-gradient(160deg, #182231 0%, #101821 100%);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.wardrobe-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(120, 160, 200, 0.18);
+}
+.wardrobe-title { font-size: 15px; font-weight: 700; color: #eaf4ff; letter-spacing: 0.6px; }
+.wardrobe-sub { font-size: 11px; font-weight: 400; color: rgba(180, 205, 230, 0.6); }
+.wardrobe-tip { margin-top: 3px; font-size: 10px; color: rgba(160, 190, 215, 0.72); letter-spacing: 0.3px; }
+.wardrobe-close {
+  flex: 0 0 auto;
+  width: 30px; height: 30px;
+  border: 1px solid rgba(150, 180, 210, 0.35);
+  border-radius: 6px;
+  background: rgba(30, 42, 56, 0.8);
+  color: #cfe0f0;
+  font-size: 14px;
+  cursor: pointer;
+  touch-action: none;
+}
+.wardrobe-close:active { background: rgba(90, 50, 50, 0.8); color: #fff; }
+
+.wardrobe-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+.wardrobe-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  background: radial-gradient(ellipse at 50% 42%, #223348 0%, #131c28 62%, #0c121a 100%);
+  cursor: grab;
+  touch-action: none;          /* 拖动旋转 / 视线跟随都不能被系统手势接管 */
+  overflow: hidden;
+}
+.wardrobe-stage:active { cursor: grabbing; }
+.wardrobe-canvas { display: block; width: 100%; height: 100%; }
+.wardrobe-yaw {
+  position: absolute;
+  left: 10px; bottom: 10px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: rgba(8, 14, 20, 0.62);
+  color: #9fd0ee;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  pointer-events: none;
+}
+
+.wardrobe-side {
+  flex: 0 0 244px;
+  border-left: 1px solid rgba(120, 160, 200, 0.18);
+  padding: 8px 10px;
+  overflow-y: auto;
+  background: rgba(10, 16, 24, 0.5);
+}
+.wardrobe-sec { margin-bottom: 12px; }
+.wardrobe-sec-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 6px; margin-bottom: 6px;
+  padding-left: 6px;
+  border-left: 2px solid rgba(224, 178, 110, 0.66);
+}
+.wardrobe-sec-head b { font-size: 11px; color: #ffeccf; letter-spacing: 0.5px; }
+.wardrobe-sec-head span { font-size: 9px; color: rgba(165, 190, 212, 0.62); }
+.wardrobe-items { display: flex; flex-wrap: wrap; gap: 4px; }
+.wardrobe-chip, .wardrobe-slot {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 34px; height: 25px;
+  padding: 0 6px;
+  border: 1px solid rgba(130, 165, 200, 0.3);
+  border-radius: 6px;
+  background: rgba(24, 34, 46, 0.7);
+  color: rgba(200, 220, 238, 0.85);
+  font-family: inherit; font-size: 10px;
+  touch-action: none; cursor: pointer;
+}
+/* 占位格数字 / 单字用等宽窄格，6 个背包格能整齐排一行 */
+.wardrobe-slot { min-width: 30px; padding: 0 4px; }
+.wardrobe-chip:active { background: rgba(70, 110, 150, 0.7); }
+.wardrobe-chip.is-active {
+  border-color: rgba(130, 205, 255, 0.85);
+  background: rgba(40, 92, 130, 0.8);
+  color: #fff;
+}
+.wardrobe-dye i {
+  width: 10px; height: 10px; margin-right: 5px;
+  border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.35);
+}
+.wardrobe-slot {
+  cursor: default;
+  border-style: dashed;
+  border-color: rgba(120, 150, 180, 0.28);
+  color: rgba(150, 175, 200, 0.5);
+  background: rgba(18, 26, 36, 0.5);
+}
+
+/* 竖屏：转台在上、槽位在下，横向排布避免把 3D 舞台压成一条 */
+@media (orientation: portrait) {
+  .wardrobe-card { height: min(760px, 92vh); }
+  .wardrobe-body { flex-direction: column; }
+  .wardrobe-stage { flex: 1 1 58%; min-height: 0; }
+  .wardrobe-side {
+    flex: 1 1 42%;
+    border-left: none;
+    border-top: 1px solid rgba(120, 160, 200, 0.18);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 10px;
+  }
+  .wardrobe-sec { margin-bottom: 4px; }
 }
