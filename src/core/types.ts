@@ -3202,6 +3202,14 @@ export type AfterimageViewConfig = {
   fragmentStart: number;
   /** 碎裂时的随机自转幅度（弧度）：子部件各自绕固定轴旋转 */
   fragmentSpin: number;
+  /**
+   * v9s.59：深度/透明模式。'hash'（默认）= alphaHash 随机透明，进不透明队列 + 写深度，
+   * 根治多部件半透明交叉面干涉、让残影被角色本体正确遮挡（「画在背后」）；
+   * 'blend' = 旧的半透明混合（transparent + depthWrite:false + DoubleSide），供 A/B 对比。
+   */
+  depthMode?: 'hash' | 'blend';
+  /** v9s.59：生成时沿运动反方向把整张快照后推的米数（默认 0.05），避免与角色共面干涉 */
+  behindBias?: number;
 };
 
 /**
@@ -3229,6 +3237,20 @@ export type AfterimageRtViewConfig = {
   tint: 'keep' | 'tint' | 'mono';
   /** tint / mono 时的颜色（十六进制） */
   color: string;
+  /**
+   * v9s.59：RT 采样率（0.2~1，默认 0.5）。三张 RT 按 drawingBuffer×该值建，
+   * 填充率降到 scale²；compose 线性放大顺带得到一次免费模糊。RT 最有效的性能旋钮。
+   */
+  resolutionScale?: number;
+  /** v9s.59：低成本模糊半径（RT 像素，默认 0.8）。accum pass 内 5-tap 十字 box blur，不新增 pass */
+  blur?: number;
+  /**
+   * v9s.59：相机缩放解耦（默认 true）。扩散锚定角色屏幕投影 + 历史帧按 prevDist/curDist
+   * 重投影 + 扩散/模糊按相机距离归一 → 拖尾「在场景里大小不随相机缩放」。
+   */
+  worldScale?: boolean;
+  /** v9s.59：相机参考距离（0=首帧自学习）。用于把扩散量归一化到该距离下的世界尺度 */
+  refDistance?: number;
 };
 
 /**
