@@ -160,7 +160,7 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（127 文件 / 1304 例） | 提交前 |
+| `npm test` | vitest 全量（128 文件 / 1312 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
 | `npm run smoke` | 起 `dist/`，跑 77 项画面层 + 契约自检 | 发布前 |
@@ -208,6 +208,7 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/core-contract.md`](systems/core-contract.md) | 跨语言重写的逐项对照表 |
 | [`systems/combat.md`](systems/combat.md) | 武器、连击、命中、受击、击退 |
 | [`systems/animation.md`](systems/animation.md) | 连击骨架锚点 / 平衡 / 节奏 / 加动作清单（规范） |
+| [`systems/anim-layers.md`](systems/anim-layers.md) | 动画层注册表：谁允许写哪根骨头、越权 / 双覆盖怎么查 |
 | [`systems/idle-stance.md`](systems/idle-stance.md) | 待机斜跨站姿：前脚锁定、三条「不写」、参数与门控 |
 | [`systems/pose-entry.md`](systems/pose-entry.md) | 动作进出场：起手接待机、收招交还待机、剑身通道也要淡 |
 | [`systems/damage-death.md`](systems/damage-death.md) | 伤害 / 血量 / 死亡 / 重生：三个旋钮、七处跳过、倒→沉→升、**断肢规则表 / 倒杆物理** |

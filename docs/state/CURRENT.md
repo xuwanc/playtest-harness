@@ -1,46 +1,23 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-11 07:10。
+> 最后更新：2026-11-11 10:10。
 
 ## 一句话
 
-v0.9.96：**残影收敛为可复用特效库 + 交叉面干涉根治 + 双方案性能优化**。`presentation/effects/` 统一 `AfterimageEffect` 接口 + 工厂/注册表，任意角色 / 任意方案可复用；ghost 改 `alphaHash`（写深度、不透明队列）根治老头头部「残影交叉面干涉」并真正「画在背后」；RT 降采样 + 5-tap 模糊 + 相机缩放重投影解耦 + pass 合并 + 静止停跑。
-（上一版 v0.9.95：攻击层改四元数增量 + 残影双轨修复——RT 拖尾此前不显示、老头残影掉帧，均已修。）
-① 本轮（姿态层 · v9s.73）：**攻击层从「欧拉逐轴覆盖」变成「四元数增量」**——躯干按
-`delta = 站姿⁻¹ ⊗ 攻击姿势`、`final = 基础 ⊗ slerp(I, delta, w)` 叠加。
-`presentation/pose-quat.ts`（快照 / 增量 / 合成 / 最大转角，纯函数）；`voxel-rig` 的
-`captureBasePose` 抓四元数、`buildAttackReference` 解持械站姿当基准、`blendCombatPose`
-改四元数合成（满权重也合成）。满权重与旧绝对姿态逐位一致，大角度切换走最短弧。
-**手臂不走这条路径**：`shoulder` 是 YXZ，抬臂 −1.9 rad 时四元数→欧拉会翻支、
-下游按 `rotation.x` 读抬臂角全错（举顶仰角 89°→78°），所以 `POSE_NODES` 只有 `[upper]`。
-顺手修了 `applyCombatPose` 归零 `upper.rotation.y` 吃掉持械站姿（剑盾 0.12 → 0.03 rad）。
-① 本轮（表现层）：`spine.segments` / `spine.pivots`（缺省 3 段、`[0.42, 0.72]`），
-分配数学抽成 `presentation/spine-chain.ts`（俯仰按 waist→chest 线性权重、偏航按 `x^p` 累计曲线，
-两段时逐位退化成 v9s.70）。每级折角降到 1/3，接缝缝宽从 8.8cm 收到 ~3.2cm，补块退回兜底；
-`dummy-rig` 的假人暂时不参与分段。
-② 本轮（纯表现层）残影双轨：
-  - **克隆 ghost 池（通用化）**：`bodyTypes` 取数组（空 = 所有角色；v9s.56 只在老头 `elder` 验证，但设计上不绑定某个角色）。移动时浅克隆 rig 顶层 group + 半透明淡出对象池；新增 `spacing`（相邻残影最小世界间距，过密就拉开距离）与随年龄的**碎裂无序化**——子部件沿生成时定死的随机方向散开（`fragment`）+ 各自自转（`fragmentSpin`），越老越碎，`fragmentStart` 控制开始时机。
-  - **RT 反馈（v9s.57，机器人对照测试）**：`sentinel`（哨兵机）单独渲到离屏 `WebGLRenderTarget`（layer 隔离、背景透明），旧帧乘 `decay` + 轻微放大 `scale` 后叠回、当前角色正常混合压上，再合成到屏幕。角色移动时旧帧持续复用 → 自然拉出跟随拖尾 / 雾化残影，且随衰减消散；纯表现、不碰 Core、不引入命中。
-② v9s.58 修复（本轮）：
-  - **RT 拖尾不显示**：根因是 layer 隔离渲染时灯光只在 layer 0，RT 里角色无光照→全黑剪影，Additive 叠加等于 0；且场景 `background` 未屏蔽会染色整屏。修复：把场景灯光也 `enable(layer1)`、RT 捕获时临时把 `scene.background` 置空、首次进入清空双缓冲。拖尾参数微调（`decay` 0.86→0.9、拖尾更长）。
-  - **老头残影掉帧**：根因是 `spawn()` 每帧 `target.clone(true)` 深克隆整棵 rig + 为每个 mesh `new MeshBasicMaterial`、过期又 `dispose`，体素角色几十上百 mesh，移动时每 0.09s 一次 → 海量短命对象 + GC 抖动。修复：每个对象池槽位**只首次克隆一次整棵 rig**，之后只把当前姿态回写进已克隆树（复制局部 transform，零分配）、复用首建私有材质；仅 rig 整体被替换（换 bodyType）才重建。`tests/v9s56` 新增「稳态零分配、不重复深克隆」断言。
-② v9s.59 特效库 + 性能（本轮，见 `presentation/effects/`）：
-  - **可复用特效库**：`shared.ts`（统一 `AfterimageEffect` / `EffectContext` / `AfterimageDebug` 性能读数 / PRNG）、`ghost-afterimage.ts`、`rt-afterimage.ts`、`index.ts`（`createAfterimageEffect(kind, …)` 工厂 + `AFTERIMAGE_EFFECTS` 注册表）。旧 `elder-afterimage.ts` / `rt-afterimage.ts` 退为兼容转发层。库不认识 World/Core、不绑定 bodyType，加新方案只需登记一项。
-  - **需求1 · 老头头部交叉面干涉 / 画在背后**：根因是旧 `transparent + depthWrite:false + DoubleSide` 半透明混合，多部件体素 rig 的面片互相叠加、与角色本体交叉 → Z 闪烁、糊成一团。改用 **`alphaHash` 随机透明**（`transparent:false` 进不透明队列、`depthWrite/depthTest:true`、`FrontSide`）：片元按屏幕哈希抖动保留，不做混合 → 无透明排序、无自相交，且按深度被角色本体正确遮挡。`behindBias` 再沿运动反方向把快照后推一小段避免共面。每帧改 `opacity` 仍驱动抖动密度淡出。`depthMode:'blend'` 可切回旧混合做 A/B 对比。
-  - **需求2 · RT 降采样**：`resolutionScale`（默认 0.5）→ 三张 RT 按 drawingBuffer×scale 建，填充率降到 scale²；compose 线性放大顺带一次免费模糊。
-  - **需求3 · 相机缩放解耦 + 低成本模糊**：①扩散中心从写死的屏幕中心改成**角色屏幕投影 anchor**；②反馈采样按 `zoomRatio = prevDist/curDist` **重投影**历史帧，相机缩放时残影跟着一起缩放、不粘屏；③扩散量/模糊半径按相机距离归一。`blur` 在 accum pass 内做 5-tap 十字 box blur，不新增 pass。
-  - **需求4 · 性能评估**（1080p、dpr=2 → 3840×2160）：
-    | 项 | 旧 v9s.58 | 新 v9s.59 | 收益 |
-    |---|---|---|---|
-    | RT 全屏 pass/帧（活动时） | 4（rtCur + decay + add + compose） | 3（rtCur + **accum 合并 decay+add** + compose） | −25% |
-    | RT 填充像素/帧 | 4×8.29M = 33.2M | 3×(8.29M×0.5²) = 6.22M | **−81%** |
-    | RT 静止时 | 仍跑满 4 pass | 残影衰减到阈值后**整套停跑**（0 pass） | 省掉全部离屏开销 |
-    | `clearAcc` | 非匹配角色每帧 2 次 setRT+clear | 仅作用状态切换时 1 次 | 消除每帧浪费 |
-    | ghost 稳态分配 | 过期 `clearSlot` 丢树、下次又深克隆 | 过期只隐藏、**保留克隆树**，永不重复 deep clone | 真正 0 分配 |
-    | ghost 片元 | DoubleSide + 半透明 overdraw | FrontSide + 不透明队列 + early-Z | 显著减 overdraw |
-    | 稳态每帧临时对象 | 每帧 new Vector2/Color | 复用模块级 `_size`/`_clearColor`/`_worldPos`/`_ndc` | 降 GC |
-  - 单测：`v9s59-effects-library`（统一工厂/注册表/接口契约、alphaHash、behindBias、blend 回退、零分配）、`v9s57` 重写（3-pass、降采样、静止停跑、缩放解耦）。
+v0.9.97：**动画层加通道所有权守卫**——层边界采快照做差、帧尾比对 23 层声明表，越权与双覆盖在测试里点名到「层 → 通道」；默认关闭，关闭时每层一次空函数调用，不进快照、不影响确定性。
+（上一版 v0.9.96：残影收敛为可复用特效库 + 交叉面干涉根治 + 双方案性能优化；v0.9.95：攻击层改四元数增量。）
+① 本轮（动画层 · v9s.74）：
+  - `presentation/anim-probe.ts`：`AnimProbe`（快照 / 差量 / 归因）+ 纯函数 `auditFrame`
+    （越权 / 冲突 / 未用）+ `matrixMarkdown`（导出层 × 通道矩阵）。
+  - `presentation/anim-layers.ts`：23 层声明表，语义四类 `add / override / derive / reset`。
+    单列 `derive` 是因为 `splitSpine` / `distributeYaw` 必然改写 `upper.rotation` —— 那是
+    「把总角重新摊到骨链上」，不是「抢所有权」；标成 override 会与 `2.0 combat` 天天报冲突。
+  - `voxel-rig`：23 个 `mark(...)` 边界 + `animProbe()` 出口。只监控 7 节点 / 28 通道
+    （躯干 / 骨盆 / 下盘 / 踝）—— 手臂按设计整层覆盖（YXZ 翻支不能走增量），纳入只会产生噪声。
+  - 验收：六场景（待机 / 行走转身 / 跳跃落地 / 三武器连打 / 受击 / 鱼人体态）`overreach`
+    与 `conflicts` 均为空；删掉一条声明即可复现「越权 2.95 facing → upper.rx」——守卫是带牙的。
+  - 文档：`systems/anim-layers.md`（注册表 + 用法 + 加层清单）、journal `2026-11-11-03`。
 ② 主干已含：Wardrobe 底部抽屉改版 + 待机盾面朝向修正（v0.9.92，`shieldPitchDeg` 8°→70°，见 `systems/wardrobe.md`）、脊柱链偏航沿「髋 → 腰 → 胸」单调 + 髋块 + 鱼人抬头（v0.9.91）、模型空间补偿 + 脚锁（v0.9.89）、鱼人爬姿体态层、哨兵机角色、`rig-fix` 七条造型修正。
 ③ 更早：竖屏操作簇、震屏分档、技能指示器统一口径、文档事实守卫 / 推送护栏 / 四层 CI。
 
@@ -50,15 +27,15 @@ v0.9.96：**残影收敛为可复用特效库 + 交叉面干涉根治 + 双方�
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.96`（内部代号 v9s.59 特效库） |
-| 线上徽标 | `v0.9.96`（构建时间随发布变化） |
+| `package.json` 版本 | `0.9.97`（内部代号 v9s.74 动画层通道守卫） |
+| 线上徽标 | `v0.9.97`（构建时间随发布变化） |
 | 发布方式 | `npm run ship`（构建 → 推 main → 重建 `preview` 产物；带凭证自恢复与推送重试） |
 | 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— 此链接固定不变 |
 | 蜘蛛开局 | <https://xuwanc.github.io/playtest-harness/?hero=spider> |
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 鱼人开局 | <https://xuwanc.github.io/playtest-harness/?hero=murloc> |
 | 哨兵机开局 | <https://xuwanc.github.io/playtest-harness/?hero=sentinel> |
-| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 `v0.9.96`（不写死 js 名，构建期注入会变） |
+| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 `v0.9.97`（不写死 js 名，构建期注入会变） |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
@@ -66,10 +43,10 @@ v0.9.96：**残影收敛为可复用特效库 + 交叉面干涉根治 + 双方�
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 127 文件 / 1304 例全绿 |
+| `npx vitest run` | 128 文件 / 1312 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
 | `npm run smoke` | 77/77 PASS |
-| `npm run docs:check` | PASS（108 份文档 ≤300 行，README 99 行） |
+| `npm run docs:check` | PASS（110 份文档 ≤300 行，README 99 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 | `python3 tools/check-online.py --wait 180` | 发布后核验线上 JS 与本地 `dist` 同一份 |
@@ -80,7 +57,9 @@ v0.9.96：**残影收敛为可复用特效库 + 交叉面干涉根治 + 双方�
 
 ## 正在做
 
-- 无。v0.9.93（脊柱链 3 段化 + 老头移动残影：克隆浅拷贝 + 半透明淡出对象池，纯表现、不动主渲染循环）已落地，待发布。
+- 无。v0.9.97（动画层通道所有权守卫：探针 + 23 层声明表）已合并待发布。
+- 下一步（`anim-layers.md` §6 / `pose-layers.md` §6.2）：体态进 base + `lean` 独立权重旋钮 →
+  三连节奏逐段差异化（`animation.md` §3.1）→ 脚趾关节 + heel-toe roll。
 
 ## 伤害 / 死亡的关键数（改之前先读）
 
@@ -155,7 +134,7 @@ v0.9.96：**残影收敛为可复用特效库 + 交叉面干涉根治 + 双方�
 - **v9s.72：补块是兜底，不是解法**：真正让缝变小的是「每级折角 = 总角 / 段数」；
   加补块只是把还剩的那点缝盖住。先想「能不能多分一级」，再想「要不要补一块」。
 - **v9s.70：多 agent 同时开工时，闸门的第一步 `git fetch` 不能跳**：这台机器 `github.com:443`
-  间歇挂死，跳过 fetch 直接领号会和别人的号撞（本轮撞在 0.9.90 / v9s.69，重领到 0.9.91 / v9s.70）。
+  间歇挂死，跳过 fetch 直接领号会和别人的号撞（本轮撞在 0.9.97 / v9s.69，重领到 0.9.97 / v9s.70）。
 - **旋转中心和俯仰是两件事**：把 pivot 抬到颅中心解决了甩头，但同一批角度会让脸扎地。
   yaw 与 pitch 必须分层，不能共享一个 pivot。
 - **「体态」是独立一层，不是改动作**：它必须插在 `splitSpine` 之前（否则不被摊成腰 / 胸两段，

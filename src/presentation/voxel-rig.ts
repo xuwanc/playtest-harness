@@ -54,6 +54,9 @@ import {
   setPoseNodeIdentity,
 } from './pose-quat';
 import type { PoseQuat } from './pose-quat';
+import { AnimProbe } from './anim-probe';
+import type { ProbeNodeSpec, ProbeReport } from './anim-probe';
+import { ANIM_LAYERS } from './anim-layers';
 import { normalizeSegments, spineWeights, spineYawCurve } from './spine-chain';
 import {
   decayImpact, NEUTRAL_STRETCH, smoothStretch, solveStretch,
@@ -258,6 +261,11 @@ export type VoxelRig = {
     right: BladeGeom | null;
     left: BladeGeom | null;
   };
+  /**
+   * v9s.74：最近一帧的「层 × 通道」审计报告；探针未开启时为 null。
+   * 见 `anim-probe.ts`、`anim-layers.ts`（声明表）。
+   */
+  animProbe(): ProbeReport | null;
   dispose(): void;
 };
 
@@ -795,6 +803,24 @@ export function createVoxelRig(
   const refPose = createPoseQuat(POSE_NODES);
   /** `attackPose ⊗ refPose⁻¹`，每帧复用 */
   const attackDelta = new Float32Array(POSE_NODES.length * 4);
+
+  // ---- v9s.74 通道探针：谁写了哪根骨头的哪个量 ----
+  // 默认关闭（`view.animation.probe.enabled`）。关闭时 `mark` 是一个空函数，
+  // 每层边界只多一次函数调用 —— 不做判空分支，调用点才干净。
+  //
+  // 只监控「会被多层叠加」的通道：躯干 / 骨盆 / 下盘 / 踝。手臂按设计就是覆盖语义
+  // （v9s.73：YXZ 翻支不能走四元数增量），多层写它是约定，不是 bug。
+  const probeNodes: ProbeNodeSpec[] = [
+    { id: 'root', node: root, props: ['ry'] },
+    { id: 'pelvis', node: pelvis },
+    { id: 'lower', node: lower },
+    { id: 'upper', node: upper },
+    { id: 'chest', node: chest, props: ['rx', 'ry', 'rz'] },
+    { id: 'ankleL', node: legL.ankle, props: ['rx', 'ry', 'rz'] },
+    { id: 'ankleR', node: legR.ankle, props: ['rx', 'ry', 'rz'] },
+  ];
+  const probe = animCfg.probe?.enabled ? new AnimProbe(probeNodes) : null;
+  const mark = probe ? (id: string) => probe.mark(id) : (_id: string) => {};
 
   // ---- v9s.53 肩甲：一块方块把「肩宽 + 细臂」的接头补实 ----
   // 体素风格里手臂是一根细棍插在山墙上，肩线单薄；加一块略大于臂的方块，轮廓立刻变厚。
@@ -2412,6 +2438,7 @@ export function createVoxelRig(
       turn?: TurnInPlaceState,
     ): void {
       setWeapon(combat.weapon);
+      probe?.beginFrame();
       // v9s.45：**游戏时间**步长。慢放 / 暂停 / 单步都走 Core 的 world.time，
       // 与 frameDt 的关系是 gameDt = frameDt × timeScale（常速下两者逐位相同）。
       // 只有转身闸门需要它：判定「身体在不在自己转」必须与时间缩放无关，
@@ -2448,6 +2475,9 @@ export function createVoxelRig(
       lower.position.y = 0;
       lower.position.z = 0;
       lower.rotation.z = 0;
+      // v9s.74：归零也算一层 —— 它与所有 override 层天然同通道，但语义不同，
+      // 不参与冲突判定（`ChannelKind` 里的 `reset`）。
+      mark('1.0 reset');
 
       // ---- 移动惯性倾斜（纯表现，帧率无关）----
       // 身体前方单位向量 = (sin(bodyYaw), cos(bodyYaw))；加速度投影 >0 为加速、<0 为刹车。
@@ -2984,6 +3014,7 @@ export function createVoxelRig(
       // ---- v8g IK 基准：步态层刚写完、还没被上层程序动画推走的骨盆 / 下盘 ----
       // 受击后坐 / 落地缓冲 / 攻击跨步 / 惯性下沉都会改写这些值，末尾的 IK 层
       // 会把差值吸收进髋 / 膝角，让脚仍踩在步态决定的落点上。
+      mark('1.2 gait');
       const ikBase = captureIKBase(pelvis, lower);
       // v9s：本帧实际采用的 IK 配置。
       //  - 停步惯性期间强制 weight=1：默认 0.9 会留下约 10% 的水平钉地残差，
@@ -3026,6 +3057,7 @@ export function createVoxelRig(
         pelvis.position.x += idleShift;
         if (ikW <= 0) lower.position.x -= idleShift;
       }
+      mark('1.3 stop');
 
       // 1.5) v8g 惯性分层：盆骨带一点倾斜 + 小幅重心平移 + 移动时略微下沉。
       // 旧版只把惯性倾到 upper，盆骨完全不动，像「上身自己往前折」。现在同一份惯性
@@ -3052,6 +3084,7 @@ export function createVoxelRig(
         pelvis.position.y -= kneeSink;
         lower.position.y += kneeSink * (1 - clamp(ikW, 0, 1));
       }
+      mark('1.5 inertia');
 
       // 1.7) v9s.64 基础体态 · 骨盆升降 / 后坐。
       //   为什么在惯性层之后、战斗姿态之前：它是一个**静止基准**，不能被攻击姿态的
@@ -3067,6 +3100,7 @@ export function createVoxelRig(
         // IK 关闭时把升降补回下盘，脚不跟着飞（与 crouch / kneeSink 同一处理）
         lower.position.y -= lift * (1 - clamp(ikW, 0, 1));
       }
+      mark('1.7 posture-pelvis');
 
       // 2) 战斗姿态覆盖（只在攻击 / 蓄力 / 停顿期间生效）
       //    v9s.29：进出战斗各有一段交叉淡入淡出 —— 先记下「不打这一击时的待机姿态」，
@@ -3106,6 +3140,7 @@ export function createVoxelRig(
         upper.rotation.y += (stanceCfgNow.torsoYaw ?? 0) * stanceWeight;
         upper.rotation.x += (stanceCfgNow.torsoPitch ?? 0) * stanceWeight;
       }
+      mark('1.1 stance');
       if (combatPoseW > 0 || combatActive) {
         captureBasePose();
         // 基准每帧重建：站姿会随武器切换淡入（0.22s），缓存的唯一收益是省一次欧拉合成，
@@ -3117,10 +3152,13 @@ export function createVoxelRig(
       // 旧版 w=1 直接返回、骨骼就是攻击绝对姿态 —— 那样基础里的步态摆臂 / 体态
       // 会被整层覆盖；现在攻击只贡献「相对站姿的偏转」，下面那层原样保留。
       if (combatPoseW > 0) blendCombatPose(combatPoseW);
+      mark('2.0 combat');
       // 2.05) 法杖引导姿态：不进近战状态机，在基础步态之上单独叠加（v7c #12）
       applyChannelPose(channeling, c.gaitPhase);
+      mark('2.05 channel');
       // 2.06) v9a 派生招姿态（举盾前撞）：与 combat.phase 正交，按 link.progress 独立驱动
       applyLinkPose(link);
+      mark('2.06 link');
 
       // 2.1) 大剑移动拖地：非攻击且正在移动时，把剑身额外俯放，剑尖贴近地面。
       //      攻击时 dragAngle 平滑归零，剑回到双手持握基准姿态。
@@ -3146,6 +3184,7 @@ export function createVoxelRig(
       //      受击带来的肩部扭转应让头跟着一起偏，不该被 headPivot 反向抵消。
       const combatSpin = upper.rotation.y;
       applyHurt(hurt, c.bodyYaw);
+      mark('2.5 hurt');
 
       // 2.6) 移动惯性倾斜叠加：启动前倾 / 刹车后仰 / 绕圈侧倾。
       //      受击时减半，避免与受击后仰打架；攻击时速度差分很小，倾斜自然趋零。
@@ -3165,6 +3204,7 @@ export function createVoxelRig(
       upper.rotation.x += leanForward * leanScale + stopChest;
       // 侧移时的程序化身体侧倾（v8）与惯性侧倾叠加；受击时同样减半
       upper.rotation.z += (leanSide + gait.sideLean) * leanScale;
+      mark('2.6 lean');
 
       // 2.7) v8c 跳跃 / 落地蓄力缓冲：纯姿态「叠加」，绝不写 Core 的 position / velocity。
       //  屈膝 + 髋前倾让脚大致留在原地，重心下沉 + 上半身前倾形成「蓄力吸收冲击」，
@@ -3181,6 +3221,7 @@ export function createVoxelRig(
         armL.root.rotation.x -= landCfg.armTuck * landPulse;
         armR.root.rotation.x -= landCfg.armTuck * landPulse;
       }
+      mark('2.7 land');
 
       // 2.8) v8d 挥击跨步层（受 lowerBodyWeight 控制）：所有武器 / 所有攻击段统一叠加。
       //  由 attackProgress 派生、连击左右脚交替领先，两端自动归零不残留；
@@ -3198,17 +3239,20 @@ export function createVoxelRig(
         pelvis.position.y += stride.pelvisY * s;   // 负值 = 重心下沉
         pelvis.rotation.z += stride.pelvisRoll * s;
       }
+      mark('2.8 step');
 
       // 2.85) v9s.23 肩部（上臂根部）位移：必须在手臂角度全部写完之后，
       //   否则读到的是上一帧的俯仰，耸肩会慢一帧；又必须在副手 IK 之前，
       //   否则 IK 会用旧肩点解算，握点差一个肩位移。
       applyShoulderPose(attacking, combat.weapon);
+      mark('2.85 shoulder');
 
       // 2.88) v9s.33 自动重心修正：把骨盆（带着整个上半身）往质心偏的那一侧挪回几毫米。
       //   只处理侧向（前后要靠跨步）；幅度上限 4.5cm，且随 `autoCounter` 关闭。
       if (balanceCfg?.enabled && balanceCfg.autoCounter && Math.abs(balanceShift) > 1e-4) {
         pelvis.position.x += balanceShift;
       }
+      mark('2.88 balance');
 
       // 2.9) v9s.22 四肢 squash & stretch：放在所有姿态层之后、朝向与 IK 之前。
       //  形变只影响骨骼长度与粗细，不写 position / rotation，所以不会和受击、跨步、
@@ -3236,6 +3280,7 @@ export function createVoxelRig(
         lastStretch = { ...NEUTRAL_STRETCH };
       }
       applyStretchPose(lastStretch);
+      mark('2.9 stretch');
 
       // 3) 朝向三段分离：root 已由 three-scene 设为 bodyYaw
       //    下盘 = 上面算出的连续 hipYaw（v8b：跟随移动方向带转，但绝不跨 ±π 跳变）；
@@ -3268,6 +3313,7 @@ export function createVoxelRig(
         // 头前伸：驼背的人脖子会往前探，不是原地低头（下面归零区每帧复位）
         headPivot.position.z = hunch * 0.10;
       }
+      mark('2.95 facing');
 
       // 2.96) v9s.64 基础体态 · 躯干俯仰 / 弓腰 / 头。与 hunch 同一个插入点
       //   （动态层全部写完、splitSpine 之前），所以两者可以叠加而不是互相覆盖。
@@ -3293,10 +3339,12 @@ export function createVoxelRig(
         headPivot.position.z = (posture.headReach ?? 0) * keep;
         headPivot.position.y = headPivotBaseY - (posture.neckDrop ?? 0);
       }
+      mark('2.96 posture');
 
       // v9s.33：躯干总角在此刻已经写完（步态 / 受击 / 惯性 / 持械 / 朝向）。
       // 拆分必须早于腕部与剑身反解 —— 它们读的是「躯干实际朝到哪」。
       splitSpine();
+      mark('3.0 split');
 
       // 3.01) v9s.66/v9s.70 偏航沿链分配。
       //   v9s.66 的教训：写进 `upper` 再拆分，胸段只吃到 42%，「胸的朝向根本没变」。
@@ -3308,6 +3356,7 @@ export function createVoxelRig(
         if (intendedTorso) intendedTorso.y += chestYaw;
       }
       distributeYaw();
+      mark('3.01 yaw');
 
       // 3.0) v9s.64 弓腰：拆分之后再把 waist 折在腰段（`upper` 就是腰段的节点）。
       //   为什么不在拆分前加：那会被 42/58 摊到胸段，读起来是「整根斜」而不是「腰塌了」。
@@ -3317,6 +3366,7 @@ export function createVoxelRig(
         upper.rotation.x += postureAppliedWaist;
         if (intendedTorso) intendedTorso.x += postureAppliedWaist;
       }
+      mark('3.05 waist');
 
       // 3.05) v9s.70 髋块分担俯仰：骨盆 → 腰这一级台阶太陡（0° 对 37°），
       //   背面裂开的楔形洞有 8.8cm，一块不转的髋块盖不住。让它吃 45%，
@@ -3391,6 +3441,7 @@ export function createVoxelRig(
         // 地板兜底：锚点低于角色脚下地面时顶回去（否则 IK 会把脚钉在地里）
         groundY: c.position?.y,
       });
+      mark('4 ik');
 
       // 5) v9s.33：平衡读数放在最后 —— 质点位置要读 IK 之后的真实脚位 / 手位。
       updateBalance(c, dt);
@@ -3455,6 +3506,8 @@ export function createVoxelRig(
       } else {
         spineLeak = 0;
       }
+      // v9s.74：帧尾审计（探针关闭时 `probe` 为 null，这一步不存在）。
+      probe?.endFrame(ANIM_LAYERS);
     },
     lean(): { forward: number; side: number } {
       return { forward: leanForward, side: leanSide };
@@ -3688,6 +3741,9 @@ export function createVoxelRig(
         right: readBlade(parts[currentWeapon].right),
         left: readBlade(parts[currentWeapon].left),
       };
+    },
+    animProbe() {
+      return probe ? probe.report() : null;
     },
     dispose(): void {
       root.traverse((obj) => {

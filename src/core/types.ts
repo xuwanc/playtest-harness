@@ -2975,6 +2975,19 @@ export type ProgramAnimViewConfig = {
   stance?: Record<string, StanceViewConfig>;
   /** v9s.33：脊柱分段（缺省 / enabled=false 时保持单段 upper，逐帧与旧版一致） */
   spine?: SpineViewConfig;
+  /**
+   * v9s.74：动画层「通道所有权」探针（缺省关闭）。
+   *
+   * 打开后 `voxel-rig` 在每层边界采一次快照，帧尾比对「层声明写了哪些通道」与
+   * 「实测写了哪些通道」，结果从 `rig.animProbe()` 读。**纯诊断**：不改姿态、
+   * 不进快照、不影响确定性；关闭时每层只多一次空函数调用。
+   *
+   * 为什么需要它：二十多层的执行顺序只写在注释编号里，历史上反复出现
+   * 「某层把别人的通道抹掉」（v9s.73 的 `upper.rotation.y` 归零吃掉持械站姿）。
+   */
+  probe?: {
+    enabled?: boolean;
+  };
 };
 
 /**
