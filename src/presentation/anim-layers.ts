@@ -113,6 +113,11 @@ export const ANIM_LAYERS: readonly LayerSpec[] = [
     writes: { 'pelvis.px': 'add', 'pelvis.py': 'add', 'pelvis.rz': 'add' },
   },
   {
+    // v9s.76 heel-toe roll：前掌折角。脚掌只有这一层写，每帧整体覆盖（含归零）。
+    id: '2.82 heel-toe',
+    writes: { 'ballL.rx': 'override', 'ballR.rx': 'override' },
+  },
+  {
     // 肩部（上臂根部）位移：写 shoulder.position，不在监控集内。
     id: '2.85 shoulder',
     writes: {},
@@ -182,5 +187,11 @@ export const ANIM_LAYERS: readonly LayerSpec[] = [
       'ankleL.rx': 'override', 'ankleL.ry': 'override', 'ankleL.rz': 'override',
       'ankleR.rx': 'override', 'ankleR.ry': 'override', 'ankleR.rz': 'override',
     },
+  },
+  {
+    // v9s.76：蹬离时抬踝（给前掌下压让出地面）。**唯一**在 IK 之后写 position 的层，
+    // 因为它补偿的是「IK 已经把踝钉死之后」才出现的穿地。
+    id: '4.05 heel-toe lift',
+    writes: { 'ankleL.py': 'add', 'ankleR.py': 'add' },
   },
 ];

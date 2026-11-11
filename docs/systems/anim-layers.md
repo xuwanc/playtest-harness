@@ -33,13 +33,13 @@
 | 概念 | 含义 | 代码 |
 |---|---|---|
 | **层** | 一次成块的姿态写入，边界由 `mark('<id>')` 标出 | `voxel-rig.ts` 里的 `mark(...)` |
-| **通道** | `<节点>.<属性>`，节点只有 7 个：`root / pelvis / lower / upper / chest / ankleL / ankleR` | `anim-probe.ts` 的 `ProbeNodeSpec` |
+| **通道** | `<节点>.<属性>`，节点只有 9 个：`root / pelvis / lower / upper / chest / ankleL / ankleR / ballL / ballR` | `anim-probe.ts` 的 `ProbeNodeSpec` |
 | **语义** | `add`（叠加）/ `override`（独占）/ `derive`（重分配）/ `reset`（归零） | `ChannelKind` |
 
-**为什么只有这 7 个节点**：手臂 / 肩 / 腕 / 剑身按设计就是「整层覆盖」——
+**为什么只有这 9 个节点**：手臂 / 肩 / 腕 / 剑身按设计就是「整层覆盖」——
 v9s.73 已经证明手臂不能走四元数增量（`shoulder` 是 `YXZ`，抬臂 −1.9 rad 时
 四元数→欧拉翻支，举顶仰角 89°→78°）。多层写手臂是约定，纳入监控只会产生噪声。
-监控的是**真正在分层叠加**的地方：躯干、骨盆、下盘、踝。
+监控的是**真正在分层叠加**的地方：躯干、骨盆、下盘、踝、前掌。
 
 **为什么 `derive` 不算冲突**：`splitSpine` 与 `distributeYaw` 必然改写上一层写的
 `upper.rotation` —— 那是「把总角重新摊到骨链上」，不是「抢所有权」。
@@ -64,6 +64,7 @@ v9s.73 已经证明手臂不能走四元数增量（`shoulder` 是 `YXZ`，抬�
 | `2.6 lean` | + | `upper.rx/rz` |
 | `2.7 land` | + | `upper.rx`、`pelvis.py`、`lower.py` |
 | `2.8 step` | + | `pelvis.px/py/rz` |
+| `2.82 heel-toe` | = | `ballL.rx`、`ballR.rx` |
 | `2.85 shoulder` | — | （写 `shoulder.position`，不在监控集） |
 | `2.88 balance` | + | `pelvis.px` |
 | `2.9 stretch` | — | （只写 scale / 骨长） |
@@ -75,6 +76,7 @@ v9s.73 已经证明手臂不能走四元数增量（`shoulder` 是 `YXZ`，抬�
 | `3.1 armDrop` | — | （手臂，不在监控集） |
 | `3.4 / 3.55 / 3.5` | — | （腕 / 剑身 / 副手握持，都不在监控集） |
 | `4 ik` | = | `ankleL.rx/ry/rz`、`ankleR.rx/ry/rz` |
+| `4.05 heel-toe lift` | + | `ankleL.py`、`ankleR.py`（唯一在 IK 之后动 position 的层） |
 
 读表要注意两件事：
 
@@ -117,7 +119,7 @@ __harness.view.animProbe()
 
 ## 6. 已知边界
 
-1. **只监控 7 个节点**。手臂 / 肩 / 腕 / 剑身不查，理由见 §2。
+1. **只监控 9 个节点**。手臂 / 肩 / 腕 / 剑身不查，理由见 §2。
 2. **稳态重复写同值抓不到**。`diff` 判据是「值变了」，某层每帧写同一个数
    （例如站姿恒定 0.12）第二帧起就不算写。所以 `unused` 会随帧累积，
    只能当信息项。要根治得拦截 `position.x` 的 setter（Three 内部读写太密，代价不值）。
