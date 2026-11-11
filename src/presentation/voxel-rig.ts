@@ -33,6 +33,7 @@ import {
   stopYawFade, solveTurnStep, slewDirSign, slewHipTarget, turnSpinGate,
   hipFlipWeight, hipTrackRate, slewGate,
   idleStanceConfig, idleStanceTarget, leadFootIsLeft, mixIdleStance, solveIdleStance,
+  heelToeAngle,
 } from './gait';
 import type { GaitInput } from './gait';
 import {
@@ -235,6 +236,13 @@ export type VoxelRig = {
     /** v9s.55：待机斜跨（权重 / 前脚是否左 / 下沉 / 重心侧移 / 下半身偏转） */
     idleW: number; idleFrontLeft: boolean; idleSink: number; idleShift: number;
     idleHipYaw: number;
+    /** v9s.76：前掌折角（rad，正 = 脚尖下压 / 脚跟抬起）。验收 heel-toe roll 读它。 */
+    ballL: number; ballR: number;
+    /**
+     * v9s.76：两只脚（含鞋）的世界最低点 y。折角改的是几何，穿不穿地只能看这个 ——
+     * 截图里黑靴子在黑背景上根本分不出「脚尖入地 1cm」。正常值应 ≈ 0（±5mm）。
+     */
+    footMinYL: number; footMinYR: number;
   };
   /** 本帧 gait 速度投影用的世界朝向（= bodyYaw + hipYaw，即下盘实际朝向），
    *  供验收「腿摆动方向」：投影基准必须与腿所在坐标系一致，否则非正前方时方向被歪。 */
@@ -294,7 +302,18 @@ type Limb = {
   segLen: number;
 };
 /** 腿额外带一个末端标记，供 IK 取世界锚点（小腿末端，不含鞋的视觉偏移）。 */
-type Leg = Limb & { tip: THREE.Object3D; ankle: THREE.Group };
+type Leg = Limb & {
+  tip: THREE.Object3D;
+  ankle: THREE.Group;
+  /**
+   * v9s.76：前掌关节（ball）。脚掌拆成「后掌挂踝 / 前掌挂 ball」两段，
+   * ball.rx 一拧，前掌就绕脚掌中部转 —— 这就是 heel-toe roll 的枢轴。
+   * 蹼足 / 机械脚整只挂在踝上，ball 是空节点（读作「这一体型没有脚掌分段」）。
+   */
+  ball: THREE.Group;
+  /** 前掌长度（m，ball 枢轴 → 脚尖）。0 = 该体型没有分段，抬踝补偿也一并关掉。 */
+  toeLen: number;
+};
 
 /** v9s.29：一条刃身的几何读数（供拖尾 / clip 工具 / 验收）。 */
 export type BladeGeom = {
@@ -694,16 +713,41 @@ export function createVoxelRig(
     ankle.position.y = -legLen / 2;
     knee.add(ankle);
 
+    // v9s.76：前掌关节（ball）。脚掌几何从这里一分为二 —— 后掌挂踝、前掌挂 ball，
+    // ball.rx 就是「脚掌绕中部折」的枢轴，heel-toe roll 全靠它。
+    // 位置取脚掌长度的 60% 处（人脚跖趾关节大约就在这里），与几何切分点同源。
+    const footLen = t * 1.7;
+    const footCx = 0.045;
+    const ballZ = footCx - footLen / 2 + footLen * 0.6;
+    // 只有人形鞋分前后掌；蹼足 / 机械脚整只挂踝，toeLen = 0（抬踝补偿也一并关掉）
+    let toeLen = 0;
+    const ball = group();
+    ball.name = sx < 0 ? 'ballL' : 'ballR';
+    ball.position.set(0, 0, ballZ);
+    ankle.add(ball);
+
     if (murloc) {
-      // 蹼足：脚掌前后拉到 0.26m（人形是 t×1.7≈0.18），压在同一踝高上
+      // 蹼足：脚掌前后拉到 0.26m（人形是 t×1.7≈0.18），压在同一踝高上。
+      // 整只挂踝 —— 蹼足没有鞋底折线，硬拆反而会在蹼膜上留一道缝。
       buildMurlocFoot(ankle, t, 0, colors);
     } else if (sentinel) {
-      // 机械脚：扁底板 + 两片前爪（比人脚宽，读作「站不稳但站得住」）
+      // 机械脚：扁底板 + 两片前爪（比人脚宽，读作「站不稳但站得住」），同样整只挂踝
       buildSentinelFoot(ankle, t * 3.4, colors, 0);
     } else {
-      const shoe = makeBox(t * 1.15, 0.07, t * 1.7, colors.shoe);
-      shoe.position.set(0, 0.035, 0.045); // 脚尖朝 +Z（相对踝点）
-      ankle.add(shoe);
+      // 人形鞋：后掌（脚跟 → 脚掌中部）挂踝，前掌（中部 → 脚尖）挂 ball。
+      // 两段严丝合缝拼在同一条线上，ball.rx = 0 时与旧版整块鞋逐像素一致。
+      const shoeW = t * 1.15;
+      const shoeH = 0.07;
+      const heelLen = footLen * 0.6;
+      toeLen = footLen - heelLen;
+      const heel = makeBox(shoeW, shoeH, heelLen, colors.shoe);
+      heel.position.set(0, 0.035, footCx - footLen / 2 + heelLen / 2);
+      ankle.add(heel);
+
+      const toe = makeBox(shoeW, shoeH, toeLen, colors.shoe);
+      // 相对 ball 的局部坐标：y 与后掌同高（0.035），z 从枢轴往前半个掌长
+      toe.position.set(0, 0.035, toeLen / 2);
+      ball.add(toe);
     }
 
     // IK 末端锚点：踝点本身（不含鞋的视觉偏移），FK / IK 才能精确互为逆运算。
@@ -712,7 +756,7 @@ export function createVoxelRig(
     ankle.add(tip);
 
     return {
-      root: hip, joint: knee, hand: ankle, wrist: ankle, tip, ankle,
+      root: hip, joint: knee, hand: ankle, wrist: ankle, tip, ankle, ball, toeLen,
       upperMesh: thigh, lowerMesh: shin, segLen: legLen / 2,
     };
   };
@@ -818,6 +862,10 @@ export function createVoxelRig(
     { id: 'chest', node: chest, props: ['rx', 'ry', 'rz'] },
     { id: 'ankleL', node: legL.ankle, props: ['rx', 'ry', 'rz'] },
     { id: 'ankleR', node: legR.ankle, props: ['rx', 'ry', 'rz'] },
+    // v9s.76：前掌关节只有 `2.82 heel-toe` 一层写，单独监控就能立刻发现
+    // 「别人也来拧脚掌」（比如将来的落地缓冲想压脚）。
+    { id: 'ballL', node: legL.ball, props: ['rx'] },
+    { id: 'ballR', node: legR.ball, props: ['rx'] },
   ];
   const probe = animCfg.probe?.enabled ? new AnimProbe(probeNodes) : null;
   const mark = probe ? (id: string) => probe.mark(id) : (_id: string) => {};
@@ -1380,6 +1428,22 @@ export function createVoxelRig(
         spineJoints[i].position.y = baseY * s.torso;
       }
     }
+  }
+
+  /**
+   * v9s.76：两只脚（含鞋）的世界最低点 y。
+   *
+   * 折角改的是几何，「脚尖有没有插进地里」只能这样量 —— 截图里黑靴子叠在暗背景上，
+   * 1cm 的穿插肉眼分不出。只在调试读数里调用（手感面板 / 验收脚本），不进热路径。
+   */
+  function footMinY(): { footMinYL: number; footMinYR: number } {
+    const box = new THREE.Box3();
+    const min = (o: THREE.Object3D): number => {
+      box.setFromObject(o);
+      return Number.isFinite(box.min.y) ? box.min.y : 0;
+    };
+    root.updateWorldMatrix(true, true);
+    return { footMinYL: min(legL.ankle), footMinYR: min(legR.ankle) };
   }
 
   /**
@@ -3241,6 +3305,26 @@ export function createVoxelRig(
       }
       mark('2.8 step');
 
+      // 2.82) v9s.76 heel-toe roll：脚掌绕前掌枢轴折一下。
+      //   `footTip`（IK 锚点）与 `ankle.position` 都不动 —— 只改前掌折角，
+      //   所以步态的零滑步性质不受影响，脚在世界里的落点与旧版逐帧一致。
+      //   权重取「速度 / 攻击跨步」两者较大者：站定时 `gaitPhase` 是冻的，
+      //   不乘权重会把某一相位（比如蹬离）的折角永久留在静止姿态上。
+      {
+        const htw = clamp(Math.max(attackBlend, clamp(gaitSpeed / 1.5, 0, 1)), 0, 1);
+        for (let i = 0; i < 2; i++) {
+          const leg = i === 0 ? legL : legR;
+          if (htw <= 1e-4) {
+            leg.ball.rotation.x = 0;
+            continue;
+          }
+          const TAU2 = Math.PI * 2;
+          const p = ((drive.phase + (i === 0 ? 0 : Math.PI)) % TAU2 + TAU2) % TAU2;
+          leg.ball.rotation.x = heelToeAngle(p / Math.PI) * htw;
+        }
+      }
+      mark('2.82 heel-toe');
+
       // 2.85) v9s.23 肩部（上臂根部）位移：必须在手臂角度全部写完之后，
       //   否则读到的是上一帧的俯仰，耸肩会慢一帧；又必须在副手 IK 之前，
       //   否则 IK 会用旧肩点解算，握点差一个肩位移。
@@ -3431,6 +3515,9 @@ export function createVoxelRig(
       // 4) v8g 足部 IK 锚定：放在所有姿态层之后，把「骨盆被额外推走」的差值
       //    反解进髋 / 膝角。空中不钉脚（让腿随身体收起）；enabled=false 时整层跳过，
       //    精确回到旧 FK 姿态，调试面板可直接 A/B 对照。
+      //    v9s.76：先记下踝的基准高度 —— 下面的 heel-toe 抬踝要在这个基准上加，
+      //    不能 `+=`（stretch 关闭时没人重置 ankle.position.y，会逐帧累积）。
+      const ankleBaseY = [legL.ankle.position.y, legR.ankle.position.y];
       lastIK = applyFootIK({
         root, pelvis, lower,
         limbs: ikLimbs,
@@ -3442,6 +3529,23 @@ export function createVoxelRig(
         groundY: c.position?.y,
       });
       mark('4 ik');
+
+      // 4.05) v9s.76 heel-toe 抬踝：蹬离时前掌下压，脚尖会插进地里（实测 10.5cm）。
+      //   几何补偿 = sin(折角) × 前掌长度，只补「下压」那一侧 —— 脚跟着地时前掌上翘，
+      //   最低点是脚跟，本来就不穿地。放在 IK **之后**：IK 的锚点是踝原点（tip），
+      //   若在之前抬，IK 会把整条腿拉回去，补偿等于没写。
+      //   这是唯一一处在 IK 之后动 `ankle.position` 的层，声明表里登记为 add。
+      //    系数 1.8 不是凑数：`sin(折角) × 前掌长` 只补了「前掌绕枢轴转下去」那一段，
+      //    但蹬离相位腿本身还在往后伸（踝被步态压低），实测这一项还要再赔 0.8 倍，
+      //    才能把脚尖从「沉入 8cm」拉回「与同相位基线同量级」。
+      const HT_LIFT_GAIN = 1.8;
+      for (let i = 0; i < 2; i++) {
+        const leg = i === 0 ? legL : legR;
+        const a = leg.ball.rotation.x;
+        leg.ankle.position.y = ankleBaseY[i]
+          + (a > 0 ? Math.sin(a) * leg.toeLen * HT_LIFT_GAIN : 0);
+      }
+      mark('4.05 heel-toe lift');
 
       // 5) v9s.33：平衡读数放在最后 —— 质点位置要读 IK 之后的真实脚位 / 手位。
       updateBalance(c, dt);
@@ -3716,6 +3820,8 @@ export function createVoxelRig(
         hipYawTarget: lastHipYawTarget, spin: spinBlend,
         /** v9s.55：待机斜跨站姿（权重 / 前脚是否左 / 下沉 / 重心侧移） */
         idleW: idleStanceW, idleFrontLeft, idleSink, idleShift, idleHipYaw,
+        ballL: legL.ball.rotation.x, ballR: legR.ball.rotation.x,
+        ...footMinY(),
       };
     },
     gaitYaw(): number {

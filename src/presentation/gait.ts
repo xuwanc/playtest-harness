@@ -846,6 +846,51 @@ export function idleStanceTarget(speed: number, cfg: Required<IdleStanceViewConf
   return clamp((cfg.exitSpeed - speed) / span, 0, 1);
 }
 
+/* -------------------------------------------------------------------------- *
+ * v9s.76 · heel-toe roll：脚掌折角
+ * -------------------------------------------------------------------------- *
+ * 脚以前是刚性一块板：落地「拍」、蹬地「抬」，读不出重量。真实步态里支撑期
+ * 脚是**滚**过去的 —— 脚跟着地时脚尖上翘，中段全掌贴地，蹬离时脚掌折起、
+ * 前掌当支点。这里只解折角，踝高与 IK 锚点都不动（零滑步是硬约束）。
+ */
+
+/**
+ * heel-toe 折角参数（度 / 归一化相位）。
+ * 暂不进 `config/game.json` —— 手感要在 clip-lab 里看几轮，定下来再迁进配置，
+ * 否则每调 1° 都要改 schema 与夹具。
+ */
+export const HEEL_TOE = {
+  /** 落点：脚尖上翘的最大角（脚跟着地） */
+  strikeDeg: 14,
+  /** 蹬离：脚尖下压的最大角（前掌为支点、脚跟抬起） */
+  pushDeg: 26,
+  /** 支撑进度 s 上「脚掌完全贴地」的起止点 */
+  strikeU: 0.18,
+  pushU: 0.55,
+} as const;
+
+/**
+ * 支撑进度 → 前掌折角（rad，正 = 脚尖下压 / 脚跟抬起）。
+ *
+ * `s ∈ [0, 1]` 是支撑期进度（0 = 脚跟着地，1 = 蹬离离地）；摆动期（s > 1）返回 0。
+ * 两段都用 `u²` 收到 0，所以「上翘 → 贴地 → 下压」整条曲线连续、没有折角；
+ * 端点 s=0 / s=1 留给着地与离地那两个冲击帧，那里本来就不该平滑。
+ */
+export function heelToeAngle(s: number, cfg = HEEL_TOE): number {
+  if (!Number.isFinite(s) || s < 0 || s > 1) return 0;
+  const strike = (cfg.strikeDeg * Math.PI) / 180;
+  const push = (cfg.pushDeg * Math.PI) / 180;
+  if (s < cfg.strikeU) {
+    const u = 1 - s / cfg.strikeU;
+    return -strike * u * u;
+  }
+  if (s > cfg.pushU) {
+    const u = (s - cfg.pushU) / (1 - cfg.pushU);
+    return push * u * u;
+  }
+  return 0;
+}
+
 /**
  * 解出斜跨站姿。返回的是**满权重**姿态（各量都是「站定后应有的值」），
  * 权重由调用方通过 `mixIdleStance` / 直接相乘来施加 —— 这样同一份姿态既能整体淡入，

@@ -246,7 +246,9 @@ describe('anim-probe：六个场景下没有越权、没有冲突', () => {
   });
 
   it('声明表覆盖所有受控通道名（防止写错节点前缀）', () => {
-    const known = new Set(['root', 'pelvis', 'lower', 'upper', 'chest', 'ankleL', 'ankleR']);
+    // v9s.76 起多了前掌（ballL / ballR）：heel-toe roll 只写它们的 rx。
+    const known = new Set(['root', 'pelvis', 'lower', 'upper', 'chest',
+      'ankleL', 'ankleR', 'ballL', 'ballR']);
     const props = new Set(['px', 'py', 'pz', 'rx', 'ry', 'rz']);
     for (const layer of ANIM_LAYERS) {
       for (const ch of Object.keys(layer.writes)) {
