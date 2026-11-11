@@ -2641,7 +2641,7 @@
       "spacing": 0.22,
       "life": 0.32,
       "minMove": 0.012,
-      "baseOpacity": 0.32,
+      "baseOpacity": 0.3,
       "fadeExp": 1.8,
       "tint": "keep",
       "color": "#9fdcff",
@@ -2652,8 +2652,9 @@
       "fragmentExp": 1.6,
       "fragmentStart": 0.35,
       "fragmentSpin": 0.6,
-      "depthMode": "hash",
-      "behindBias": 0.06
+      "depthMode": "lit",
+      "behindBias": 0.06,
+      "brightness": 0.7
     },
     "rtAfterimage": {
       "enabled": true,
@@ -2662,12 +2663,12 @@
       ],
       "decay": 0.9,
       "scale": 1.01,
-      "intensity": 0.9,
-      "mode": "add",
+      "intensity": 0.75,
+      "mode": "normal",
       "tint": "keep",
       "color": "#9fdcff",
-      "resolutionScale": 0.5,
-      "blur": 0.8,
+      "resolutionScale": 0.35,
+      "updateStride": 2,
       "worldScale": true,
       "refDistance": 0
     },

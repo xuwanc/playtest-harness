@@ -116,6 +116,9 @@ export function startApp(): void {
         colors: bt.colors ? { ...VIEW_CONFIG.colors, ...bt.colors } : VIEW_CONFIG.colors,
       };
     },
+    // v9s.61：抽屉打开时下移主场景相机，让场景里的角色上移到不被面板遮挡的上半区；
+    // 面板内转台角色仍按正常大小显示（两者互不影响）。
+    onOpenChange: (open) => view.setWardrobeLift(open),
   });
 
   // v9r：手感调试面板 = 实际位移速度曲线 + 方向罗盘；胶囊与容器由统一胶囊行提供，
@@ -366,6 +369,8 @@ export function startApp(): void {
     deathDebug: (id: number) => view.deathDebug(id),
     /** v9s.57：头顶血条读数（总条数 / 当前可见条数） */
     healthBarDebug: () => view.healthBarDebug(),
+    /** v9s.61：两种残影实时读数（ghost 池 / RT 反馈，含 rt.occlusion 遮挡门控），验收直接读 */
+    afterimageDebug: () => view.afterimageDebug(),
     /** v9s.56：假人血量快照（血量 / 是否死亡 / 距重生 / 击杀数），验收直接读 */
     dummyHealth: () => world.dummies.map((d) => ({
       id: d.id,

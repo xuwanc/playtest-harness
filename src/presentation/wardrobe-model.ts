@@ -198,3 +198,48 @@ export type CharacterConfig = {
   voxel: VoxelConfig;
   colors: ColorConfig;
 };
+
+/**
+ * v9s.61：装备面板**自己的 3D 转台**取景（纯函数，可单测）—— 角色按「正常大小、居中」显示。
+ *
+ * 用户澄清：之前说的「相机下移让角色出现在上半区」指的是**主场景相机**（底部抽屉别挡住
+ * 场景里的角色），不是这个转台相机；转台角色应恢复正常大小，不再被「整体下移 + 拉远」
+ * 缩成一团。所以这里回到接近 v9s.69 的基准：垂直视野留 1.5× 身高（角色约占舞台 2/3）、
+ * 看向点取角色中心、相机只留一点俯视。
+ *
+ * 仍然保留体型自适应：不同体型（standard / elder / sentinel）高度不同 → 传实测包围盒
+ * 自动适配，并补偿窄舞台的左右裁切，高体型不会把头裁出画面。
+ */
+export type WardrobeFraming = {
+  /** 相机到角色的水平距离 */
+  distance: number;
+  /** 看向点的 y（角色中心 → 角色居中显示） */
+  lookY: number;
+  /** 相机自身的 y（略高于 lookY，保持轻微俯视） */
+  cameraY: number;
+  /** 该距离下的垂直可见高度（诊断 / 验收用） */
+  visibleHeight: number;
+};
+
+export function wardrobeFraming(
+  height: number,
+  width: number,
+  aspect: number,
+  fovDeg: number,
+  footY = 0,
+): WardrobeFraming {
+  const h = Math.max(0.9, height);
+  const w = Math.max(0.6, width);
+  const a = Math.max(0.35, aspect || 1);
+  const tanHalf = Math.tan((fovDeg * Math.PI) / 360);
+  // 垂直：留 1.5× 身高 → 角色约占舞台 2/3，接近旧写死 z=3.0 的「正常大小」
+  const visibleHeight = h * 1.5;
+  let distance = visibleHeight / (2 * tanHalf);
+  // 水平：窄舞台时按可见宽度补距离，保证转台旋转时左右不裁
+  const needWidth = w * 1.35;
+  const distForWidth = needWidth / (2 * tanHalf * a);
+  distance = Math.max(distance, distForWidth);
+  const lookY = footY + h * 0.5;   // 居中，不再为了「上半区」人为压低
+  const cameraY = lookY + h * 0.1;
+  return { distance, lookY, cameraY, visibleHeight };
+}

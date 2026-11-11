@@ -10,10 +10,10 @@ import type { VoxelRig } from './voxel-rig';
 import {
   CRAFT_CELLS, WARDROBE_LOOK, WARDROBE_MATERIALS, WARDROBE_RECIPES, WARDROBE_SECTIONS,
   WARDROBE_WEAPONS, blendTowards, consumeForRecipe, countMaterials, dragYaw, idleSway,
-  matchRecipe, resolveLook,
+  matchRecipe, resolveLook, wardrobeFraming,
 } from './wardrobe-model';
 import type {
-  CharacterConfig, EquipmentSlot, LookTarget, MaterialId, WardrobeRecipe,
+  CharacterConfig, EquipmentSlot, LookTarget, MaterialId, WardrobeRecipe, WardrobeFraming,
 } from './wardrobe-model';
 
 /**
@@ -46,6 +46,14 @@ import type {
  *    `rig.group` 上（头盔 / 胸甲 / 护腿 / 饰品 / 背包），随角色一起转，不再是一排占位虚线格。
  *  - **去掉染色**：配色切换（dye）整段移除。
  *  - **3×4 合成魔方**：侧栏一个 12 格（3 列 ×4 行）材料盘，按配方合成装备 → 直接落进视窗。
+ *
+ * ## v9s.60 改动
+ *  - **相机自适应取景 + 整体下移**：原来写死 `z=3.0 / lookAt y=0.45`，高体型（哨兵机）
+ *    头部被裁出舞台、角色贴着下边缘，读感就是「角色不显示 / 没在上半区」。现在按角色
+ *    实测包围盒算取景（`wardrobeFraming` 纯函数）：相机与看向点一起下移 + 拉远，让角色
+ *    完整落在舞台上半区、下方留白；切体型 / 换装备 / 舞台尺寸变化都会重算。
+ *  - **尺寸稳健性**：`ResizeObserver` 监听舞台 + 打开时 rAF 补一次 resize，避免首次
+ *    `ensure3D()` 抢在抽屉布局完成前拿到 0 尺寸、canvas 被设成 1×1 而「角色不显示」。
  */
 
 export type WardrobeDebug = {
@@ -77,6 +85,8 @@ export type WardrobeDebug = {
   /** 合成魔方格子总数（= CRAFT_CELLS） */
   slots: number;
   contextLost: boolean;
+  /** v9s.60：当前自适应取景读数（相机整体下移 / 拉远 / 可见高度），供验收 */
+  framing: WardrobeFraming | null;
 };
 
 export type CraftResult = {
@@ -118,6 +128,11 @@ export type WardrobeOptions = {
    * 不传则退化为始终用 view.voxel / view.colors（标准体型）。
    */
   getCharacterConfig?: () => CharacterConfig | null;
+  /**
+   * v9s.61：打开 / 关闭时通知外部（主场景相机 lift）。纯表现联动，不进主循环 / 快照。
+   * 面板自己的 3D 转台相机不受影响，角色仍按正常大小显示。
+   */
+  onOpenChange?: (open: boolean) => void;
 };
 
 const NEUTRAL: LookTarget = { headYaw: 0, headPitch: 0, bodyPitch: 0 };
@@ -299,9 +314,42 @@ export function createWardrobeView(opts: WardrobeOptions): WardrobeView {
   let rafId = 0;
   let lastTs = 0;
 
+  // v9s.60：自适应取景的实测体型尺寸与读数（切体型 / 换装备 / resize 都会重算）
+  const _box = new THREE.Box3();
+  let charH = 1.8, charW = 1.2, charFootY = 0;
+  let lastFraming: WardrobeFraming | null = null;
+  let resizeObserver: ResizeObserver | null = null;
+
   /** 造一份只给展示用的 voxel 配置：打开静止呼吸，其余逐字节沿用主场景。 */
   function showcaseVoxel(voxel: VoxelConfig): VoxelConfig {
     return { ...voxel, style: { ...(voxel.style ?? {}), breath: true } };
+  }
+
+  /** 实测当前展示 rig 的世界包围盒（暂时归零转台角，避免旋转让 AABB 抖动）。 */
+  function measureRig(): void {
+    if (!rig || !pivot) return;
+    const yaw = pivot.rotation.y;
+    pivot.rotation.y = 0;
+    pivot.updateMatrixWorld(true);
+    _box.setFromObject(rig.group);
+    pivot.rotation.y = yaw;
+    pivot.updateMatrixWorld(true);
+    if (_box.isEmpty()) return;
+    charFootY = Math.min(0, _box.min.y);
+    charH = Math.max(0.9, _box.max.y - charFootY);
+    charW = Math.max(0.6, _box.max.x - _box.min.x, _box.max.z - _box.min.z);
+  }
+
+  /** 正常大小、居中取景（体型 / aspect 自适应）；不再拉远 / 压到上半区。 */
+  function frameCamera(): void {
+    if (!camera || !rig) return;
+    const f = wardrobeFraming(charH, charW, camera.aspect || 1, camera.fov, charFootY);
+    camera.position.set(0, f.cameraY, f.distance);
+    camera.lookAt(0, f.lookY, 0);
+    camera.near = Math.max(0.1, f.distance - 6);
+    camera.far = f.distance + 12;
+    camera.updateProjectionMatrix();
+    lastFraming = f;
   }
 
   function buildRig(voxel: VoxelConfig, colors: ColorConfig): VoxelRig {
@@ -339,6 +387,9 @@ export function createWardrobeView(opts: WardrobeOptions): WardrobeView {
       const mesh = buildEquipmentMesh(slot, charColors, charVoxel);
       if (mesh) equipmentGroup.add(mesh);
     }
+    // 装备（尤其头盔）会改变角色包围盒 → 重新量一次并套用取景
+    measureRig();
+    frameCamera();
   }
 
   /** v9s.69：按体型 voxel 比例在角色身上挂一件装备网格（局部坐标，脚底 y=0）。 */
@@ -463,12 +514,12 @@ export function createWardrobeView(opts: WardrobeOptions): WardrobeView {
     syncEquipment();
     if (charLabel) charLabel.textContent = `当前角色：${charName}`;
 
-    // 相机「智能中心下移」：看向点压到躯干下半 + 拉远，让角色整体贴近画面**上半区**，
-    // 下方留出空当；配合更窄的竖屏舞台，待机角色一眼在上方、不会顶满整块画布。
+    // v9s.61：相机不再写死。按实测角色尺寸取「正常大小、居中」（见 wardrobeFraming），
+    // 高体型（哨兵机）也不会把头裁出画面。「角色进上半区」由主场景相机 lift 负责，
+    // 与本转台无关（用户明确纠正）。
     camera = new THREE.PerspectiveCamera(34, 1, 0.1, 50);
-    camera.position.set(0, 0.72, 3.0);
-    camera.lookAt(0, 0.45, 0);
-    resize();
+    measureRig();
+    resize();               // resize 内会 frameCamera()
     rendered = true;
   }
 
@@ -478,10 +529,15 @@ export function createWardrobeView(opts: WardrobeOptions): WardrobeView {
     const h = Math.max(1, stage.clientHeight);
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
-    camera.updateProjectionMatrix();
+    frameCamera();          // 内含 updateProjectionMatrix + 正常大小居中取景
   }
   const onResize = (): void => { if (isOpen) resize(); };
   window.addEventListener('resize', onResize);
+  // 舞台尺寸由 flex / 抽屉过渡决定，window resize 不一定触发 → 直接观察舞台本身
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => { if (isOpen) resize(); });
+    resizeObserver.observe(stage);
+  }
 
   // ---- 渲染循环：只在打开时跑；不读墙钟，dt 由 rAF 时间戳推进 ----
   function tick(ts: number): void {
@@ -595,8 +651,12 @@ export function createWardrobeView(opts: WardrobeOptions): WardrobeView {
     ensure3D();
     syncCharacter();                      // 打开时若体型已变，立即重建
     resize();
+    // 抽屉有 transform 过渡，等一帧布局稳定再补一次 resize：
+    // 避免首次 ensure3D 抢在布局前拿到 0 尺寸、canvas 被设成 1×1 而「角色不显示」。
+    requestAnimationFrame(() => { if (isOpen) resize(); });
     startLoop();
     opts.toggleButton?.setAttribute('aria-expanded', 'true');
+    opts.onOpenChange?.(true);             // 主场景相机下移，角色进上半区
   }
   function close(): void {
     if (!isOpen) return;
@@ -607,6 +667,7 @@ export function createWardrobeView(opts: WardrobeOptions): WardrobeView {
     dragging = false;
     lookTarget = { ...NEUTRAL };
     opts.toggleButton?.setAttribute('aria-expanded', 'false');
+    opts.onOpenChange?.(false);            // 相机平滑回位
   }
   function toggle(): void { if (isOpen) close(); else open(); }
 
@@ -654,11 +715,13 @@ export function createWardrobeView(opts: WardrobeOptions): WardrobeView {
       weapon, characterId: charId, equipped: [...equipped],
       craftCells: cells.slice(), matchedRecipe: match ? match.recipe.id : null,
       sections: WARDROBE_SECTIONS.length, slots: CRAFT_CELLS, contextLost,
+      framing: lastFraming ? { ...lastFraming } : null,
     };
   }
   function dispose(): void {
     stopLoop();
     window.removeEventListener('resize', onResize);
+    resizeObserver?.disconnect();
     disposeRig();
     renderer?.dispose();
     renderer?.domElement.remove();

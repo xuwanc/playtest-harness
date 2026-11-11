@@ -47,6 +47,14 @@ export type CameraRig = {
   kickLevel(): number;
   /** 累计触发的微推次数（自验用：确认命中上升沿确实调到了 addKick） */
   kickCount(): number;
+  /**
+   * v9s.61：装备展示（底部抽屉）开合时下移**主场景相机**。传 true = 打开。
+   * 相机沿屏幕下方平移、视线方向不变 → 世界内容整体上移，主场景角色进入上半区，
+   * 不被底部抽屉遮住。指数平滑过渡，纯表现、不改 Core 的相机意图。
+   */
+  setLift(open: boolean): void;
+  /** 当前平滑后的 lift 0..1（诊断 / 验收用） */
+  liftLevel(): number;
 };
 
 const NEUTRAL: CameraIntent = {
@@ -88,6 +96,20 @@ export function createCameraRig(
   let kickZ = 0;
   let kickE = 0;
   let kickCount = 0;
+  /** v9s.61：底部抽屉打开 → 主场景相机下移（0=正常，1=完全下移），指数平滑 */
+  let liftTarget = 0;
+  let lift = 0;
+  const _screenUp = new THREE.Vector3();
+
+  /** 下移量按「当前距离下的垂直可见高度」比例算，缩放 / 体型变化都自适应 */
+  function applyLift(): void {
+    if (Math.abs(lift) < 1e-4) return;
+    const visibleHeight = 2 * offset.length() * Math.tan((cfg.fov * Math.PI) / 360);
+    const amount = visibleHeight * 0.22 * lift;
+    // 相机局部 +Y = 屏幕上方；沿其反方向平移 = 相机下移、视线方向保持不变
+    _screenUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    camera.position.addScaledVector(_screenUp, -amount);
+  }
 
   function computeOffset(): void {
     const pitch = ((cfg.pitchDeg + smart.pitchDelta) * Math.PI) / 180;
@@ -134,6 +156,9 @@ export function createCameraRig(
       focus.set(target.x + smart.offsetX, target.y, target.z + smart.offsetZ);
       camera.position.copy(focus).add(offset);
       camera.lookAt(focus);
+      // v9s.61：抽屉开合 → 相机下移（先平滑，再在 lookAt 之后平移，视线方向不变）
+      lift += (liftTarget - lift) * (1 - Math.exp(-8 * dt));
+      applyLift();
 
       // v9s.x 命中震动：trauma 驱动 + 平滑噪声（低频主导）+ 线性衰减。
       // 仍是纯平移、不改朝向：背景不旋转，只有「砸一下再余震」的错位感；
@@ -164,6 +189,8 @@ export function createCameraRig(
       computeOffset();
       camera.position.copy(focus).add(offset);
       camera.lookAt(focus);
+      lift = liftTarget;   // 传送时不做滑行，直接套用当前 lift 目标
+      applyLift();
       camera.updateMatrixWorld();
     },
     resize(a): void {
@@ -225,6 +252,12 @@ export function createCameraRig(
     },
     smart(): SmartCameraState {
       return { ...smart };
+    },
+    setLift(open): void {
+      liftTarget = open ? 1 : 0;
+    },
+    liftLevel(): number {
+      return lift;
     },
   };
 }

@@ -1,7 +1,8 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-11 15:45。
+> **会话中断 / 重连**：先读 [`TASK-TRACKER.md`](TASK-TRACKER.md) 的 §0 恢复 SOP 与 §2 当前断点（中断位置 + 原因），再继续任务。
+> 最后更新：2026-11-11 16:30。
 
 ## 一句话
 
@@ -28,20 +29,27 @@ v0.9.100：**测试截图机位**——`view.shotTake()` 每帧接管相机，�
     技术视图，不是玩家画面。
   - 骨架命名：`knee` → `kneeL/kneeR`、`footTip` → `footTipL/R`（主角 + 假人两套）。
     同名时 `getObjectByName('knee')` 永远返回左腿。同步改了 6 处测试 + `tests/rig-nodes.ts`。
-  - 验收：132 文件 / 1338 例（新增 10 例）；连拍 3 帧角色前进 1m，目标屏幕坐标漂移 < 4px。
+  - 验收：134 文件 / 1356 例（新增 10 例）；连拍 3 帧角色前进 1m，目标屏幕坐标漂移 < 4px。
 ② 主干已含：脚掌分段 + heel-toe roll（v0.9.99）、三连节奏逐段差异化 + 失焦清键盘（v0.9.98）、
 动画层通道所有权守卫（v0.9.97）、Wardrobe 底部抽屉改版 + 待机盾面朝向修正（v0.9.92）、
 脊柱链偏航沿「髋 → 腰 → 胸」单调 + 髋块 + 鱼人抬头（v0.9.91）、模型空间补偿 + 脚锁（v0.9.89）、
 鱼人爬姿体态层、哨兵机角色、`rig-fix` 七条造型修正。
 ③ 更早：竖屏操作簇、震屏分档、技能指示器统一口径、文档事实守卫 / 推送护栏 / 四层 CI。
 
-上一版（鱼人换几何不换骨架、可破坏物去壳、仙人掌侧臂单一真源、移动端降档）仍在。
+## 本轮三条需求（v9s.61，用户第五轮反馈）
+
+- **老头 ghost「拖影动画还是上一次持武器的动作」**：旧 `buildSnapshot` 只给 mesh 叶子节点建配对、resync 只回写 mesh 局部 transform，而角色动画几乎全靠中间 `THREE.Group` pivot 旋转驱动、武器切换靠 `setWeapon` 改 `visible`；`builtFor === target`（顶层引用稳定）又让克隆树永不重建 → 残影姿态永久冻结在首次克隆。现在 `nodes` 覆盖全树，每帧同步 `position / quaternion / scale / visible`，碎裂基准取回写后的当前姿态，并用「节点数 + mesh 数」结构签名在 rig 变化时重建。稳态仍是每槽位只克隆一次（零分配）。
+- **机器人 RT「全黑」+「被墙挡住仍透视」**：全黑有两重根因 —— accum 把 `vec4(prev)` 连 rgb 一起乘 `uDecay`、compose 又 `c.rgb - cur.rgb` 削掉当前帧颜色（双重衰减）；以及 RT 存线性色、自定义 shader 不走 Three 的 `colorspace_fragment`，直接输出到 sRGB 画布明显发黑。现在 accum **只衰减 alpha**、rgb 恒保留角色本色，compose 用本色 + 历史覆盖度并补一次 `linearToSRGB`。透视根因是全屏 compose 无视深度：新增 `EffectContext.occluders`（`boxGroup` 的非地面盒），三条「相机→角色」射线门控，完全被挡则清空累积并整套停跑（不透视还省 3 个 pass），部分遮挡按可见比例变淡。`debug().occlusion` 暴露读数。模糊保持移除、`resolutionScale` / `updateStride` 保持低开销。
+- **装备界面「横屏看得到 / 竖屏看不到 / 相机下移」**：竖屏 CSS 里 `.wardrobe-stage{flex:1 1 52%;min-height:0}` 被 12 格 `aspect-ratio:1/1` 魔方挤成 0 高（实测 canvas `478×1`）；现在舞台 `height: clamp(140px,26vh,240px)` 保底、侧栏可滚动、魔方改 6 列小方格。用户明确纠正「相机下移」是**主场景相机**：`camera-rig.setLift()` 沿屏幕下方平移相机（`lookAt` 后只改位置、视线不变）让场景角色上移，链路 `wardrobe.onOpenChange → app.ts → view.setWardrobeLift → cam.setLift`；转台 `wardrobeFraming()` 回到 1.5× 身高、居中、正常大小，不再拉远缩小。
+- 单测：新增 `v9s61-camera-lift`（3 例）；`v9s56` 加 pivot 动画 / 武器 visible / 结构重建 3 例；`v9s57` 加 shader 非黑契约 + 遮挡 4 例；`v9s60-wardrobe-framing` 改为「正常大小 / 居中」断言。全量 134 文件 / 1356 例全绿（数字由 `check-facts --fix` 同步）。
+
+主干已含：可复用残影特效库 `src/presentation/effects/`（ghost / rt / shared / index）、Wardrobe 底部抽屉 + 3D 装备 + 合成台、动画层通道所有权守卫、鱼人 / 蜘蛛 / 哨兵机体型、可破坏物与草块、文档事实守卫 / 推送护栏。
 
 ## 版本与线上
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.100`（内部代号 v9s.77 截图机位） |
+| `package.json` 版本 | `0.9.101`（内部代号 v9s.78 截图机位） |
 | 线上徽标 | `v0.9.100`（构建时间随发布变化） |
 | 发布方式 | `npm run ship`（构建 → 推 main → 重建 `preview` 产物；带凭证自恢复与推送重试） |
 | 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— 此链接固定不变 |
@@ -57,10 +65,10 @@ v0.9.100：**测试截图机位**——`view.shotTake()` 每帧接管相机，�
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 132 文件 / 1338 例全绿 |
+| `npx vitest run` | 134 文件 / 1356 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
 | `npm run smoke` | 77/77 PASS |
-| `npm run docs:check` | PASS（113 份文档 ≤300 行，README 99 行） |
+| `npm run docs:check` | PASS（114 份文档 ≤300 行，README 99 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 | `python3 tools/check-online.py --wait 180` | 发布后核验线上 JS 与本地 `dist` 同一份 |

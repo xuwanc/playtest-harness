@@ -44,6 +44,7 @@ import { createSpiderRig } from './spider-rig';
 import { createYawSmoother } from './yaw-smooth';
 import { createWeaponTrail } from './weapon-trail';
 import { createAfterimageEffect } from './effects';
+import type { AfterimageDebug } from './effects';
 import { createGrassLayer } from './grass-layer';
 import type { GrassDebug } from './grass-layer';
 import { createDestructibleLayer } from './destructible-layer';
@@ -102,6 +103,11 @@ export type SceneView = {
   heroGroup(): THREE.Object3D;
   /** 屏幕坐标 → 被点中的假人 id（0 = 没点中）。表现层做射线拾取，Core 只收 id。 */
   pickDummy(clientX: number, clientY: number): number;
+  /**
+   * v9s.61：装备展示（底部抽屉）开合时下移**主场景相机**，让主场景角色上移到上半区，
+   * 不被抽屉遮挡。装备面板自己的转台相机不受影响、角色仍按正常大小显示。
+   */
+  setWardrobeLift(open: boolean): void;
   /**
    * v9s.43：当前已建好的假人渲染对象数。测试按钮动态生成 / 清除单位后，
    * 它应与 `world.dummies.length` 严格相等 —— 用来断言「Core 有状态、画面也真的多出人」。
@@ -168,6 +174,8 @@ export type SceneView = {
   } | null;
   /** v9s.57：头顶血条读数（总条数 / 当前可见条数）。 */
   healthBarDebug(): { total: number; shown: number };
+  /** v9s.61：两种残影的实时读数（ghost 池 / RT 反馈）。rt.occlusion 供「墙后不透视」验收。 */
+  afterimageDebug(): { ghost: AfterimageDebug; rt: AfterimageDebug };
   /**
    * v9s.38：特效层级读数（发布自检用）。
    * `boxOpaque` = 地块是否走不透明通道（旧版透明地面会盖掉刀光）；
@@ -256,6 +264,10 @@ export type SceneView = {
       shakePreset: { amplitude: number; decay: number; freq: number; power: number };
       /** v9s.33：方向性微推能量 0..1（命中方向） */
       kick: number;
+      /** v9s.33：累计触发的微推次数（确认命中上升沿确实调到了 addKick） */
+      kickCount: number;
+      /** v9s.61：主场景相机 lift 0..1（装备抽屉打开 → 相机下移，验收读这里） */
+      lift: number;
     };
   };
   /** v9s.15：整层测试工位标识（地面盘 + 标牌）显隐，纯表现开关 */
@@ -453,6 +465,9 @@ export function createSceneView(
   // 只有开「碰撞盒线框」调试时才临时切回透明（见 setCollidersVisible）。
   const materials: THREE.MeshLambertMaterial[] = [];
   const boxGroup = new THREE.Group();
+  // v9s.61：RT 反馈残影的遮挡门控用。只收「非地面」的不透明盒子（墙 / 障碍 / 门楣 / 台阶），
+  // 地面盒会让「相机→角色」的射线假命中；这里展平成 mesh 数组交给特效库做可见度判定。
+  const occluders: THREE.Mesh[] = [];
   for (const b of world.boxes) {
     // v9s.61：可破坏物的 AABB 只服务碰撞，不画白盒。
     // 盒子宽度就是物件直径（罐子 0.56 / 仙人掌 0.64），画出来正好把造型整个包住 ——
@@ -476,6 +491,7 @@ export function createSceneView(
     ));
     boxGroup.add(mesh);
     materials.push(mat);
+    if (b.kind !== 'ground') occluders.push(mesh);
   }
   scene.add(boxGroup);
 
@@ -582,7 +598,7 @@ export function createSceneView(
   // v9s.38：刀光归到统一层级（weapon-trail 组件内部的默认值不再参与排序判断）
   setFxOrder(playerTrail.object, FX_ORDER.trail);
   scene.add(playerTrail.object);
-  // v9s.59：角色残影统一走可复用特效库（ghost 方案）；alphaHash 根治交叉面干涉。
+  // v9s.60：角色残影统一走可复用特效库（ghost 方案）；lit 受光柔和半透明，无颗粒 / 不过亮。
   const elderAfterimage = createAfterimageEffect('ghost', view.afterimage);
   setFxOrder(elderAfterimage.container, FX_ORDER.trail - 1);
   scene.add(elderAfterimage.container);
@@ -1063,7 +1079,7 @@ export function createSceneView(
   }, scene);
   // v9s.59：RT 反馈残影统一走可复用特效库（rt 方案，ctx 需 renderer/scene/camera）。
   const rtAfterimage = createAfterimageEffect(
-    'rt', { renderer, scene, camera: cam.camera }, view.rtAfterimage,
+    'rt', { renderer, scene, camera: cam.camera, occluders }, view.rtAfterimage,
   );
   const rtPrev = new THREE.Vector3();
   // v9s.57：陪练头顶血条（DOM 覆盖层）。只画有血量的单位，死亡隐藏、重生重现。
@@ -1972,8 +1988,8 @@ export function createSceneView(
       // 覆盖它比给 update 加分支简单，也不会漏掉 near / far / aspect 这些同步。
       shotCam.apply();
       renderer.render(scene, cam.camera);
-      // v9s.59：RT 反馈残影（机器人）。必须在主渲染之后合成到屏幕。
-      // 传真实 moving：静止且残影衰减完毕后整套管线停跑（省掉全部离屏 pass）。
+      // v9s.60：RT 反馈残影（机器人）。必须在主渲染之后合成到屏幕。
+      // 传真实 moving：静止且残影衰减完毕后整套管线停跑；移动时按 updateStride 隔帧反馈。
       if (view.rtAfterimage.enabled) {
         const rtMoved = Math.hypot(
           playerRoot.position.x - rtPrev.x,
@@ -2057,6 +2073,11 @@ export function createSceneView(
     /** v9s.53：主角骨架根节点，供造型验收直接遍历 mesh（尺寸 / 位置 / 命名）。 */
     heroGroup: () => hero.group,
     pickDummy,
+    setWardrobeLift(open): void { cam.setLift(open); },
+    /** v9s.61：两种残影实时读数，供浏览器验收「姿态跟随 / 墙后不透视」直接读，不靠肉眼猜。 */
+    afterimageDebug() {
+      return { ghost: elderAfterimage.debug(), rt: rtAfterimage.debug() };
+    },
     /** v9s.43：渲染对象容量，验收动态生成 / 清除单位时与 Core 的 dummies.length 对齐。 */
     dummyRenderCount: () => dummyRigs.length,
     setHeroVisible: (v: boolean) => { playerRoot.visible = v; },
@@ -2131,6 +2152,8 @@ export function createSceneView(
         kick: number;
         /** v9s.33：累计触发的微推次数（确认命中上升沿确实调到了 addKick） */
         kickCount: number;
+        /** v9s.61：主场景相机 lift 0..1（装备抽屉打开 → 相机下移，验收读这里） */
+        lift: number;
       };
     } {
       // v7c #10：斩击弧中心轴（盘面法线）恒为角色正前方（局部 +Z），再绕身体朝向
@@ -2175,6 +2198,7 @@ export function createSceneView(
           shakePreset: cam.shakePreset(),
           kick: cam.kickLevel(),
           kickCount: cam.kickCount(),
+          lift: cam.liftLevel(),
         },
       };
     },

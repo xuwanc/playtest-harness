@@ -212,3 +212,84 @@ describe('v9s.56 老头移动残影：对象池与半透明淡出', () => {
     expect(totalSnaps).toBeLessThanOrEqual(baseCfg.maxGhosts);
   });
 });
+
+/**
+ * v9s.61：残影必须跟随**当前帧**动画 / 武器姿态。
+ * 旧实现只同步 mesh 叶子节点，中间 pivot Group 与 visible 永远停在首次克隆 →
+ * 用户反馈「拖影动画还是上一次持武器的动作」。以下用单槽位对象池把
+ * 「每次生成都回写全树」的行为锁住。
+ */
+function makeAnimatedTarget() {
+  const root = new THREE.Group();
+  const target = new THREE.Group();
+  root.add(target);
+  const arm = new THREE.Group();              // 中间 pivot：动画靠它旋转
+  target.add(arm);
+  target.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial()));
+  const sword = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial());
+  const bow = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial());
+  arm.add(sword, bow);
+  sword.visible = true;
+  bow.visible = false;
+  return { root, target, arm, sword, bow };
+}
+
+function singleSlotCfg(): AfterimageViewConfig {
+  return {
+    ...baseCfg, maxGhosts: 1, spawnInterval: 0.02, spacing: 0,
+    life: 10, fragment: 0, fragmentSpin: 0,
+  };
+}
+
+describe('v9s.61 老头残影：跟随当前动画 / 武器姿态', () => {
+  it('中间 pivot Group 旋转改变后，下一次生成的残影同步当前姿态（不再冻结旧动作）', () => {
+    const { root, target, arm } = makeAnimatedTarget();
+    const ai = createAfterimage(singleSlotCfg());
+    const snap = () => ai.container.children[0].children[0]!.children[0] as THREE.Group;
+    root.position.x += 0.2;
+    ai.update(0.05, target, root, true, 'elder');
+    expect(snap().quaternion.angleTo(arm.quaternion)).toBeLessThan(1e-6);
+
+    arm.rotation.z = 0.9;                    // 挥武器 / 换动作
+    root.position.x += 0.2;
+    ai.update(0.05, target, root, true, 'elder');
+    // 残影的 pivot 应等于「当前帧」的 pivot，而不是首次克隆那一刻
+    expect(snap().quaternion.angleTo(arm.quaternion)).toBeLessThan(1e-6);
+    expect(snap().quaternion.angleTo(new THREE.Quaternion())).toBeGreaterThan(0.8);
+    ai.dispose();
+  });
+
+  it('setWeapon 式 visible 切换后，残影同步当前武器可见性', () => {
+    const { root, target, arm, sword, bow } = makeAnimatedTarget();
+    const ai = createAfterimage(singleSlotCfg());
+    const armSnap = () => ai.container.children[0].children[0]!.children[0] as THREE.Group;
+    root.position.x += 0.2;
+    ai.update(0.05, target, root, true, 'elder');
+    expect(armSnap().children[0].visible).toBe(true);   // 剑
+    expect(armSnap().children[1].visible).toBe(false);  // 弓
+
+    sword.visible = false;                 // 切武器
+    bow.visible = true;
+    root.position.x += 0.2;
+    ai.update(0.05, target, root, true, 'elder');
+    expect(armSnap().children[0].visible).toBe(false);
+    expect(armSnap().children[1].visible).toBe(true);
+    expect(armSnap().children.length).toBe(arm.children.length);
+    ai.dispose();
+  });
+
+  it('rig 结构变化（增删节点）触发重建，克隆树与新结构对齐且不串位', () => {
+    const { root, target, arm } = makeAnimatedTarget();
+    const ai = createAfterimage(singleSlotCfg());
+    root.position.x += 0.2;
+    ai.update(0.05, target, root, true, 'elder');
+    const extra = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial());
+    arm.add(extra);                        // 结构签名变化
+    root.position.x += 0.2;
+    ai.update(0.05, target, root, true, 'elder');
+    const cloneRoot = ai.container.children[0].children[0]!;
+    expect(cloneRoot.children.length).toBe(target.children.length);
+    expect((cloneRoot.children[0] as THREE.Group).children.length).toBe(arm.children.length);
+    ai.dispose();
+  });
+});

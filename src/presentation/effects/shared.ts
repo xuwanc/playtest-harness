@@ -19,6 +19,12 @@ export type EffectContext = {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.Camera;
+  /**
+   * v9s.61：场景遮挡物（墙 / 障碍的不透明 mesh）。RT 反馈是全屏合成，天然无视深度，
+   * 角色躲到墙后时残影会「透视」显示。这里用射线对这些遮挡物做可见性门控，
+   * 被挡住时拖影整体淡出 → 不透视。纯表现、零额外 render pass；不传则不做遮挡。
+   */
+  occluders?: THREE.Object3D[];
 };
 
 /** 支持的残影方案 */
@@ -39,6 +45,8 @@ export type AfterimageDebug = {
   drawCalls?: number;
   /** RT 方案的相机重投影比例（性能/诊断读数，1 = 相机未缩放） */
   zoomRatio?: number;
+  /** v9s.61：目标角色可见度 0..1（1=完全可见，0=被遮挡物挡住）。遮挡门控读数 */
+  occlusion?: number;
 };
 
 /**

@@ -11,10 +11,12 @@
   刻意**不塞进顶部调试胶囊行**：那排 7 个胶囊在横屏已与居中 `#weapon-bar` 重叠，
   再加一个会被武器条拦截点击；浮标 `z-index:22`、右侧垂直居中，横竖屏都不与
   操作簇 / 性能条 / 武器条相撞。
-- 打开 = 一张**底部抽屉**（从屏幕下方弹出，占下半屏、`max-height:46vh`，刻意不挡右侧按钮：
+- 打开 = 一张**底部抽屉**（从屏幕下方弹出，占下半屏，刻意不挡右侧按钮：
   入口浮标在右中、性能条在右上、武器条在顶部，都不在覆盖的下半区）：左侧更窄的 3D 转台
-  （`#wardrobe-stage`，相机中心下移让角色贴近画面**上半区**），右侧 3×4 合成魔方；
+  （`#wardrobe-stage`，角色**按正常大小、居中**显示），右侧 3×4 合成魔方；
   武器 chips 与「合成 / 清空」按钮统一收进底部一排 `.wardrobe-actions`。
+  打开时**主场景相机**沿屏幕下方平移（`view.setWardrobeLift(true)`），让场景里的角色上移到
+  不被抽屉遮挡的上半区；这是场景相机，不是转台相机（用户 v9s.61 明确纠正）。
 - **不写 `World`、不进主循环 / 确定性快照 / 回放**：它自己持有一份恒待机的伪
   `CharacterState / CombatState / HurtState / LinkState / TurnInPlaceState`，
   用 `createVoxelRig` 造一个与主场景逐字节同构造的角色喂给它。主场景在跑什么
@@ -69,3 +71,25 @@
   指数平滑帧率无关、分区结构、合成（材料计数 / 配方匹配 / 消耗）。
 - `npm run smoke`：浏览器自检含「惰性上下文、武器+合成台齐全、3×4 魔方 12 格、动态站立
   frames 增长、视线跟随、拖动旋转、3 铁合成头盔进 3D 视窗、关闭停渲染 + 重开复用」。
+
+## 6. v9s.61：转台正常大小 + 主场景相机 lift + 竖屏可见
+
+- **「相机下移」的对象被纠正**：v9s.60 误把它理解成转台相机，于是把转台「整体下移 +
+  拉远」到容纳 1.8× 身高、角色挤在上半区。用户明确说下移的是**主场景相机**，目的是
+  底部抽屉别挡住**场景里**的角色；转台角色应恢复**正常大小、居中**。
+- `wardrobe-model.ts` 的纯函数 `wardrobeFraming(height, width, aspect, fov, footY)` 回到
+  接近 v9s.69 的基准：垂直可见高度留 1.5× 身高（角色约占舞台 2/3）、`lookY = footY +
+  0.5·height`（居中）、相机只留轻微俯视；仍按实测包围盒适配三种体型 + aspect 补偿窄舞台。
+  切体型 / 换装备 / 舞台尺寸变化都会重算，`measureRig()` 量 AABB 前先归零转台角。
+- **主场景相机 lift**：`camera-rig.ts` 的 `setLift(open)` 指数平滑一个 0..1 量，按「当前
+  距离下的垂直可见高度 × 0.22」沿**相机局部 −Y（屏幕下方）**平移相机、`lookAt` 之后
+  只改位置不改视线方向 → 世界内容整体上移。链路：`wardrobe.ts` 的 `onOpenChange` →
+  `app.ts` → `view.setWardrobeLift(open)` → `cam.setLift`。`snap()` 传送时直接套目标值。
+- **竖屏布局**：旧 portrait 规则 `.wardrobe-stage{flex:1 1 52%;min-height:0}` 被 12 格
+  `aspect-ratio:1/1` 的魔方挤成 0 高（实测 canvas `478×1`、角色不显示）。现在舞台给
+  `height: clamp(140px, 26vh, 240px)` 保底、侧栏 `flex:1 1 auto; overflow-y:auto` 可滚动、
+  魔方改 6 列 × 32px 小方格 —— 横竖屏都能看到转台角色。
+- 尺寸稳健性保留：`ResizeObserver` 观察 `#wardrobe-stage` + 打开时 rAF 补一次 `resize()`。
+- 验收：`__harness.wardrobe().framing` 暴露 `{ distance, lookY, cameraY, visibleHeight }`；
+  `tests/v9s60-wardrobe-framing.test.ts` 覆盖正常大小 / 居中 / 体型自适应 / aspect 补偿 /
+  退化输入，`tests/v9s61-camera-lift.test.ts` 覆盖相机纯平移 / 角色投影上移 / 关闭回位。
