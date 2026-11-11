@@ -49,7 +49,7 @@ v0.9.100：**测试截图机位**——`view.shotTake()` 每帧接管相机，�
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 鱼人开局 | <https://xuwanc.github.io/playtest-harness/?hero=murloc> |
 | 哨兵机开局 | <https://xuwanc.github.io/playtest-harness/?hero=sentinel> |
-| 本轮线上核验 | 待发布 —— 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标 `v0.9.100` |
+| 本轮线上核验 | PASS —— 本地 / 线上同为 `main-BRyiZScB.js`（978691 B），徽标 `v0.9.100` |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
@@ -71,7 +71,7 @@ v0.9.100：**测试截图机位**——`view.shotTake()` 每帧接管相机，�
 
 ## 正在做
 
-- 无。v0.9.100（测试截图机位）代码 / 测试 / 文档已完成，待发布。
+- 无。v0.9.100（测试截图机位）已发布并核验。
 - **新工具的第一个发现**：拿 `tools/shot.py --xray` 量蹬离相位，`footMinyL` 仍是基线自带的
   −0.065m（不折角也 −0.037）。v9s.76 的抬踝是「几何补偿 × 经验系数」，闭环试过一版会发散
   （踝抬 13.6cm 才把最低点顶起来 3cm），已回退 —— 见「下一步」第 9 条。
