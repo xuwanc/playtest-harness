@@ -4,30 +4,30 @@ import { mulberry32, randUnitVec } from './shared';
 import type { AfterimageEffect, AfterimageDebug } from './shared';
 
 /**
- * 残影方案 A · 克隆 ghost 池（v9s.56 → v9s.59，纯表现层）。
+ * 残影方案 A · 克隆 ghost 池（v9s.56 → v9s.61，纯表现层）。
  *
  * 移动时按节流间隔把 rig 顶层 group 的**当前姿态**回写进对象池里已克隆的树，
  * 冻结在生成时刻的世界位姿，按年龄淡出后回收。作用于 `cfg.bodyTypes`（空 = 所有角色）。
  *
- * v9s.59 关键改进（对应用户「头被残影交叉面干涉 / 画在角色背后」）：
- *  - 旧实现用 `transparent + depthWrite:false + DoubleSide` 半透明混合。多部件体素 rig
- *    里每个 box 的正反面、多个 ghost 之间、ghost 与角色本体之间全部靠「距离排序」叠，
- *    头部（很多小 mesh 挤在一起）必然出现面片交叉、Z 闪烁、糊成一团。
- *  - 改用 **`alphaHash`（hashed / 随机透明）**：材质进不透明队列、`depthWrite:true`、
- *    `depthTest:true`、`FrontSide`。片元按屏幕哈希抖动决定保留，不做混合 → 天然没有
- *    透明排序与自相交问题，且和角色本体按深度正确遮挡（残影在后面就被挡住）。
- *    这是比「调 renderOrder」更治本的办法。每帧改 `opacity` 依旧驱动抖动密度淡出。
- *  - `behindBias`：生成时把整张快照沿**运动反方向**推一小段，避免刚生成那一帧和角色
- *    本体完全共面，读感即「残影留在角色背后」。方向在生成时固化，不逐帧抖、不需相机。
- *  - `depthMode:'blend'` 可切回旧半透明混合，便于 A/B 对比。
+ * v9s.61 关键修复（用户「拖影动画还是上一次持武器的动作」）：
+ *  - 角色骨架动画几乎全靠**中间 pivot（THREE.Group）**的旋转驱动
+ *    （headPivot / shoulder / elbow / wrist / hip / knee / spineJoints / weaponMount …），
+ *    武器切换靠 `setWeapon` 改部件 `visible`。旧实现 `buildSnapshot` 只给 **isMesh 的叶子节点**
+ *    建配对、resync 也只回写 mesh 的局部 transform → 所有中间 Group 的姿态永远停在首次
+ *    `clone(true)` 那一刻；而 `builtFor === target`（顶层 group 引用稳定）又让它永不重建。
+ *    结果：残影姿态永久冻结在第一次生成那一帧，看起来就是「上一次持武器的动作」。
+ *  - 现在 `buildSnapshot` 建 `nodes`（全树所有节点，含 Group）用于每帧回写
+ *    position / quaternion / scale / **visible**；`pairs` 只保留 mesh，专用于碎裂与材质去重。
+ *    碎裂基准 basePos / baseQuat 取「回写后的当前姿态」而非克隆时旧值。
+ *  - 加结构签名：rig 结构变化（增删节点，如换体型/换装备）时自动重建克隆树，避免配对错位。
  *
- * 性能（v9s.58 已做，v9s.59 延续）：每个槽位只在首次 / rig 替换时深克隆一次，
- * 稳态生成 = 0 分配；材质按源材质去重复用；碎裂只在 `t>fragmentStart` 后遍历。
+ * 观感（v9s.60）：默认 `lit` 受光柔和半透明，无 alphaHash 颗粒、不过亮；'hash' / 'blend' 供 A/B。
+ * 性能（v9s.58 起）：每个槽位只在首次 / rig 替换 / 结构变化时深克隆一次，稳态生成 = 0 分配。
  * 纯表现，不读 World、不写 Core、不引入命中。
  */
 
+type SyncNode = { live: THREE.Object3D; clone: THREE.Object3D };
 type Pair = {
-  live: THREE.Object3D;
   clone: THREE.Object3D;
   basePos: THREE.Vector3;
   baseQuat: THREE.Quaternion;
@@ -38,12 +38,17 @@ type Pair = {
 type Ghost = {
   holder: THREE.Group;
   snap: THREE.Object3D | null;
-  mats: THREE.MeshBasicMaterial[];
+  mats: THREE.Material[];
+  /** 全树节点配对（含 Group/pivot）：每帧回写当前姿态与可见性 */
+  nodes: SyncNode[];
+  /** 仅 mesh 节点：碎裂与材质替换 */
   pairs: Pair[];
   age: number;
   active: boolean;
   seed: number;
   builtFor: THREE.Object3D | null;
+  /** 结构签名：节点数 + mesh 数，变化即重建 */
+  signature: string;
 };
 
 const _q = new THREE.Quaternion();
@@ -55,9 +60,11 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
   const container = new THREE.Group();
   container.name = 'afterimage-ghost';
 
-  const depthMode = cfg.depthMode ?? 'hash'; // 'hash'（默认，治本）| 'blend'（旧混合）
+  // v9s.60：默认 lit（受光柔和）；hash = 颗粒抖动的旧方案，blend = 最初的双面半透明
+  const mode = cfg.depthMode ?? 'lit';
+  const useHash = mode === 'hash';
+  const brightness = Math.min(1, Math.max(0, cfg.brightness ?? 0.7));
   const behindBias = cfg.behindBias ?? 0.05; // 沿运动反方向后推的米数
-  const useHash = depthMode === 'hash';
 
   const cap = Math.max(1, Math.floor(cfg.maxGhosts));
   const ghosts: Ghost[] = [];
@@ -66,8 +73,8 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
     holder.visible = false;
     container.add(holder);
     ghosts.push({
-      holder, snap: null, mats: [], pairs: [],
-      age: 0, active: false, seed: (i + 1) * 0x9e37, builtFor: null,
+      holder, snap: null, mats: [], nodes: [], pairs: [],
+      age: 0, active: false, seed: (i + 1) * 0x9e37, builtFor: null, signature: '',
     });
   }
 
@@ -78,7 +85,7 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
   let lastDrawCalls = 0;
 
   function acquire(): Ghost {
-    let free = ghosts.find((g) => !g.active);
+    const free = ghosts.find((g) => !g.active);
     if (free) return free;
     let oldest = ghosts[0];
     for (const g of ghosts) if (g.age > oldest.age) oldest = g;
@@ -92,32 +99,57 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
     }
     for (const m of g.mats) m.dispose();
     g.mats = [];
+    g.nodes = [];
     g.pairs = [];
     g.builtFor = null;
+    g.signature = '';
+  }
+
+  /** 结构签名：只在生成时算（低频，0.09s 一次），用于检测 rig 增删节点 */
+  function signatureOf(target: THREE.Object3D): string {
+    let n = 0, mesh = 0;
+    target.traverse((o) => { n++; if ((o as THREE.Mesh).isMesh) mesh++; });
+    return `${n}:${mesh}`;
   }
 
   function replaceMeshMaterial(
-    mesh: THREE.Mesh, matMap: Map<THREE.Material, THREE.MeshBasicMaterial>,
-    tintColor: THREE.Color, g: Ghost,
+    mesh: THREE.Mesh,
+    matMap: Map<THREE.Material, THREE.Material>,
+    tintColor: THREE.Color,
+    g: Ghost,
   ): void {
     const src = mesh.material;
-    const make = (m: THREE.Material): THREE.MeshBasicMaterial => {
+    const make = (m: THREE.Material): THREE.Material => {
       const cached = matMap.get(m);
       if (cached) return cached;
-      const base = cfg.tint === 'keep'
-        ? (m as unknown as { color?: THREE.Color }).color ?? tintColor
-        : tintColor;
-      // v9s.59：hash 模式进不透明队列 + 写深度，消除半透明交叉面干涉；
-      // blend 模式保留旧的半透明混合作为回退。
-      const mat = new THREE.MeshBasicMaterial({
-        color: base.clone(),
-        opacity: cfg.baseOpacity,
-        alphaHash: useHash,
-        transparent: !useHash,
-        depthWrite: useHash,
-        depthTest: true,
-        side: useHash ? THREE.FrontSide : THREE.DoubleSide,
-      });
+      const srcColor = (m as unknown as { color?: THREE.Color }).color;
+      const base = (cfg.tint === 'keep' ? (srcColor ?? tintColor) : tintColor).clone();
+      if (brightness < 1) base.multiplyScalar(brightness);
+
+      let mat: THREE.MeshBasicMaterial | THREE.MeshLambertMaterial;
+      if (mode === 'lit') {
+        mat = new THREE.MeshLambertMaterial({
+          color: base,
+          opacity: cfg.baseOpacity,
+          transparent: true,
+          depthWrite: false,
+          depthTest: true,
+          side: THREE.FrontSide,
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 1,
+        });
+      } else {
+        mat = new THREE.MeshBasicMaterial({
+          color: base,
+          opacity: cfg.baseOpacity,
+          alphaHash: useHash,
+          transparent: !useHash,
+          depthWrite: useHash,
+          depthTest: true,
+          side: useHash ? THREE.FrontSide : THREE.DoubleSide,
+        });
+      }
       matMap.set(m, mat);
       g.mats.push(mat);
       return mat;
@@ -125,10 +157,10 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
     mesh.material = Array.isArray(src) ? src.map(make) : make(src);
   }
 
-  function buildSnapshot(g: Ghost, target: THREE.Object3D): void {
+  function buildSnapshot(g: Ghost, target: THREE.Object3D, sig: string): void {
     clearSlot(g);
-    const snap = target.clone(true); // 共享几何体与原材质引用；建一次、长期复用
-    const matMap = new Map<THREE.Material, THREE.MeshBasicMaterial>();
+    const snap = target.clone(true); // 共享几何体 + 原材质引用；建一次、长期复用
+    const matMap = new Map<THREE.Material, THREE.Material>();
     const tintColor = new THREE.Color(cfg.color);
     const rnd = mulberry32(g.seed);
 
@@ -136,26 +168,30 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
       replaceMeshMaterial(snap as THREE.Mesh, matMap, tintColor, g);
     }
 
+    // v9s.61：遍历**全树**，为所有节点（含 Group/pivot）建同步配对；mesh 额外建碎裂 pair。
     const walk = (live: THREE.Object3D, clone: THREE.Object3D): void => {
+      g.nodes.push({ live, clone });
       const lm = live as THREE.Mesh;
       const cm = clone as THREE.Mesh;
       if (lm.isMesh && cm.isMesh) {
         replaceMeshMaterial(cm, matMap, tintColor, g);
         g.pairs.push({
-          live: lm, clone: cm,
+          clone: cm,
           basePos: cm.position.clone(),
           baseQuat: cm.quaternion.clone(),
           dir: randUnitVec(rnd, _dir).clone(),
           spin: randUnitVec(rnd, _spin).clone(),
         });
       }
-      for (let i = 0; i < live.children.length; i++) {
+      // clone(true) 与 live 树 children 一一对应；数量不等时结构签名会先触发重建
+      const n = Math.min(live.children.length, clone.children.length);
+      for (let i = 0; i < n; i++) {
         const lc = live.children[i];
         const cc = clone.children[i];
         if (lc && cc) walk(lc, cc);
       }
     };
-    for (let i = 0; i < target.children.length; i++) {
+    for (let i = 0; i < Math.min(target.children.length, snap.children.length); i++) {
       const lc = target.children[i];
       const cc = snap.children[i];
       if (lc && cc) walk(lc, cc);
@@ -164,6 +200,7 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
     g.holder.add(snap);
     g.snap = snap;
     g.builtFor = target;
+    g.signature = sig;
   }
 
   function resync(g: Ghost, target: THREE.Object3D): void {
@@ -179,23 +216,36 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
       e[14] -= _moveDir.z * behindBias;
     }
     snap.renderOrder = 1;
+
+    // v9s.61：把**当前帧**整棵树（含所有 pivot Group）的局部姿态与可见性回写到克隆树。
+    // 这是「残影跟随动画 / 武器动作」的关键：中间骨骼节点也同步，不再冻结在首次克隆。
+    for (const nd of g.nodes) {
+      const c = nd.clone;
+      const l = nd.live;
+      c.position.copy(l.position);
+      c.quaternion.copy(l.quaternion);
+      c.scale.copy(l.scale);
+      c.visible = l.visible;
+    }
+    // 碎裂基准取「回写后的当前姿态」，而非克隆时的旧值
     for (const p of g.pairs) {
-      const lm = p.live;
-      const cm = p.clone;
-      cm.position.copy(lm.position);
-      cm.quaternion.copy(lm.quaternion);
-      cm.scale.copy(lm.scale);
-      p.basePos.copy(cm.position);
-      p.baseQuat.copy(cm.quaternion);
+      p.basePos.copy(p.clone.position);
+      p.baseQuat.copy(p.clone.quaternion);
     }
   }
 
   function spawn(target: THREE.Object3D): void {
     const g = acquire();
-    if (g.builtFor !== target) buildSnapshot(g, target); // 仅首次 / rig 替换时深克隆
+    const sig = signatureOf(target);
+    // 仅首次 / rig 顶层引用替换 / 结构变化时深克隆
+    if (g.builtFor !== target || g.signature !== sig) buildSnapshot(g, target, sig);
     resync(g, target);
-    // 槽位复用：把上一轮淡出后的 opacity 复位，保证生成瞬间即满亮度
+    // 槽位复用：把上一轮淡出后的 opacity / 碎裂位移复位
     for (const m of g.mats) m.opacity = cfg.baseOpacity;
+    for (const p of g.pairs) {
+      p.clone.position.copy(p.basePos);
+      p.clone.quaternion.copy(p.baseQuat);
+    }
     g.age = 0;
     g.active = true;
     g.holder.visible = true;
@@ -211,7 +261,6 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
       const t = g.age / life;
       if (t >= 1) {
         // 过期只隐藏、保留克隆树与私有材质：下次生成直接 resync 复用，稳态 0 分配。
-        // 只有 rig 替换（换 bodyType）/ reset / dispose 才真正 clearSlot。
         g.active = false;
         g.holder.visible = false;
         continue;

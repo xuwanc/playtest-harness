@@ -42,7 +42,7 @@ const rtCfg: AfterimageRtViewConfig = {
   tint: 'keep',
   color: '#9fdcff',
   resolutionScale: 0.5,
-  blur: 0.8,
+  updateStride: 1,
   worldScale: true,
   refDistance: 0,
 };
@@ -109,7 +109,31 @@ describe('v9s.59 可复用残影特效库', () => {
     rt.dispose();
   });
 
-  it('ghost·alphaHash：材质进不透明队列、写深度、正面剔除（根治交叉面干涉）', () => {
+  it('ghost·默认 lit：受光柔和半透明，无 alphaHash 颗粒、压暗不过亮、FrontSide 去自交叉', () => {
+    const noMode = { ...ghostCfg } as Partial<AfterimageViewConfig>;
+    delete noMode.depthMode;              // 不传 depthMode → 走默认 lit
+    const fx = createGhostAfterimage(noMode as AfterimageViewConfig);
+    const { root, target } = makeRig();
+    root.position.x += 0.2;
+    fx.update(0.05, target, root, true, 'elder');
+    const holder = fx.container.children.find((h) => h.visible)!;
+    let m: THREE.Material | null = null;
+    holder.children[0]!.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh && !m) m = mesh.material as THREE.Material;
+    });
+    expect(m).toBeInstanceOf(THREE.MeshLambertMaterial); // 受光 → 不会比本体更亮
+    const mat = m as unknown as THREE.MeshLambertMaterial;
+    expect(mat.alphaHash).toBe(false);       // 无颗粒 / 磨砂
+    expect(mat.transparent).toBe(true);
+    expect(mat.depthWrite).toBe(false);      // 本体写深度把残影挡在「背后」
+    expect(mat.depthTest).toBe(true);
+    expect(mat.side).toBe(THREE.FrontSide); // 去掉正反面自交叉
+    expect(mat.color.r).toBeLessThan(1);    // brightness 压暗（源材质纯红 r=1）
+    fx.dispose();
+  });
+
+  it('ghost·alphaHash：材质进不透明队列、写深度、正面剔除（A/B 对比用）', () => {
     const fx = createGhostAfterimage(ghostCfg);
     const { root, target } = makeRig();
     root.position.x += 0.2;

@@ -1273,19 +1273,29 @@ html, body {
 }
 .wardrobe-toast.is-show { opacity: 1; transform: translateY(0); }
 
-/* 竖屏：转台在上、侧栏在下，底部一排按钮跨整宽 */
+/* 竖屏：转台在上、侧栏在下，底部一排按钮跨整宽。
+   v9s.61：旧规则 `.wardrobe-stage{flex:1 1 52%;min-height:0}` 会被 12 格
+   `aspect-ratio:1/1` 的魔方挤到 0 高 → canvas 478×1、角色不显示。现在舞台给
+   固定保底高度、侧栏可滚动、魔方改成紧凑的小方格，横竖屏都能看到转台角色。 */
 @media (orientation: portrait) {
-  .wardrobe-card { width: 100vw; max-height: 52vh; }
+  .wardrobe-card { width: 100vw; max-height: 58vh; }
   .wardrobe-body { flex-direction: column; }
-  .wardrobe-stage { flex: 1 1 52%; min-height: 0; max-width: none; }
-  .wardrobe-side {
+  .wardrobe-stage {
     flex: 0 0 auto;
+    height: clamp(140px, 26vh, 240px);
+    min-height: 140px;
+    max-width: none;
+  }
+  .wardrobe-side {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
     border-left: none;
     border-top: 1px solid rgba(120, 160, 200, 0.18);
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px 10px;
+    display: block;
   }
+  .wardrobe-grid { grid-template-columns: repeat(6, 1fr); } /* 12 格 → 2 行，紧凑 */
+  .wardrobe-cell { aspect-ratio: auto; height: 32px; }      /* 固定小格，不按宽度撑高 */
   .wardrobe-sec { margin-bottom: 4px; }
   .wardrobe-actions { gap: 6px 8px; }
 }

@@ -11,6 +11,7 @@
 | 第一次接手，想知道项目是什么 | `README.md` → 本页 §2 挑一份系统文档 |
 | 有个现象要查（看不见 / 抖 / 卡 / 滑）/ 要改某块代码 | 本页 §2「按症状查」→ §3「按模块查」 |
 | 想知道「现在做到哪、下一步做什么」 | [`state/CURRENT.md`](state/CURRENT.md) |
+| **会话中断 / 重连后从哪里继续、上次为什么停** | [`state/TASK-TRACKER.md`](state/TASK-TRACKER.md)（本地任务拆解 + 断点台账，恢复 SOP 在 §0/§2） |
 | 想知道「为什么当初这么定」 | [`decisions/`](decisions/) 或 [`journal/`](journal/) |
 
 ## 2. 按症状查
@@ -164,7 +165,7 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（132 文件 / 1338 例） | 提交前 |
+| `npm test` | vitest 全量（134 文件 / 1356 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `python3 tools/shot.py ...` | 测试截图机位（跟随角色 / 骨骼 / 世界点，任意角度 + fov） | 要拍验收图、写文档配图、确认几何关系时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
@@ -240,6 +241,7 @@ clearSpawned() 清除全部测试单位，返回数量
 | [`systems/multi-agent-workflow.md`](systems/multi-agent-workflow.md) | 多 agent 分支、版本号分配、契约先行、冲突分类、合并闸门、**无人值守执行层 §11** |
 | [`checklists/manual-acceptance.md`](checklists/manual-acceptance.md) | 108 步手动验收 |
 | [`state/CURRENT.md`](state/CURRENT.md) | 当前状态 + 下一步（覆盖写） |
+| [`state/TASK-TRACKER.md`](state/TASK-TRACKER.md) | 本地任务拆解 / 进度 / 中断位置与原因 / 断点续跑 SOP（本地台账，与远端发布解耦） |
 | [`state/MERGE_QUEUE.md`](state/MERGE_QUEUE.md) | 合并闸门失败队列（agent-sync 自动维护，空表即无待办） |
 | [`risk-review.md`](risk-review.md) | **当前**活跃风险 + 处置优先级 |
 | [`risk-history.md`](risk-history.md) | 已关闭风险的归档（按版本） |
