@@ -2144,7 +2144,9 @@
       "fragment": 0.14,
       "fragmentExp": 1.6,
       "fragmentStart": 0.35,
-      "fragmentSpin": 0.6
+      "fragmentSpin": 0.6,
+      "depthMode": "hash",
+      "behindBias": 0.06
     },
     "rtAfterimage": {
       "enabled": true,
@@ -2154,7 +2156,11 @@
       "intensity": 0.9,
       "mode": "add",
       "tint": "keep",
-      "color": "#9fdcff"
+      "color": "#9fdcff",
+      "resolutionScale": 0.5,
+      "blur": 0.8,
+      "worldScale": true,
+      "refDistance": 0
     },
     "hitstop": {
       "enabled": true,

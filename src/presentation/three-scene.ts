@@ -41,8 +41,7 @@ import type { VoxelRig } from './voxel-rig';
 import { createSpiderRig } from './spider-rig';
 import { createYawSmoother } from './yaw-smooth';
 import { createWeaponTrail } from './weapon-trail';
-import { createAfterimage } from './elder-afterimage';
-import { createRtAfterimage } from './rt-afterimage';
+import { createAfterimageEffect } from './effects';
 import { createGrassLayer } from './grass-layer';
 import type { GrassDebug } from './grass-layer';
 import { createDestructibleLayer } from './destructible-layer';
@@ -567,8 +566,8 @@ export function createSceneView(
   // v9s.38：刀光归到统一层级（weapon-trail 组件内部的默认值不再参与排序判断）
   setFxOrder(playerTrail.object, FX_ORDER.trail);
   scene.add(playerTrail.object);
-  // v9s.56：老头移动残影（纯表现，克隆浅拷贝 + 半透明淡出，默认仅 elder 生效）
-  const elderAfterimage = createAfterimage(view.afterimage);
+  // v9s.59：角色残影统一走可复用特效库（ghost 方案）；alphaHash 根治交叉面干涉。
+  const elderAfterimage = createAfterimageEffect('ghost', view.afterimage);
   setFxOrder(elderAfterimage.container, FX_ORDER.trail - 1);
   scene.add(elderAfterimage.container);
   const aiPrev = new THREE.Vector3();
@@ -1037,10 +1036,11 @@ export function createSceneView(
 
   // ---- 2.5D 相机（叠加 Core 的智能构图意图） ----
   const cam = createCameraRig(view.camera, view.smartCamera, view.zoom, w0 / h0);
-  // v9s.57：RT 反馈残影（机器人对照测试）。renderer / scene / camera 在创建点都已就绪。
-  const rtAfterimage = createRtAfterimage(
-    { renderer, scene, camera: cam.camera }, view.rtAfterimage,
+  // v9s.59：RT 反馈残影统一走可复用特效库（rt 方案，ctx 需 renderer/scene/camera）。
+  const rtAfterimage = createAfterimageEffect(
+    'rt', { renderer, scene, camera: cam.camera }, view.rtAfterimage,
   );
+  const rtPrev = new THREE.Vector3();
   // v9s.57：陪练头顶血条（DOM 覆盖层）。只画有血量的单位，死亡隐藏、重生重现。
   const healthBars = createHealthBarLayer(
     container, view,
@@ -1944,9 +1944,16 @@ export function createSceneView(
 
       cam.update(c.position.x, c.position.y, c.position.z, frameDt, w.camera);
       renderer.render(scene, cam.camera);
-      // v9s.57：RT 反馈残影（机器人）。必须在主渲染之后合成到屏幕。
+      // v9s.59：RT 反馈残影（机器人）。必须在主渲染之后合成到屏幕。
+      // 传真实 moving：静止且残影衰减完毕后整套管线停跑（省掉全部离屏 pass）。
       if (view.rtAfterimage.enabled) {
-        rtAfterimage.update(frameDt, hero.group, playerRoot, true, bodyTypeId);
+        const rtMoved = Math.hypot(
+          playerRoot.position.x - rtPrev.x,
+          playerRoot.position.y - rtPrev.y,
+          playerRoot.position.z - rtPrev.z,
+        );
+        rtAfterimage.update(frameDt, hero.group, playerRoot, rtMoved >= 0.002, bodyTypeId);
+        rtPrev.set(playerRoot.position.x, playerRoot.position.y, playerRoot.position.z);
       }
     },
     resize(): void {

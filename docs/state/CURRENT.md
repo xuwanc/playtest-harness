@@ -5,7 +5,8 @@
 
 ## 一句话
 
-v0.9.95：**攻击层改四元数增量 + 残影双轨修复**——躯干用 additive 叠攻击（`站姿⁻¹ ⊗ 攻击`，w=1 与旧绝对姿态逐位一致）；RT 拖尾此前不显示（灯光未进 layer、背景未屏蔽）、老头残影掉帧（每帧深克隆整棵 rig + new 材质）。
+v0.9.96：**残影收敛为可复用特效库 + 交叉面干涉根治 + 双方案性能优化**。`presentation/effects/` 统一 `AfterimageEffect` 接口 + 工厂/注册表，任意角色 / 任意方案可复用；ghost 改 `alphaHash`（写深度、不透明队列）根治老头头部「残影交叉面干涉」并真正「画在背后」；RT 降采样 + 5-tap 模糊 + 相机缩放重投影解耦 + pass 合并 + 静止停跑。
+（上一版 v0.9.95：攻击层改四元数增量 + 残影双轨修复——RT 拖尾此前不显示、老头残影掉帧，均已修。）
 ① 本轮（姿态层 · v9s.73）：**攻击层从「欧拉逐轴覆盖」变成「四元数增量」**——躯干按
 `delta = 站姿⁻¹ ⊗ 攻击姿势`、`final = 基础 ⊗ slerp(I, delta, w)` 叠加。
 `presentation/pose-quat.ts`（快照 / 增量 / 合成 / 最大转角，纯函数）；`voxel-rig` 的
@@ -24,6 +25,22 @@ v0.9.95：**攻击层改四元数增量 + 残影双轨修复**——躯干用 ad
 ② v9s.58 修复（本轮）：
   - **RT 拖尾不显示**：根因是 layer 隔离渲染时灯光只在 layer 0，RT 里角色无光照→全黑剪影，Additive 叠加等于 0；且场景 `background` 未屏蔽会染色整屏。修复：把场景灯光也 `enable(layer1)`、RT 捕获时临时把 `scene.background` 置空、首次进入清空双缓冲。拖尾参数微调（`decay` 0.86→0.9、拖尾更长）。
   - **老头残影掉帧**：根因是 `spawn()` 每帧 `target.clone(true)` 深克隆整棵 rig + 为每个 mesh `new MeshBasicMaterial`、过期又 `dispose`，体素角色几十上百 mesh，移动时每 0.09s 一次 → 海量短命对象 + GC 抖动。修复：每个对象池槽位**只首次克隆一次整棵 rig**，之后只把当前姿态回写进已克隆树（复制局部 transform，零分配）、复用首建私有材质；仅 rig 整体被替换（换 bodyType）才重建。`tests/v9s56` 新增「稳态零分配、不重复深克隆」断言。
+② v9s.59 特效库 + 性能（本轮，见 `presentation/effects/`）：
+  - **可复用特效库**：`shared.ts`（统一 `AfterimageEffect` / `EffectContext` / `AfterimageDebug` 性能读数 / PRNG）、`ghost-afterimage.ts`、`rt-afterimage.ts`、`index.ts`（`createAfterimageEffect(kind, …)` 工厂 + `AFTERIMAGE_EFFECTS` 注册表）。旧 `elder-afterimage.ts` / `rt-afterimage.ts` 退为兼容转发层。库不认识 World/Core、不绑定 bodyType，加新方案只需登记一项。
+  - **需求1 · 老头头部交叉面干涉 / 画在背后**：根因是旧 `transparent + depthWrite:false + DoubleSide` 半透明混合，多部件体素 rig 的面片互相叠加、与角色本体交叉 → Z 闪烁、糊成一团。改用 **`alphaHash` 随机透明**（`transparent:false` 进不透明队列、`depthWrite/depthTest:true`、`FrontSide`）：片元按屏幕哈希抖动保留，不做混合 → 无透明排序、无自相交，且按深度被角色本体正确遮挡。`behindBias` 再沿运动反方向把快照后推一小段避免共面。每帧改 `opacity` 仍驱动抖动密度淡出。`depthMode:'blend'` 可切回旧混合做 A/B 对比。
+  - **需求2 · RT 降采样**：`resolutionScale`（默认 0.5）→ 三张 RT 按 drawingBuffer×scale 建，填充率降到 scale²；compose 线性放大顺带一次免费模糊。
+  - **需求3 · 相机缩放解耦 + 低成本模糊**：①扩散中心从写死的屏幕中心改成**角色屏幕投影 anchor**；②反馈采样按 `zoomRatio = prevDist/curDist` **重投影**历史帧，相机缩放时残影跟着一起缩放、不粘屏；③扩散量/模糊半径按相机距离归一。`blur` 在 accum pass 内做 5-tap 十字 box blur，不新增 pass。
+  - **需求4 · 性能评估**（1080p、dpr=2 → 3840×2160）：
+    | 项 | 旧 v9s.58 | 新 v9s.59 | 收益 |
+    |---|---|---|---|
+    | RT 全屏 pass/帧（活动时） | 4（rtCur + decay + add + compose） | 3（rtCur + **accum 合并 decay+add** + compose） | −25% |
+    | RT 填充像素/帧 | 4×8.29M = 33.2M | 3×(8.29M×0.5²) = 6.22M | **−81%** |
+    | RT 静止时 | 仍跑满 4 pass | 残影衰减到阈值后**整套停跑**（0 pass） | 省掉全部离屏开销 |
+    | `clearAcc` | 非匹配角色每帧 2 次 setRT+clear | 仅作用状态切换时 1 次 | 消除每帧浪费 |
+    | ghost 稳态分配 | 过期 `clearSlot` 丢树、下次又深克隆 | 过期只隐藏、**保留克隆树**，永不重复 deep clone | 真正 0 分配 |
+    | ghost 片元 | DoubleSide + 半透明 overdraw | FrontSide + 不透明队列 + early-Z | 显著减 overdraw |
+    | 稳态每帧临时对象 | 每帧 new Vector2/Color | 复用模块级 `_size`/`_clearColor`/`_worldPos`/`_ndc` | 降 GC |
+  - 单测：`v9s59-effects-library`（统一工厂/注册表/接口契约、alphaHash、behindBias、blend 回退、零分配）、`v9s57` 重写（3-pass、降采样、静止停跑、缩放解耦）。
 ② 主干已含：Wardrobe 底部抽屉改版 + 待机盾面朝向修正（v0.9.92，`shieldPitchDeg` 8°→70°，见 `systems/wardrobe.md`）、脊柱链偏航沿「髋 → 腰 → 胸」单调 + 髋块 + 鱼人抬头（v0.9.91）、模型空间补偿 + 脚锁（v0.9.89）、鱼人爬姿体态层、哨兵机角色、`rig-fix` 七条造型修正。
 ③ 更早：竖屏操作簇、震屏分档、技能指示器统一口径、文档事实守卫 / 推送护栏 / 四层 CI。
 
@@ -33,15 +50,15 @@ v0.9.95：**攻击层改四元数增量 + 残影双轨修复**——躯干用 ad
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.95`（内部代号 v9s.73） |
-| 线上徽标 | `v0.9.95`（构建时间随发布变化） |
+| `package.json` 版本 | `0.9.96`（内部代号 v9s.59 特效库） |
+| 线上徽标 | `v0.9.96`（构建时间随发布变化） |
 | 发布方式 | `npm run ship`（构建 → 推 main → 重建 `preview` 产物；带凭证自恢复与推送重试） |
 | 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— 此链接固定不变 |
 | 蜘蛛开局 | <https://xuwanc.github.io/playtest-harness/?hero=spider> |
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 鱼人开局 | <https://xuwanc.github.io/playtest-harness/?hero=murloc> |
 | 哨兵机开局 | <https://xuwanc.github.io/playtest-harness/?hero=sentinel> |
-| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 `v0.9.95`（不写死 js 名，构建期注入会变） |
+| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 `v0.9.96`（不写死 js 名，构建期注入会变） |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
@@ -49,10 +66,10 @@ v0.9.95：**攻击层改四元数增量 + 残影双轨修复**——躯干用 ad
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 125 文件 / 1286 例全绿 |
+| `npx vitest run` | 127 文件 / 1304 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
 | `npm run smoke` | 77/77 PASS |
-| `npm run docs:check` | PASS（107 份文档 ≤300 行，README 99 行） |
+| `npm run docs:check` | PASS（108 份文档 ≤300 行，README 99 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 | `python3 tools/check-online.py --wait 180` | 发布后核验线上 JS 与本地 `dist` 同一份 |
