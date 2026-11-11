@@ -2975,19 +2975,6 @@ export type ProgramAnimViewConfig = {
   stance?: Record<string, StanceViewConfig>;
   /** v9s.33：脊柱分段（缺省 / enabled=false 时保持单段 upper，逐帧与旧版一致） */
   spine?: SpineViewConfig;
-  /**
-   * v9s.74：动画层「通道所有权」探针（缺省关闭）。
-   *
-   * 打开后 `voxel-rig` 在每层边界采一次快照，帧尾比对「层声明写了哪些通道」与
-   * 「实测写了哪些通道」，结果从 `rig.animProbe()` 读。**纯诊断**：不改姿态、
-   * 不进快照、不影响确定性；关闭时每层只多一次空函数调用。
-   *
-   * 为什么需要它：二十多层的执行顺序只写在注释编号里，历史上反复出现
-   * 「某层把别人的通道抹掉」（v9s.73 的 `upper.rotation.y` 归零吃掉持械站姿）。
-   */
-  probe?: {
-    enabled?: boolean;
-  };
 };
 
 /**
@@ -3216,11 +3203,16 @@ export type AfterimageViewConfig = {
   /** 碎裂时的随机自转幅度（弧度）：子部件各自绕固定轴旋转 */
   fragmentSpin: number;
   /**
-   * v9s.59：深度/透明模式。'hash'（默认）= alphaHash 随机透明，进不透明队列 + 写深度，
-   * 根治多部件半透明交叉面干涉、让残影被角色本体正确遮挡（「画在背后」）；
-   * 'blend' = 旧的半透明混合（transparent + depthWrite:false + DoubleSide），供 A/B 对比。
+   * v9s.60：残影材质模式。
+   *  - 'lit'（默认）：受光柔和半透明（MeshLambertMaterial + FrontSide + depthTest）。
+   *    本体写深度把残影挡在身后 → 无颗粒、无叠加发亮、无正反面自交叉。
+   *  - 'hash'：alphaHash 随机透明（v9s.59 方案，进不透明队列 + 写深度）。无交叉面干涉，
+   *    但屏幕空间抖动带来颗粒 / 磨砂感、且不受光偏亮 —— 仅作 A/B 对比。
+   *  - 'blend'：最初的半透明混合（MeshBasicMaterial + transparent + DoubleSide），供回退。
    */
-  depthMode?: 'hash' | 'blend';
+  depthMode?: 'lit' | 'hash' | 'blend';
+  /** v9s.60：残影亮度倍率（0..1，默认 0.6）。压暗残影，避免比受光的角色本体更亮 */
+  brightness?: number;
   /** v9s.59：生成时沿运动反方向把整张快照后推的米数（默认 0.05），避免与角色共面干涉 */
   behindBias?: number;
 };
@@ -3255,8 +3247,13 @@ export type AfterimageRtViewConfig = {
    * 填充率降到 scale²；compose 线性放大顺带得到一次免费模糊。RT 最有效的性能旋钮。
    */
   resolutionScale?: number;
-  /** v9s.59：低成本模糊半径（RT 像素，默认 0.8）。accum pass 内 5-tap 十字 box blur，不新增 pass */
+  /** @deprecated v9s.60 起移除模糊实现（观感糊 + 掉帧）。保留字段仅为兼容旧配置，传了也不生效。 */
   blur?: number;
+  /**
+   * v9s.60：时间降采样步长（1~4，默认 2）。每 N 帧才跑一次「角色重渲 + 累积反馈」，
+   * 其余帧只做一次便宜的合成 → 移动时 RT 开销近似减半；1 = 关闭（每帧完整反馈）。
+   */
+  updateStride?: number;
   /**
    * v9s.59：相机缩放解耦（默认 true）。扩散锚定角色屏幕投影 + 历史帧按 prevDist/curDist
    * 重投影 + 扩散/模糊按相机距离归一 → 拖尾「在场景里大小不随相机缩放」。

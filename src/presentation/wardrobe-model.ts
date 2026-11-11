@@ -198,3 +198,47 @@ export type CharacterConfig = {
   voxel: VoxelConfig;
   colors: ColorConfig;
 };
+
+/**
+ * v9s.60：装备展示相机的**自适应取景**（纯函数，可单测）。
+ *
+ * 底部抽屉占下半屏，角色应完整出现在舞台「上半区」、下方留白。做法是「相机整体下移
+ * + 拉远」：看向点压到角色下部（footY + 0.15·height），相机也随之降低、只留轻微俯视；
+ * 距离按垂直视野容纳 1.8 倍身高算，并按 aspect 补偿窄舞台的左右裁切。
+ *
+ * 不同体型（standard / elder / sentinel）高度不同 → 传入实测包围盒即可自动适配，
+ * 不再像 v9s.69 那样写死 `z=3.0 / lookAt y=0.45` 把高体型头部裁出画面。
+ */
+export type WardrobeFraming = {
+  /** 相机到角色的水平距离 */
+  distance: number;
+  /** 看向点的 y（明显低于角色中心 → 角色被推到画面上半区） */
+  lookY: number;
+  /** 相机自身的 y（随 lookY 一起下移，保持轻微俯视） */
+  cameraY: number;
+  /** 该距离下的垂直可见高度（诊断 / 验收用） */
+  visibleHeight: number;
+};
+
+export function wardrobeFraming(
+  height: number,
+  width: number,
+  aspect: number,
+  fovDeg: number,
+  footY = 0,
+): WardrobeFraming {
+  const h = Math.max(0.9, height);
+  const w = Math.max(0.6, width);
+  const a = Math.max(0.35, aspect || 1);
+  const tanHalf = Math.tan((fovDeg * Math.PI) / 360);
+  // 垂直：留 1.8× 身高，角色占画面上部约 3/5、下方留白
+  const visibleHeight = h * 1.8;
+  let distance = visibleHeight / (2 * tanHalf);
+  // 水平：窄舞台时按可见宽度补距离，保证转台旋转时左右不裁
+  const needWidth = w * 1.45;
+  const distForWidth = needWidth / (2 * tanHalf * a);
+  distance = Math.max(distance, distForWidth);
+  const lookY = footY + h * 0.15;
+  const cameraY = lookY + h * 0.12;
+  return { distance, lookY, cameraY, visibleHeight };
+}

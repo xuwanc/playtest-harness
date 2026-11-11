@@ -19,7 +19,7 @@ const baseCfg: AfterimageRtViewConfig = {
   tint: 'keep',
   color: '#9fdcff',
   resolutionScale: 0.5,
-  blur: 0.8,
+  updateStride: 1,          // 测试用：每帧完整反馈，便于断言 3-pass
   worldScale: true,
   refDistance: 0,
 };
@@ -125,5 +125,22 @@ describe('v9s.57 RT 反馈残影：机器人对照测试', () => {
     ctx.camera.position.set(0, 0, 5); // 相机拉近 → 重投影比例应变化
     ai.update(0.05, target, new THREE.Group(), true, 'sentinel');
     expect(ai.debug().zoomRatio).not.toBe(1);
+  });
+
+  it('updateStride 时间降采样：非反馈帧只做 1 次便宜合成（移动时开销近似减半）', () => {
+    const { renderer, renderCalls } = makeMock();
+    const ai = createRtAfterimage(makeCtx(renderer), { ...baseCfg, updateStride: 2 });
+    const target = makeTarget();
+    const root = new THREE.Group();
+    ai.update(0.05, target, root, true, 'sentinel'); // frame1：强制首次反馈 → 3 render
+    expect(renderCalls.length).toBe(3);
+    renderCalls.length = 0;
+    ai.update(0.05, target, root, true, 'sentinel'); // frame2：2%2=0 → 3 render
+    expect(renderCalls.length).toBe(3);
+    renderCalls.length = 0;
+    ai.update(0.05, target, root, true, 'sentinel'); // frame3：3%2=1 → 只 1 次 compose
+    expect(renderCalls.length).toBe(1);
+    expect(ai.debug().passes).toBe(1);
+    ai.dispose();
   });
 });

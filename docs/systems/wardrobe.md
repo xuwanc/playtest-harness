@@ -69,3 +69,20 @@
   指数平滑帧率无关、分区结构、合成（材料计数 / 配方匹配 / 消耗）。
 - `npm run smoke`：浏览器自检含「惰性上下文、武器+合成台齐全、3×4 魔方 12 格、动态站立
   frames 增长、视线跟随、拖动旋转、3 铁合成头盔进 3D 视窗、关闭停渲染 + 重开复用」。
+
+## 6. v9s.60：相机自适应取景 + 尺寸稳健性
+
+- 原来 `ensure3D()` 写死 `camera.position(0, 0.72, 3.0)` / `lookAt(0, 0.45, 0)`，垂直可见
+  高度只约 1.8m，高体型（哨兵机）头部被裁出舞台、角色贴着下边缘 —— 第 1 节说的「相机
+  中心下移让角色贴近画面上半区」实际没做到。
+- 现在 `wardrobe-model.ts` 的纯函数 `wardrobeFraming(height, width, aspect, fov, footY)`
+  按角色实测包围盒算取景：相机与看向点**一起下移**（camY / lookY 都低于旧值）、拉远到
+  容纳 1.8× 身高，并按 aspect 补偿窄舞台。角色完整落在舞台上半区、下方留约 1/3 空白，
+  三种体型自动适配。切体型（`syncCharacter`）/ 换装备（`syncEquipment`）/ 舞台尺寸变化
+  （`resize`）都会重算；`measureRig()` 会暂时归零转台角再量 AABB，避免旋转让尺寸抖动。
+- 尺寸稳健性：`ResizeObserver` 观察 `#wardrobe-stage` + 打开时 rAF 补一次 `resize()`，
+  避免首次 `ensure3D()` 抢在抽屉 transform 过渡 / flex 布局完成前拿到 0 尺寸、canvas 被
+  设成 1×1 而「角色不显示」。
+- 验收：`__harness.wardrobe().framing` 暴露 `{ distance, lookY, cameraY, visibleHeight }`；
+  `tests/v9s60-wardrobe-framing.test.ts` 覆盖下移 / 上半区完整 / 体型自适应 / aspect 补偿 /
+  退化输入。

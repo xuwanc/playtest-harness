@@ -4,25 +4,24 @@ import { mulberry32, randUnitVec } from './shared';
 import type { AfterimageEffect, AfterimageDebug } from './shared';
 
 /**
- * 残影方案 A · 克隆 ghost 池（v9s.56 → v9s.59，纯表现层）。
+ * 残影方案 A · 克隆 ghost 池（v9s.56 → v9s.60，纯表现层）。
  *
  * 移动时按节流间隔把 rig 顶层 group 的**当前姿态**回写进对象池里已克隆的树，
  * 冻结在生成时刻的世界位姿，按年龄淡出后回收。作用于 `cfg.bodyTypes`（空 = 所有角色）。
  *
- * v9s.59 关键改进（对应用户「头被残影交叉面干涉 / 画在角色背后」）：
- *  - 旧实现用 `transparent + depthWrite:false + DoubleSide` 半透明混合。多部件体素 rig
- *    里每个 box 的正反面、多个 ghost 之间、ghost 与角色本体之间全部靠「距离排序」叠，
- *    头部（很多小 mesh 挤在一起）必然出现面片交叉、Z 闪烁、糊成一团。
- *  - 改用 **`alphaHash`（hashed / 随机透明）**：材质进不透明队列、`depthWrite:true`、
- *    `depthTest:true`、`FrontSide`。片元按屏幕哈希抖动决定保留，不做混合 → 天然没有
- *    透明排序与自相交问题，且和角色本体按深度正确遮挡（残影在后面就被挡住）。
- *    这是比「调 renderOrder」更治本的办法。每帧改 `opacity` 依旧驱动抖动密度淡出。
- *  - `behindBias`：生成时把整张快照沿**运动反方向**推一小段，避免刚生成那一帧和角色
- *    本体完全共面，读感即「残影留在角色背后」。方向在生成时固化，不逐帧抖、不需相机。
- *  - `depthMode:'blend'` 可切回旧半透明混合，便于 A/B 对比。
+ * v9s.60 观感修正（对应用户「拖影变成颗粒磨砂感、而且太亮」）：
+ *  - v9s.59 用 `alphaHash` 随机透明治交叉面干涉，但它靠**屏幕空间抖动**决定片元保留，
+ *    观感就是一层颗粒 / 磨砂网点；且材质是 `MeshBasicMaterial`（不受光、直接输出满色），
+ *    比受光后偏暗的角色本体更亮。
+ *  - 默认改为 **`lit` 受光柔和半透明**：`MeshLambertMaterial` 与角色本体受同一套灯光 →
+ *    亮度天然不越界；`FrontSide` 去掉每个 box 的正反面自交叉；`depthTest:true` +
+ *    角色本体写深度 → 残影被本体挡住，只出现在轮廓外的「背后」；`depthWrite:false`
+ *    避免残影之间互相写深度打架。再加 `brightness` 主动压暗、`behindBias` 沿运动反方向
+ *    后推避免共面。
+ *  - 结果：无颗粒、不过亮、头部不再被面片糊住。'hash' / 'blend' 保留供 A/B 对比。
  *
- * 性能（v9s.58 已做，v9s.59 延续）：每个槽位只在首次 / rig 替换时深克隆一次，
- * 稳态生成 = 0 分配；材质按源材质去重复用；碎裂只在 `t>fragmentStart` 后遍历。
+ * 性能（v9s.58 起）：每个槽位只在首次 / rig 替换时深克隆一次，稳态生成 = 0 分配；
+ * 材质按源材质去重复用；碎裂只在 `t>fragmentStart` 后遍历。过期只隐藏、保留克隆树。
  * 纯表现，不读 World、不写 Core、不引入命中。
  */
 
@@ -38,7 +37,7 @@ type Pair = {
 type Ghost = {
   holder: THREE.Group;
   snap: THREE.Object3D | null;
-  mats: THREE.MeshBasicMaterial[];
+  mats: THREE.Material[];
   pairs: Pair[];
   age: number;
   active: boolean;
@@ -55,9 +54,11 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
   const container = new THREE.Group();
   container.name = 'afterimage-ghost';
 
-  const depthMode = cfg.depthMode ?? 'hash'; // 'hash'（默认，治本）| 'blend'（旧混合）
+  // v9s.60：默认 lit（受光柔和）；hash = 颗粒抖动的旧方案，blend = 最初的双面半透明
+  const mode = cfg.depthMode ?? 'lit';
+  const useHash = mode === 'hash';
+  const brightness = Math.min(1, Math.max(0, cfg.brightness ?? 0.7));
   const behindBias = cfg.behindBias ?? 0.05; // 沿运动反方向后推的米数
-  const useHash = depthMode === 'hash';
 
   const cap = Math.max(1, Math.floor(cfg.maxGhosts));
   const ghosts: Ghost[] = [];
@@ -78,7 +79,7 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
   let lastDrawCalls = 0;
 
   function acquire(): Ghost {
-    let free = ghosts.find((g) => !g.active);
+    const free = ghosts.find((g) => !g.active);
     if (free) return free;
     let oldest = ghosts[0];
     for (const g of ghosts) if (g.age > oldest.age) oldest = g;
@@ -97,27 +98,46 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
   }
 
   function replaceMeshMaterial(
-    mesh: THREE.Mesh, matMap: Map<THREE.Material, THREE.MeshBasicMaterial>,
-    tintColor: THREE.Color, g: Ghost,
+    mesh: THREE.Mesh,
+    matMap: Map<THREE.Material, THREE.Material>,
+    tintColor: THREE.Color,
+    g: Ghost,
   ): void {
     const src = mesh.material;
-    const make = (m: THREE.Material): THREE.MeshBasicMaterial => {
+    const make = (m: THREE.Material): THREE.Material => {
       const cached = matMap.get(m);
       if (cached) return cached;
-      const base = cfg.tint === 'keep'
-        ? (m as unknown as { color?: THREE.Color }).color ?? tintColor
-        : tintColor;
-      // v9s.59：hash 模式进不透明队列 + 写深度，消除半透明交叉面干涉；
-      // blend 模式保留旧的半透明混合作为回退。
-      const mat = new THREE.MeshBasicMaterial({
-        color: base.clone(),
-        opacity: cfg.baseOpacity,
-        alphaHash: useHash,
-        transparent: !useHash,
-        depthWrite: useHash,
-        depthTest: true,
-        side: useHash ? THREE.FrontSide : THREE.DoubleSide,
-      });
+      const srcColor = (m as unknown as { color?: THREE.Color }).color;
+      const base = (cfg.tint === 'keep' ? (srcColor ?? tintColor) : tintColor).clone();
+      // 主动压暗：受光材质 + 亮度倍率，避免残影比本体更亮
+      if (brightness < 1) base.multiplyScalar(brightness);
+
+      let mat: THREE.MeshBasicMaterial | THREE.MeshLambertMaterial;
+      if (mode === 'lit') {
+        // 受光柔和半透明：无颗粒、不过亮；FrontSide 去自交叉；本体写深度把残影挡在背后
+        mat = new THREE.MeshLambertMaterial({
+          color: base,
+          opacity: cfg.baseOpacity,
+          transparent: true,
+          depthWrite: false,
+          depthTest: true,
+          side: THREE.FrontSide,
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 1,
+        });
+      } else {
+        // hash / blend：保留旧实现供 A/B
+        mat = new THREE.MeshBasicMaterial({
+          color: base,
+          opacity: cfg.baseOpacity,
+          alphaHash: useHash,
+          transparent: !useHash,
+          depthWrite: useHash,
+          depthTest: true,
+          side: useHash ? THREE.FrontSide : THREE.DoubleSide,
+        });
+      }
       matMap.set(m, mat);
       g.mats.push(mat);
       return mat;
@@ -128,7 +148,7 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
   function buildSnapshot(g: Ghost, target: THREE.Object3D): void {
     clearSlot(g);
     const snap = target.clone(true); // 共享几何体与原材质引用；建一次、长期复用
-    const matMap = new Map<THREE.Material, THREE.MeshBasicMaterial>();
+    const matMap = new Map<THREE.Material, THREE.Material>();
     const tintColor = new THREE.Color(cfg.color);
     const rnd = mulberry32(g.seed);
 
@@ -211,7 +231,6 @@ export function createGhostAfterimage(cfg: AfterimageViewConfig): AfterimageEffe
       const t = g.age / life;
       if (t >= 1) {
         // 过期只隐藏、保留克隆树与私有材质：下次生成直接 resync 复用，稳态 0 分配。
-        // 只有 rig 替换（换 bodyType）/ reset / dispose 才真正 clearSlot。
         g.active = false;
         g.holder.visible = false;
         continue;
