@@ -58,8 +58,14 @@ window.__hitStart = () => {
   const tick = () => {
     if (!window.__hit.on) return;
     const w = h.world;
+    const b = h.view.bladesWorld ? h.view.bladesWorld() : null;
+    const tip = b && b.right ? b.right.tip : null;
     window.__hit.rows.push({ prog: w.combat.attackProgress, hits: w.hitCount,
-                             stop: w.combat.hitstop, phase: w.combat.phase });
+                             stop: w.combat.hitstop, phase: w.combat.phase,
+                             af: +w.combat.attackFacing.toFixed(2),
+                             pz: +w.character.position.z.toFixed(2),
+                             tipZ: tip ? +tip.z.toFixed(2) : null,
+                             tipY: tip ? +tip.y.toFixed(2) : null });
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
@@ -844,18 +850,22 @@ def main() -> int:
                       str(rendered))
 
                 # 真机链路：站到物件前挥一刀，验证「刀刃 3D 相交 → Intents → Core → 斜切渲染」。
-                # 关掉自动索敌，避免 attackFacing 被场上的假人带偏（只影响这一刀）。
                 #
-                # v9s.75：摆位前先发一次 blur 把所有输入状态清干净。前面的「插值在跑」用例
-                # 按过 w+d、连击用例按过 j，软件渲染下 `keyboard.up` 偶发丢事件 —— 残留的
-                # 移动键会让角色一直朝 +Z 走（实测 0.6s 漂 0.44m），残留的 j 更糟：输入层
-                # keydown 有 `keys.has(k)` 去重，之后 press('j') 全被吞，three 次采样 phase
-                # 恒为 idle。这条测的是「挥刀能不能砍断」，不是「松键灵不灵」，
-                # 所以这里走「切走窗口」这条真实路径（releaseAllInputs 会连键盘一起清）。
-                page.evaluate("""() => {
-                  window.dispatchEvent(new Event('blur'));
-                }""")
-                page.evaluate("""() => {
+                # v9s.75 这一条曾经偶发「三次全砍空」，查下来是三层原因，都不在 Core：
+                #   ① 前面用例按过的 w/d、j 在软件渲染下 `keyboard.up` 会丢事件。残留的
+                #      移动键让角色朝旧方向一直走；残留的 j 更糟 —— 输入层 keydown 有
+                #      `keys.has(k)` 去重，之后每一次 press('j') 都被吞。改走真实路径发一次
+                #      blur（`releaseAllInputs` 会连键盘一起清，这正是 v9s.75 补的缺陷）。
+                #   ② 站位反了。前冲是 `impulse = (sin(facing), cos(facing))`，`facing = 0`
+                #      对应 **+Z**；旧写法站在杆的 +Z 侧（`st.z + 1.0`）面朝 0，等于背对杆
+                #      挥刀 —— 一整刀的前冲还把玩家又推远 0.445m。现在站到 −Z 侧正对它。
+                #   ③ 采样窗口太窄。命中候选（`computeHits`）只在 `phase === 'active'` 的
+                #      渲染帧里采，而 active 只有 0.125s；软件渲染 10~15fps 时只剩 1~2 帧
+                #      机会，刃身稍一错开就整刀空。把 `timeScale` 压到 0.35，同一段 active
+                #      能拿到 3~4 倍采样帧（实测 minDist 从「擦过 0.3m」变成「正切 0.13m」）。
+                # 摆位还会顺手清掉前面用例留下的 hitstop / charging / 被关掉的模块开关，
+                # 并且每轮重试都重新摆位 —— 空刀的前冲会把角色推近 0.445m，旧位置就废了。
+                reposition = """(dist) => {
                   const h = window.__harness;
                   const p = h.plotDebug().plots.find(q => q.id === 'x-destructibles');
                   // 前面的连击 / 击地测试把假人挪到 (60,60) 并留了一个陪练贴身，
@@ -868,50 +878,74 @@ def main() -> int:
                     weaponSlot: 0, dummyClickId: 0, aimX: 0, aimZ: 0, aimActive: false,
                   };
                   h.clock.singleStep(I);
-                  h.debug.timeScale = 1;
-                  // 站到「中间那根旗杆」正北 1.0m，明确朝向它挥刀。
-                  // 旧写法用地块中心 -2.0，正好与 pole-b（z = centerZ-2.05）重合 ——
-                  // v9s.60 能过是靠「人和杆重叠」侥幸命中；v9s.61 杆有了碰撞盒，
-                  // 玩家一落位就被推开 0.4m，这一刀就砍空了。
-                  const st = h.world.destructibles.find(s => s.id === 'pole-b') || { x: p.centerX, z: p.centerZ };
-                  h.world.character.position.x = st.x;
-                  h.world.character.position.y = 0;
-                  h.world.character.position.z = st.z + 1.0;
-                  h.world.character.bodyYaw = 0;
-                  h.world.character.facing = 0;
-                  h.world.combat.phase = 'idle';
-                  h.world.combat.phaseTimer = 0;
-                  h.world.combat.comboIndex = 0;
-                  h.world.combat.hitIds.length = 0;
-                  h.world.combat.weapon = 'sword-shield';
+                  h.debug.timeScale = 0.35;
+                  const st = h.world.destructibles.find(s => s.id === 'pole-b')
+                    || { x: p.centerX, z: p.centerZ };
+                  const c = h.world.character;
+                  const w = h.world.combat;
+                  c.position.x = st.x;
+                  c.position.y = 0;
+                  c.position.z = st.z - dist;
+                  c.bodyYaw = 0;
+                  c.facing = 0;
+                  c.velocity.x = 0;
+                  c.velocity.z = 0;
+                  w.phase = 'idle';
+                  w.phaseTimer = 0;
+                  w.comboIndex = 0;
+                  w.hitIds.length = 0;
+                  w.hitstop = 0;
+                  w.queued = false;
+                  w.charging = false;
+                  w.charge = 0;
+                  w.weapon = 'sword-shield';
                   h.world.modules.targeting = false;
-                  h.world.character.velocity.x = 0;
-                  h.world.character.velocity.z = 0;
+                  // 「模块开关」类用例可能把可破坏物更新关掉；关着时 `destructiblesUpdate`
+                  // 第一行就 return，刀刃数据再准也不会断 —— 表现为 broken 恒 0。
+                  h.world.modules.destructibles = true;
                   h.resetBreaks();
-                }""")
-                # 挥刀偶发不中：软件渲染下按键可能落在两帧之间（实测 4 次里 1 次）。
-                # 最多试 3 次，每次等一刀完整出手 + 收势。
+                }"""
                 live_ok = False
-                for _ in range(3):
+                # 距离取实测甜区：1.35~1.45 时刃身与杆轴最近距离 0.004~0.128m
+                # （判定阈值 = 杆半径 0.11 + 刀身厚度 0.14 = 0.25m）。三个值轮流试。
+                for dist in (1.40, 1.35, 1.45):
+                    page.evaluate("() => { window.dispatchEvent(new Event('blur')); }")
+                    page.evaluate(reposition, dist)
+                    page.evaluate("() => window.__hitStart()")
                     page.keyboard.press("j")
                     try:
                         page.wait_for_function(
                             "() => window.__harness.breakDebug().broken > 0", timeout=6000,
                         )
                         live_ok = True
-                        break
                     except Exception:
-                        page.wait_for_timeout(600)
+                        page.wait_for_timeout(300)
+                    page.evaluate("() => window.__hitStop()")
+                    if live_ok:
+                        break
                 live = page.evaluate("""() => {
                   const h = window.__harness;
                   const d = h.breakDebug();
+                  const w = h.world, c = w.character;
+                  const st = w.destructibles.find(s => s.id === 'pole-b');
+                  const rows = window.__hit.rows || [];
                   h.world.modules.targeting = true;
                   h.debug.timeScale = 0.25;
-                  return { broken: d.broken, cuts: d.cuts.filter(c => c.broken) };
+                  return {
+                    broken: d.broken,
+                    cuts: d.cuts.filter(x => x.broken),
+                    diag: {
+                      phase: w.combat.phase, pz: +(c.position.z ?? 0).toFixed(3),
+                      poleZ: st ? st.z : null, hitstop: w.combat.hitstop,
+                      phases: [...new Set(rows.map(r => r.phase))],
+                      offModules: Object.entries(w.modules).filter(([, v]) => v === false)
+                        .map(([k]) => k),
+                    },
+                  };
                 }""")
                 check("真机挥刀能打断（3D 刀刃相交 → Intents → Core → 斜切渲染）",
                       live_ok and live["broken"] > 0,
-                      f"broken={live['broken']} cuts={live['cuts']}")
+                      f"broken={live['broken']} cuts={live['cuts']} diag={live['diag']}")
                 # 按钮状态层端到端：单测只覆盖 derive，这里验收 app.ts 的每帧接线
                 # 真的把派生状态写进了真实按钮 DOM（data-phase / data-badge / --bs-deg）。
                 bs = page.evaluate("""() => {
