@@ -238,11 +238,11 @@ describe('v9s.66 脚踝节点', () => {
     const { rig } = playerRig();
     for (const side of ['L', 'R'] as const) {
       const hip = rig.group.getObjectByName(`hip${side}`)!;
-      const knee = hip.getObjectByName('knee')!;
+      const knee = hip.getObjectByName(`knee${side}`)!;
       const ankle = hip.getObjectByName(`ankle${side}`);
       expect(ankle, `缺少踝节点 ankle${side}`).toBeTruthy();
       expect(ankle!.parent).toBe(knee);
-      const tip = hip.getObjectByName('footTip')!;
+      const tip = hip.getObjectByName(`footTip${side}`)!;
       expect(tip.parent).toBe(ankle);
       expect(tip.position.length()).toBeCloseTo(0, 9);
     }
@@ -253,7 +253,7 @@ describe('v9s.66 脚踝节点', () => {
     const { rig } = playerRig();
     const hip = rig.group.getObjectByName('hipL')!;
     const ankle = hip.getObjectByName('ankleL')!;
-    const tip = hip.getObjectByName('footTip')!;
+    const tip = hip.getObjectByName('footTipL')!;
     // 中性伸展：踝点在 -legLen/2
     expect(ankle.position.y).toBeCloseTo(-raw.view.voxel.legLength / 2, 6);
     expect(tip.position.y).toBe(0);

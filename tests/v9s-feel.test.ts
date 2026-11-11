@@ -311,9 +311,9 @@ describe('v9s 骨架：停步偏差消化与惯性 IK', () => {
         maxLowerXZ = Math.max(maxLowerXZ, Math.abs(n.lower.position.x), Math.abs(n.lower.position.z));
         for (const side of ['L', 'R'] as const) {
           const name = side === 'L' ? 'hipL' : 'hipR';
-          const tipOn = on.group.getObjectByName(name)!.getObjectByName('footTip')!
+          const tipOn = on.group.getObjectByName(name)!.getObjectByName('footTip' + side)!
             .getWorldPosition(new THREE.Vector3());
-          const tipOff = off.group.getObjectByName(name)!.getObjectByName('footTip')!
+          const tipOff = off.group.getObjectByName(name)!.getObjectByName('footTip' + side)!
             .getWorldPosition(new THREE.Vector3());
           maxFootGap = Math.max(maxFootGap, Math.hypot(tipOn.x - tipOff.x, tipOn.z - tipOff.z));
         }

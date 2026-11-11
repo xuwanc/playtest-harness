@@ -30,11 +30,8 @@ function run(opts: { takeover: boolean }): { lift: number; minLift: number; take
     anim, raw.view.ik, raw.view.links, raw.view.weaponWrist, raw.view.balance,
   );
   rig.group.updateWorldMatrix(true, true);
-  const feet = ['footTip', 'footTip'].map((n, i) => {
-    const all: THREE.Object3D[] = [];
-    rig.group.traverse((o) => { if (o.name === n) all.push(o); });
-    return all[i];
-  });
+  // v9s.77：末端锚点带左右后缀（`footTipL` / `footTipR`），不再靠遍历顺序取。
+  const feet = (['footTipL', 'footTipR'] as const).map((n) => rig.group.getObjectByName(n)!);
 
   let maxLift = 0;
   let minLift = Infinity;

@@ -43,7 +43,7 @@ const NONE: HurtState = {
 
 function footTip(rig: { group: any }, side: 'L' | 'R'): THREE.Object3D {
   const hip = rig.group.getObjectByName(side === 'L' ? 'hipL' : 'hipR');
-  const tip = hip.getObjectByName('footTip');
+  const tip = hip.getObjectByName('footTip' + side);
   if (!tip) throw new Error('骨架缺少 footTip 末端锚点（IK 未接线）');
   return tip;
 }

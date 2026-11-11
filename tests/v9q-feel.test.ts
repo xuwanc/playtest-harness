@@ -41,7 +41,7 @@ const legMag = (d: ReturnType<VoxelRig['gaitDebug']>): number =>
 
 function footWorld(rig: { group: THREE.Object3D }, side: 'L' | 'R'): THREE.Vector3 {
   const hip = rig.group.getObjectByName(side === 'L' ? 'hipL' : 'hipR')!;
-  const tip = hip.getObjectByName('footTip')!;
+  const tip = hip.getObjectByName('footTip' + side)!;
   return tip.getWorldPosition(new THREE.Vector3());
 }
 

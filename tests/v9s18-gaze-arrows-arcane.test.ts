@@ -270,7 +270,7 @@ describe('v9s.18 箭插骨骼：命中点落在哪根骨骼上', () => {
 
     expect(head.node.name).toBe('headPivot');
     expect(chest.node.name).toBe('upper');
-    expect(['hipL', 'hipR', 'knee']).toContain(leg.node.name);
+    expect(['hipL', 'hipR', 'kneeL', 'kneeR']).toContain(leg.node.name);
   });
 
   it('挂到骨骼上的物体跟骨骼一起动，且挂接瞬间世界位置不跳', async () => {

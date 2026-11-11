@@ -41,8 +41,8 @@ export function rigNodes(rig: { group: any }): RigNodes {
     chest: rig.group.getObjectByName('chest') ?? null,
     hipL,
     hipR,
-    kneeL: childByName(hipL, 'knee'),
-    kneeR: childByName(hipR, 'knee'),
+    kneeL: childByName(hipL, 'kneeL'),
+    kneeR: childByName(hipR, 'kneeR'),
   };
 }
 

@@ -36,6 +36,8 @@ import {
 } from './ground-ring';
 import { DEST_BOX_PREFIX, dummyThreatLevel, groundHeightAt, isHostileDummy } from '../core';
 import { slashAxisLocal, slashTiltX, rotateAxisY } from './fx-axis';
+import { ShotCam } from './shot-cam';
+import type { ShotInfo, ShotSpec } from './shot-cam';
 import { createVoxelRig } from './voxel-rig';
 import type { VoxelRig } from './voxel-rig';
 import { createSpiderRig } from './spider-rig';
@@ -310,6 +312,20 @@ export type SceneView = {
   setClipT(t: number | null): void;
   /** v9s.15：传送后把相机跟随目标瞬移过去，避免跨场地滑行 */
   snapCamera(x: number, y: number, z: number): void;
+  /**
+   * v9s.77：**测试截图机位** —— 每帧接管相机，跟住某个角色 / 骨骼节点 / 世界点。
+   * `eye` / `look` 是相对锚点的偏移，不是绝对坐标。返回实际生效的读数。
+   * 详见 `shot-cam.ts` 顶部注释：为什么游戏相机拍不了特写。
+   */
+  shotTake(spec: ShotSpec): ShotInfo;
+  /** 按包围盒自动取景（`dir` 是从目标指向相机的方向）。找不到节点返回 null。 */
+  shotFit(node: string | null, dir: [number, number, number], pad?: number, fov?: number): ShotInfo | null;
+  /** 交还游戏相机，并还原接管前的 fov。 */
+  shotRelease(): void;
+  /** 当前机位读数（未接管时为 null）。 */
+  shotInfo(): ShotInfo | null;
+  /** 法线着色验收视图：折角 / 穿插 / 入地在近黑材质上唯一看得清的办法。返回替换的 mesh 数。 */
+  shotXray(node: string | null, on?: boolean): number;
   dispose(): void;
 };
 
@@ -1036,6 +1052,15 @@ export function createSceneView(
 
   // ---- 2.5D 相机（叠加 Core 的智能构图意图） ----
   const cam = createCameraRig(view.camera, view.smartCamera, view.zoom, w0 / h0);
+
+  /**
+   * v9s.77：测试截图机位。`hero` 会被 `setBodyType` 整体替换（dispose 后重建），
+   * 所以这里用 getter 现取，不能捕获旧引用 —— 否则换体型后机位跟的是一副已经销毁的骨架。
+   */
+  const shotCam = new ShotCam(cam.camera, {
+    heroRoot: playerRoot,
+    get hero() { return hero.group; },
+  }, scene);
   // v9s.59：RT 反馈残影统一走可复用特效库（rt 方案，ctx 需 renderer/scene/camera）。
   const rtAfterimage = createAfterimageEffect(
     'rt', { renderer, scene, camera: cam.camera }, view.rtAfterimage,
@@ -1943,6 +1968,9 @@ export function createSceneView(
       }
 
       cam.update(c.position.x, c.position.y, c.position.z, frameDt, w.camera);
+      // v9s.77：截图机位在 update **之后**接管 —— update 会重算位置 / 朝向并叠震动，
+      // 覆盖它比给 update 加分支简单，也不会漏掉 near / far / aspect 这些同步。
+      shotCam.apply();
       renderer.render(scene, cam.camera);
       // v9s.59：RT 反馈残影（机器人）。必须在主渲染之后合成到屏幕。
       // 传真实 moving：静止且残影衰减完毕后整套管线停跑（省掉全部离屏 pass）。
@@ -1987,6 +2015,21 @@ export function createSceneView(
     },
     snapCamera(x, y, z): void {
       cam.snap(x, y, z);
+    },
+    shotTake(spec): ShotInfo {
+      return shotCam.take(spec);
+    },
+    shotFit(node, dir, pad, fov): ShotInfo | null {
+      return shotCam.fit(node, dir, pad, fov);
+    },
+    shotRelease(): void {
+      shotCam.release();
+    },
+    shotInfo(): ShotInfo | null {
+      return shotCam.read();
+    },
+    shotXray(node, on): number {
+      return shotCam.xray(node, on);
     },
     setZoom(next): void {
       // 基础距离随骨架身高走，用户缩放叠在上面（蜘蛛切回人形后自动复原）

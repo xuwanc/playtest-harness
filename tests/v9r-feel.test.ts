@@ -39,7 +39,7 @@ const pelvisY = (rig: { group: THREE.Object3D }): number =>
   rig.group.getObjectByName('pelvis')!.getWorldPosition(new THREE.Vector3()).y;
 const footY = (rig: { group: THREE.Object3D }, side: 'L' | 'R'): number => {
   const hip = rig.group.getObjectByName(side === 'L' ? 'hipL' : 'hipR')!;
-  return hip.getObjectByName('footTip')!.getWorldPosition(new THREE.Vector3()).y;
+  return hip.getObjectByName('footTip' + side)!.getWorldPosition(new THREE.Vector3()).y;
 };
 
 /* -------------------------------------------------------------------------- *

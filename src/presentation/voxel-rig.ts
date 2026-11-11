@@ -697,7 +697,9 @@ export function createVoxelRig(
     hip.add(thigh);
 
     const knee = group();
-    knee.name = 'knee';
+    // v9s.77：膝 / 末端带左右后缀。截图机位（`shot-cam.ts`）要按名跟随
+    // 「左膝」「左脚末端」这类单个关节，两只腿同名就只能拿到左腿。
+    knee.name = sx < 0 ? 'kneeL' : 'kneeR';
     knee.position.y = -legLen / 2;
     hip.add(knee);
 
@@ -752,7 +754,7 @@ export function createVoxelRig(
 
     // IK 末端锚点：踝点本身（不含鞋的视觉偏移），FK / IK 才能精确互为逆运算。
     const tip = new THREE.Object3D();
-    tip.name = 'footTip';
+    tip.name = sx < 0 ? 'footTipL' : 'footTipR';
     ankle.add(tip);
 
     return {

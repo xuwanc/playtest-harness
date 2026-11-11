@@ -17,6 +17,7 @@
 
 | 现象 / 关键词 | 先看哪里 | 符号 | 详细文档 | 验收 |
 |---|---|---|---|---|
+| 拍特写总拍到腰以上 / 角色被推出画幅 / 截图带抖 | `presentation/shot-cam.ts`、`tools/shot.py` | `shotTake`、`shotFit`、`anchor` / `eye` / `look` | [systems/camera-targeting.md](systems/camera-targeting.md) §2、[journal/2026-11-11-06](journal/2026-11-11-06-shot-cam.md) | `tests/v9s77-shot-cam.test.ts`、`python3 tools/shot.py --fit footTipL --xray` |
 | 胡子只会前后摆 / 转身时不甩 / 静止慢慢偏 | `presentation/beard.ts`、`voxel-rig.ts` 的 5.5 段 | `solveBeard`、`aF`/`aR`、`deadzone`、`beardAvoidAt` | [systems/character-style.md](systems/character-style.md) §3.1–3.2 | `tests/v9s54-beard-motion.test.ts` |
 | 造型部件像浮着 / 某块完全看不见 | `presentation/voxel-rig.ts` 的 `style` 段 | `hairCap`、`pivot.position.z`、`torsoD` | [systems/character-style.md](systems/character-style.md) §2.1 | `__harness.view.heroGroup()` 遍历 mesh 打印世界坐标 |
 | 特效在某些地块上看不见 / 被地面盖掉 | `presentation/fx-layer.ts`、`presentation/three-scene.ts` | `FX_ORDER`、`setCollidersVisible` | [systems/presentation-fx.md](systems/presentation-fx.md) §1 | `npm run smoke`「地块走不透明通道」 |
@@ -163,8 +164,9 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（131 文件 / 1328 例） | 提交前 |
+| `npm test` | vitest 全量（132 文件 / 1338 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
+| `python3 tools/shot.py ...` | 测试截图机位（跟随角色 / 骨骼 / 世界点，任意角度 + fov） | 要拍验收图、写文档配图、确认几何关系时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
 | `npm run smoke` | 起 `dist/`，跑 77 项画面层 + 契约自检 | 发布前 |
 | `npm run verify` | build → test → portable → docs → smoke 全链 | **发布前必跑** |

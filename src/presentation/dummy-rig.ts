@@ -204,7 +204,8 @@ export function createDummyRig(
     jointRoot.add(upperSeg);
 
     const joint = new THREE.Group();
-    joint.name = isArm ? 'elbow' : 'knee';
+    // v9s.77：与主角骨架同名规则（膝带左右后缀），截图机位 / 验收脚手架按名取关节
+    joint.name = isArm ? 'elbow' : (sx < 0 ? 'kneeL' : 'kneeR');
     joint.position.y = -len / 2;
     jointRoot.add(joint);
 
@@ -228,7 +229,7 @@ export function createDummyRig(
       }
       // 踝点锚点（不含鞋的视觉偏移），FK / IK 精确互逆
       const tip = new THREE.Object3D();
-      tip.name = 'footTip';
+      tip.name = sx < 0 ? 'footTipL' : 'footTipR';
       ankle.add(tip);
       return { root: jointRoot, joint, tip, ankle };
     }
