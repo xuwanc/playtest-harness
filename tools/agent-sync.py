@@ -228,7 +228,12 @@ def claim_version():
         pass
     if CURRENT_PATH.exists():
         txt = CURRENT_PATH.read_text()
-        txt = re.sub(r'0\.9\.\d+', new, txt)
+        # v9s.74：只替换**当前版本**那两处（版本表里的 package.json 行 + 本轮线上核验的徽标）。
+        # 早先这里是无脑 `re.sub(r'0\.9\.\d+', ...)`，会把「Wardrobe 改版（v0.9.92）」这种
+        # 历史引用一起改成新号 —— 实测一次领号就把三条历史标注全改成了 v0.9.97。
+        txt = re.sub(r'(\| `package\.json` 版本 \| `)0\.9\.\d+',
+                     lambda m: m.group(1) + new, txt)
+        txt = re.sub(r'(徽标版本 `v)0\.9\.\d+', lambda m: m.group(1) + new, txt)
         if internal:
             # 只改「内部代号 v9s.NN」这一处。全量替换会把 CURRENT 里的历史引用
             #（「v9s.70 踩的坑」这类）一起改成新号，等于篡改历史（v9s.73 实测中招）。

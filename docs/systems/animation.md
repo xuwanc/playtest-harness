@@ -284,6 +284,7 @@ npm run clip:lab:check
 - [ ] 三段的节奏配比**不完全相同**
 - [ ] 副手有反向位移（`pelvisX` 与主手方向相反），不是全身刚性平移
 - [ ] 换段没有单帧跳变（`combo` 报告的衔接数 ≤130°）
+- [ ] 加了新层 / 改了某层写的骨骼 → `anim-layers.ts` 同步登记（见 [`anim-layers.md`](anim-layers.md)）
 
 ## 六、留给下一轮的已知问题
 
