@@ -335,8 +335,14 @@ export function createInput(opts: InputOptions): InputAdapter {
    * v9d：一次性释放所有输入状态。
    * 移动端切后台 / 来电 / 系统手势打断时常常收不到 pointerup，
    * 会导致按钮一直 held（弓卡在蓄力、冲刺停不下来）或摇杆原点残留。
+   *
+   * v9s.75：键盘侧同理 —— 切走窗口时按住的 w/j 收不到 keyup，`keys` 里
+   * 的键位会一直留着。后果有两层：① 角色持续朝旧方向走；② `onKeyDown`
+   * 开头有 `keys.has(k)` 去重，残留的 `j` 会把之后每一次 keydown 吞掉，
+   * 表现为「切回窗口后攻击键彻底失灵，按多少次都没反应」。
    */
   function releaseAllInputs(): void {
+    keys.clear();
     for (const k of BTN_KEYS) {
       if (btnPointer[k] !== undefined) btnPointer[k] = undefined;
       releaseButton(k);

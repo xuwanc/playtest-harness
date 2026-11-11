@@ -526,7 +526,11 @@ def main() -> int:
                     "    frames: window.__legProbe.frames };"
                     "}"
                 )
-                lo, hi = math.pi * 0.5, math.pi * 1.2
+                # v9s.75：下界从 0.5π 放到 0.42π。相位增量 = π×smoothstep(取消时的
+                # 归一化进度)，而取消时机由 80ms 连按节奏与 cancelWindow（0.45）共同决定；
+                # 段 2 变短之后实测擦到 0.4998π（1.57 rad），差 8e-4 就卡在严格小于上。
+                # 判据要区分的是「换腿（≈π）」与「不换腿（≈0）」，0.42π 仍然分得开。
+                lo, hi = math.pi * 0.42, math.pi * 1.2
                 steps_ok = all(
                     v is not None and lo < abs(v) < hi for v in (legs["d12"], legs["d23"])
                 )
@@ -841,6 +845,16 @@ def main() -> int:
 
                 # 真机链路：站到物件前挥一刀，验证「刀刃 3D 相交 → Intents → Core → 斜切渲染」。
                 # 关掉自动索敌，避免 attackFacing 被场上的假人带偏（只影响这一刀）。
+                #
+                # v9s.75：摆位前先发一次 blur 把所有输入状态清干净。前面的「插值在跑」用例
+                # 按过 w+d、连击用例按过 j，软件渲染下 `keyboard.up` 偶发丢事件 —— 残留的
+                # 移动键会让角色一直朝 +Z 走（实测 0.6s 漂 0.44m），残留的 j 更糟：输入层
+                # keydown 有 `keys.has(k)` 去重，之后 press('j') 全被吞，three 次采样 phase
+                # 恒为 idle。这条测的是「挥刀能不能砍断」，不是「松键灵不灵」，
+                # 所以这里走「切走窗口」这条真实路径（releaseAllInputs 会连键盘一起清）。
+                page.evaluate("""() => {
+                  window.dispatchEvent(new Event('blur'));
+                }""")
                 page.evaluate("""() => {
                   const h = window.__harness;
                   const p = h.plotDebug().plots.find(q => q.id === 'x-destructibles');
@@ -871,6 +885,8 @@ def main() -> int:
                   h.world.combat.hitIds.length = 0;
                   h.world.combat.weapon = 'sword-shield';
                   h.world.modules.targeting = false;
+                  h.world.character.velocity.x = 0;
+                  h.world.character.velocity.z = 0;
                   h.resetBreaks();
                 }""")
                 # 挥刀偶发不中：软件渲染下按键可能落在两帧之间（实测 4 次里 1 次）。

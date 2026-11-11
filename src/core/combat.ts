@@ -130,13 +130,16 @@ function settleTime(world: World): number {
 
 function startSwordCombo(world: World, intents: Intents, index: number): void {
   const p = world.config.combat.weapons[world.combat.weapon];
+  // v9s.75：逐段时长（缺项回落统一值）。三段共用一组时长时读起来是
+  // 「同一个动作点三下」——第 2 段该更快起手、第 3 段该更长的蓄力。
+  const seg = p.comboTimings?.[index - 1];
   beginAttack(
     world,
     intents,
     {
-      windup: p.windup,
-      active: p.active,
-      recovery: p.recovery,
+      windup: seg?.windup ?? p.windup,
+      active: seg?.active ?? p.active,
+      recovery: seg?.recovery ?? p.recovery,
       settle: settleTime(world),
       lunge: lungeFor(world, p.lunge[index - 1] ?? 0),
     },

@@ -1,23 +1,26 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-11 10:10。
+> 最后更新：2026-11-11 11:10。
 
 ## 一句话
 
-v0.9.97：**动画层加通道所有权守卫**——层边界采快照做差、帧尾比对 23 层声明表，越权与双覆盖在测试里点名到「层 → 通道」；默认关闭，关闭时每层一次空函数调用，不进快照、不影响确定性。
-（上一版 v0.9.96：残影收敛为可复用特效库 + 交叉面干涉根治 + 双方案性能优化；v0.9.95：攻击层改四元数增量。）
-① 本轮（动画层 · v9s.74）：
-  - `presentation/anim-probe.ts`：`AnimProbe`（快照 / 差量 / 归因）+ 纯函数 `auditFrame`
-    （越权 / 冲突 / 未用）+ `matrixMarkdown`（导出层 × 通道矩阵）。
-  - `presentation/anim-layers.ts`：23 层声明表，语义四类 `add / override / derive / reset`。
-    单列 `derive` 是因为 `splitSpine` / `distributeYaw` 必然改写 `upper.rotation` —— 那是
-    「把总角重新摊到骨链上」，不是「抢所有权」；标成 override 会与 `2.0 combat` 天天报冲突。
-  - `voxel-rig`：23 个 `mark(...)` 边界 + `animProbe()` 出口。只监控 7 节点 / 28 通道
-    （躯干 / 骨盆 / 下盘 / 踝）—— 手臂按设计整层覆盖（YXZ 翻支不能走增量），纳入只会产生噪声。
-  - 验收：六场景（待机 / 行走转身 / 跳跃落地 / 三武器连打 / 受击 / 鱼人体态）`overreach`
-    与 `conflicts` 均为空；删掉一条声明即可复现「越权 2.95 facing → upper.rx」——守卫是带牙的。
-  - 文档：`systems/anim-layers.md`（注册表 + 用法 + 加层清单）、journal `2026-11-11-03`。
+v0.9.98：**三连节奏逐段差异化**——九段配比从「全是 23/26/51」改成 25/25/50 → 18/25/57 → 35/20/45（建立节奏 → 承接动量 → 终结技），配置在 `core.combat.weapons.<id>.comboTimings`（缺项回落统一值）；同批修掉「失焦不清键盘」的输入层缺陷。
+（上一版 v0.9.97：动画层加通道所有权守卫 —— 层边界采快照做差、帧尾比对 23 层声明表，越权与双覆盖在测试里点名。）
+① 本轮（节奏 · v9s.75）：
+  - `core/types.ts` 的 `comboTimings?`（下标 = 段 − 1）+ `combat.ts` 的 `startSwordCombo` 按段取；
+    缺项回落到统一值，所以老配置与回滚路径零改动。
+  - 两条硬约束进注释：`active` ≥ 5 帧（83ms，刀光才成形）、`windup` ≤ 38%
+    （再长 `swingCurve` 已经在挥、判定还停在蓄势）。
+  - **改时长必须重采 `hitSweep`**：那条曲线是「刃尖角随 active 进度 u」，active 在时间轴上一挪
+    整条错开（实测剑盾 c1 u=0.4 偏 34°），`v9s36-contact` 会直接红。修法 `npm run sweep -- --write`。
+  - `clip:lab combo` 之前只读统一值（配了也看不出来），现在按段读、表里加「段」列，
+    并对「三段配比相同」告警。
+  - 顺手修掉一个真机缺陷：`releaseAllInputs()` 漏清键盘 —— 切走窗口时收不到 keyup，
+    角色会一直朝旧方向走，残留的 `j` 还会被 keydown 去重吞掉（切回来攻击键失灵）。
+    回归 `tests/v9s75-input-blur.test.ts`；自检改走真实路径 `dispatchEvent(new Event('blur'))`。
+  - 验收：九段配比逐行 ✅；`clip:lab:check` 九段 PASS；衔接跳变 84.3° 以内（阈值 130°）；
+    golden hash 随契约变更 `-u` 更新；smoke 77/77（真机挥刀那条恢复稳定）。
 ② 主干已含：Wardrobe 底部抽屉改版 + 待机盾面朝向修正（v0.9.92，`shieldPitchDeg` 8°→70°，见 `systems/wardrobe.md`）、脊柱链偏航沿「髋 → 腰 → 胸」单调 + 髋块 + 鱼人抬头（v0.9.91）、模型空间补偿 + 脚锁（v0.9.89）、鱼人爬姿体态层、哨兵机角色、`rig-fix` 七条造型修正。
 ③ 更早：竖屏操作簇、震屏分档、技能指示器统一口径、文档事实守卫 / 推送护栏 / 四层 CI。
 
@@ -27,7 +30,7 @@ v0.9.97：**动画层加通道所有权守卫**——层边界采快照做差、
 
 | 项 | 值 |
 |---|---|
-| `package.json` 版本 | `0.9.97`（内部代号 v9s.74 动画层通道守卫） |
+| `package.json` 版本 | `0.9.98`（内部代号 v9s.75 三连节奏） |
 | 线上徽标 | `v0.9.97`（构建时间随发布变化） |
 | 发布方式 | `npm run ship`（构建 → 推 main → 重建 `preview` 产物；带凭证自恢复与推送重试） |
 | 权威线上链接 | <https://xuwanc.github.io/playtest-harness/> —— 此链接固定不变 |
@@ -35,7 +38,7 @@ v0.9.97：**动画层加通道所有权守卫**——层边界采快照做差、
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 鱼人开局 | <https://xuwanc.github.io/playtest-harness/?hero=murloc> |
 | 哨兵机开局 | <https://xuwanc.github.io/playtest-harness/?hero=sentinel> |
-| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 `v0.9.97`（不写死 js 名，构建期注入会变） |
+| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 `v0.9.98`（不写死 js 名，构建期注入会变） |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
@@ -43,10 +46,10 @@ v0.9.97：**动画层加通道所有权守卫**——层边界采快照做差、
 | 命令 | 当前结果 |
 |---|---|
 | `npx tsc --noEmit` | 0 error |
-| `npx vitest run` | 128 文件 / 1312 例全绿 |
+| `npx vitest run` | 130 文件 / 1321 例全绿 |
 | `npm run verify:portable` | PASS（Core 边界未破） |
 | `npm run smoke` | 77/77 PASS |
-| `npm run docs:check` | PASS（110 份文档 ≤300 行，README 99 行） |
+| `npm run docs:check` | PASS（111 份文档 ≤300 行，README 99 行） |
 | `npm run clip:lab:check` | 9 段全 PASS |
 | `npm run verify` | 一条命令串起 build → test → portable → docs → smoke |
 | `python3 tools/check-online.py --wait 180` | 发布后核验线上 JS 与本地 `dist` 同一份 |
@@ -57,9 +60,9 @@ v0.9.97：**动画层加通道所有权守卫**——层边界采快照做差、
 
 ## 正在做
 
-- 无。v0.9.97（动画层通道所有权守卫：探针 + 23 层声明表）已合并待发布。
-- 下一步（`anim-layers.md` §6 / `pose-layers.md` §6.2）：体态进 base + `lean` 独立权重旋钮 →
-  三连节奏逐段差异化（`animation.md` §3.1）→ 脚趾关节 + heel-toe roll。
+- 无。v0.9.98（三连节奏逐段差异化 + 重采扫掠曲线）已落地待发布。
+- 下一步：脚趾关节 + heel-toe roll（脚现在是整块拍地，重量感最大的一块）；
+  体态进 base + `lean` 独立权重旋钮（`pose-layers.md` §6.3 末尾）。
 
 ## 伤害 / 死亡的关键数（改之前先读）
 

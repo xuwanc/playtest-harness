@@ -32,6 +32,7 @@
 | 陪练挨打时腿抽风（步频翻倍） | `presentation/fighter-rig.ts` | `cs.velocity` 不叠 knock | 同上「踩过的坑」8 | `__harness.dummyRigDebug(id).gaitSpeed` |
 | 手感面板想看相位 / 不知道哪只脚在踩地 | `presentation/motion-debug.ts` | `stanceOf`、`PHASE_MOVING_EPS`、`STANCE_LINE` | [systems/animation-notes-3.md](systems/animation-notes-3.md) §17 | `tests/v9s42-motion-phase.test.ts`、`npm run smoke`「手感面板：走路时相位曲线左右脚交替」 |
 | 手感面板相位是一条平线 | `voxel-rig.gaitDebug().phase` | 别读 Core `gaitPhase`（攻击时冻住） | 同上 §17 坑 1 | `__harness.gaitDebug().phase` vs `world.character.gaitPhase` |
+| 连打三下节奏一模一样 / 想让第 3 击更重 | `core/types.ts` 的 `comboTimings`、`config/game.json` → `core.combat.weapons` | `comboTimings`、`startSwordCombo`、`tools/sweep_sample.py` | [systems/animation.md](systems/animation.md) §3.1 | `npm run clip:lab -- combo`、`tests/v9s75-combo-rhythm.test.ts` |
 | 连击每一刀都迈同一条腿 / 换段时脚被拽回去 | `presentation/program-anim.ts`、`voxel-rig.ts` | `attackGaitDrive`、`attackPhaseBase`、`attackStepIndex` | [systems/animation.md](systems/animation.md) §1.4 | `tests/v9s41-attack-step-legs.test.ts`、`npm run smoke`「连击跨步左右换腿」 |
 | 连击换段时身体往回弹一下 | `voxel-rig.ts` | `applyStep`、`stepZ/stepX/stepDip` | 同上 §1.4 末段 | `tests/v9s41-attack-step-legs.test.ts`「换段不推人」 |
 | 朝向切换（锁定 / 拖拽 / 攻击锁朝向）时下盘晃一下 | `presentation/gait.ts` | `turnSpinGate`、`slewGate`、`slewHipTarget`、`hipFlipWeight` | [systems/animation-notes-4.md](systems/animation-notes-4.md) §19 | `tests/v9s44-hip-yaw-track.test.ts` |
@@ -67,6 +68,7 @@
 | 慢放时一顿一顿 | `presentation/yaw-smooth.ts`、`app.ts` 的插值 | `view.renderInterp`、`interpAlpha` | [systems/animation-notes-2.md](systems/animation-notes-2.md) | `__harness.interpDebug()` |
 | 朝向发抖 / 转身反向转圈 | `core/orientation.ts`、`core/turn-in-place.ts` | `wrapAngle`、`turnInPlace` | [systems/movement-facing.md](systems/movement-facing.md) | `__harness.yawDebug()` |
 | 手机摇杆方向乱跳 | `src/adapters/input.ts` | `screenX/Y` 坐标源、摇杆平移吸收 | [systems/input-controls.md](systems/input-controls.md) | `__harness.telemetry()` |
+| 切走再切回窗口后角色自己走 / 攻击键按了没反应 | `src/adapters/input.ts` 的 `releaseAllInputs` | `keys.clear()`、`onKeyDown` 的 `keys.has(k)` 去重 | [systems/input-controls.md](systems/input-controls.md) §四条规则 | `tests/v9s75-input-blur.test.ts` |
 | 线上页面周期性自动刷新 | 发布目录（`dist/`） | — | [systems/overview.md](systems/overview.md) | 发布后看 HTML 有无 `@vite/client` |
 | 草压不开 / 刀割不到草 / 草挡住角色 | `core/grass.ts`、`presentation/grass-layer.ts` | `grassUpdate`、`grassCut`、`currentMeleeShape` | [systems/grass.md](systems/grass.md) | `tests/grass.test.ts`、`__harness.grassDebug()` |
 | 草不随风摆 / 浪带不明显 / 摆得太乱 | `core.grass.wind`、`presentation/grass-layer.ts` | `windPhase`、`windSample`、`windAdvance`、`installGrassWind` | [systems/grass.md](systems/grass.md) §12 | 主场景「风：开」/ `G` 键 A/B、`__harness.windDebug()` |
@@ -160,7 +162,7 @@
 | 命令 | 干什么 | 什么时候跑 |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + vite 打包到 `dist/` | 每次改完 |
-| `npm test` | vitest 全量（128 文件 / 1312 例） | 提交前 |
+| `npm test` | vitest 全量（130 文件 / 1321 例） | 提交前 |
 | `npm run test:affected` | 只跑 import 闭包受影响的用例 | 改单个模块时 |
 | `npm run verify:portable` | Core 可移植性（不许 import three / DOM） | 动 `src/core/` 后 |
 | `npm run smoke` | 起 `dist/`，跑 77 项画面层 + 契约自检 | 发布前 |
