@@ -128,12 +128,22 @@ describe('v9s.36 · 刃身扫掠门', () => {
         expect(r.hits, `${weapon} c${combo} 应命中`).toBe(1);
         // 判据不是「命中那一刻角度恰好在 0°」——60Hz 一帧就扫过 ~20°，
         // 而是「本帧扫过的区间真的包含目标方位」，这才是门的定义。
+        //
+        // v9s.75：区间要按 **`tolDeg` 放宽后再判**。`core/hits.ts` 里门是这样落的：
+        //   `sweepLo = min(a0,a1) - tol`、`sweepHi = max(a0,a1) + tol`
+        // 旧数据恰好让 0° 落在未放宽的区间里，所以这条断言一直没过问 tol；
+        // v9s.75 把 active 在时间轴上的位置挪了（逐段时长），命中帧可能落在
+        // 容差边缘（实测剑盾 c2 命中时 −2.7°，容差 12° 以内）。
+        // 不改判据、只是把判据写对：目标方位落在 `[lo−tol, hi+tol]` 即合法。
         const cfg = makeCfgWorld(weapon);
+        const profile = cfg.config.combat.weapons[weapon];
+        const tol = profile.hitSweep?.tolDeg ?? 10;
         const a0 = sweepAngleAt(cfg, weapon, combo, 0);
         const a1 = sweepAngleAt(cfg, weapon, combo, r.u);
         const lo = Math.min(a0, a1);
         const hi = Math.max(a0, a1);
-        expect(lo <= 0 && 0 <= hi, `${weapon} c${combo} 区间 [${lo.toFixed(1)}, ${hi.toFixed(1)}]`).toBe(true);
+        expect(lo - tol <= 0 && 0 <= hi + tol,
+          `${weapon} c${combo} 区间 [${lo.toFixed(1)}, ${hi.toFixed(1)}] ± ${tol}°`).toBe(true);
       }
     }
   });

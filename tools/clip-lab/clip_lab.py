@@ -940,23 +940,30 @@ def cmd_combo(args) -> int:
             rhythm = []
             for w in weapons:
                 wc = weapons_cfg.get(w, {})
-                wind, act, rec = wc.get("windup", 0), wc.get("active", 0), wc.get("recovery", 0)
-                total = wind + act + rec
-                if total <= 0:
-                    rhythm.append({"weapon": w, "ok": None})
-                    continue
-                rhythm.append({
-                    "weapon": w,
-                    "windup": wind / total * 100,
-                    "active": act / total * 100,
-                    "recovery": rec / total * 100,
-                    "total": total,
-                    # 推荐：前摇 18~38%、挥击 15~32%、收势 40~60%。
-                    # 收势太短会「刹不住」，太长读起来拖沓；挥击占比过大则没有爆发。
-                    "ok": (18 <= wind / total * 100 <= 38
-                           and 15 <= act / total * 100 <= 32
-                           and 40 <= rec / total * 100 <= 60),
-                })
+                # v9s.75：逐段时长优先（`comboTimings[seg-1]`），缺项回落统一值。
+                # 旧版只读统一值，于是「三段节奏差异化」配了也看不出来 ——
+                # 报告里九段永远显示同一行数字。
+                per = wc.get("comboTimings")
+                n = int(wc.get("comboCount", 3) or 3)
+                for seg in range(1, n + 1):
+                    t = per[seg - 1] if isinstance(per, list) and seg - 1 < len(per) else wc
+                    wind, act, rec = t.get("windup", 0), t.get("active", 0), t.get("recovery", 0)
+                    total = wind + act + rec
+                    if total <= 0:
+                        continue
+                    rhythm.append({
+                        "weapon": w, "seg": seg,
+                        "windup": wind / total * 100,
+                        "active": act / total * 100,
+                        "recovery": rec / total * 100,
+                        "total": total,
+                        "perSeg": bool(per),
+                        # 推荐：前摇 18~38%、挥击 15~32%、收势 40~60%。
+                        # 收势太短会「刹不住」，太长读起来拖沓；挥击占比过大则没有爆发。
+                        "ok": (18 <= wind / total * 100 <= 38
+                               and 15 <= act / total * 100 <= 32
+                               and 40 <= rec / total * 100 <= 60),
+                    })
 
             # 阈值只是「提醒线」不是「门禁线」：段首的幅度由 attackBlend 淡入，
             # 天然比段末的满幅姿态更接近中位，所以相邻段首末必然有几十度的差。
@@ -1001,15 +1008,26 @@ def cmd_combo(args) -> int:
 
             md.append("## 2. 节奏配比（前摇 / 挥击 / 收势）")
             md.append("")
-            md.append("| 武器 | 前摇 | 挥击 | 收势 | 总时长 | 结论 |")
-            md.append("|---|---|---|---|---|---|")
+            md.append("| 武器 | 段 | 前摇 | 挥击 | 收势 | 总时长 | 结论 |")
+            md.append("|---|---|---|---|---|---|---|")
+            by_weapon: dict = {}
             for r in rhythm:
-                if r.get("ok") is None:
-                    continue
+                by_weapon.setdefault(r["weapon"], []).append(r)
+            for r in rhythm:
+                group = by_weapon[r["weapon"]]
+                # 同质化只看「同一把武器的三段是不是同一组数字」。
+                # 这是 `animation.md` §3.1 点名的问题：配比完全一致 = 同一个动作点三下。
+                same = (len(group) > 1
+                        and max(x["windup"] for x in group) - min(x["windup"] for x in group) < 1.0
+                        and max(x["recovery"] for x in group) - min(x["recovery"] for x in group) < 1.0)
+                verdict = '✅' if r["ok"] else '⚠️ 偏离 18~38 / 15~32 / 40~60'
+                if same:
+                    verdict += '　⚠️ 三段配比相同'
+                seg_label = str(r["seg"]) if r.get("perSeg") else f"{r['seg']}（统一值）"
                 md.append(
-                    f"| {WEAPON_LABEL.get(r['weapon'], r['weapon'])} | {r['windup']:.0f}% | "
-                    f"{r['active']:.0f}% | {r['recovery']:.0f}% | {r['total']:.2f}s | "
-                    f"{'✅' if r['ok'] else '⚠️ 偏离 18~38 / 15~32 / 40~60'} |"
+                    f"| {WEAPON_LABEL.get(r['weapon'], r['weapon'])} | {seg_label} | "
+                    f"{r['windup']:.0f}% | {r['active']:.0f}% | {r['recovery']:.0f}% | "
+                    f"{r['total']:.2f}s | {verdict} |"
                 )
             md.append("")
             md.append("> 三连击如果每段配比完全一样，读起来是「同一个动作点三下」。"

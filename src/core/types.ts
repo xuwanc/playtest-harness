@@ -797,6 +797,27 @@ export type WeaponProfile = {
   /** 剑类为 3，法杖 / 弓为 0 */
   comboCount: number;
   /**
+   * v9s.75 · **逐段时长**（下标 = comboIndex − 1）。缺项回落到上面的统一值。
+   *
+   * 为什么需要：三段共用一组 `windup/active/recovery`，读起来就是「同一个动作点三下」。
+   * 实测三把武器九段的配比全是 20~23 / 24~29 / 51~54（`clip:lab combo` 报告），
+   * 玩家感受不到「连段」这回事。
+   *
+   * 目标配比（[`docs/systems/animation.md`](../../docs/systems/animation.md) §3.1）：
+   *
+   * | 段 | 前摇 | 挥击 | 收势 | 意图 |
+   * |---|---|---|---|
+   * | 1 | 25% | 25% | 50% | 建立节奏 |
+   * | 2 | 18% | 25% | 57% | 承接动量：起手砍短、收势更长 |
+   * | 3 | 35% | 20% | 45% | 终结技：蓄力更长、收势不拖 |
+   *
+   * **两条约束**（都来自实测，改之前先读）：
+   * 1. `active` 不短于 5 帧（83ms）—— 再短刀光来不及成形，表现层看起来像闪了一下；
+   * 2. `windup` 不要超过 38% —— 超过之后 `swingCurve`（按归一化进度走）已经在挥了，
+   *    而判定还停在蓄势，`hitSweep` 的刃尖门会把命中推到 active 后半段。
+   */
+  comboTimings?: { windup: number; active: number; recovery: number }[];
+  /**
    * v9s.31 · 关键帧事件（见 `core/notify.ts`）。
    *
    * Core 按攻击时间轴逐帧扫描并写入 `world.events`（type='notify'，带 name），

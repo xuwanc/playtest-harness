@@ -98,6 +98,11 @@ describe('v9s.29 命中卡肉', () => {
 
   it('同帧多目标不叠加：取最大值，不会变成慢动作', () => {
     const w = soloDummy(1.4);
+    // v9s.75：这里**临时摘掉刃身扫掠门**，让两个目标落在同一帧里。
+    // 门是按「刃尖本帧扫过哪一段」结算的，两个目标方位不同就必然分帧命中
+    // （实测第 10 帧扫到左边、第 14 帧扫到右边）—— 那是门的正确行为，
+    // 但会让「同帧多目标」这个前提消失，测试就测不到卡肉聚合了。
+    delete (w.config.combat.weapons['sword-shield'] as { hitSweep?: unknown }).hitSweep;
     w.dummies[1].mode = 'idle';
     w.dummies[1].position.x = 0.35;
     w.dummies[1].position.z = 8 - 1.35;
