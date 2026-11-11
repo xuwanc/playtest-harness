@@ -1,7 +1,7 @@
 # 当前状态
 
 > **覆盖写**。只写「现在在哪、正在做什么、下一步」，历史留在 `docs/journal/`。
-> 最后更新：2026-11-11 14:40。
+> 最后更新：2026-11-11 14:52。
 
 ## 一句话
 
@@ -40,7 +40,7 @@ v0.9.99：**脚掌会折了**——踝下多一个 `ball` 关节，脚掌从 60%
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 鱼人开局 | <https://xuwanc.github.io/playtest-harness/?hero=murloc> |
 | 哨兵机开局 | <https://xuwanc.github.io/playtest-harness/?hero=sentinel> |
-| 本轮线上核验 | 待发布 —— 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 `v0.9.99` |
+| 本轮线上核验 | PASS —— 本地 / 线上同为 `main-CaRRUsj_.js`（973539 B），徽标 `v0.9.99` |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
@@ -62,7 +62,7 @@ v0.9.99：**脚掌会折了**——踝下多一个 `ball` 关节，脚掌从 60%
 
 ## 正在做
 
-- 无。v0.9.99（heel-toe roll + 蹬离抬踝）代码 / 测试 / 文档已完成，待走闸门发布。
+- 无。v0.9.99（heel-toe roll + 蹬离抬踝）已合并、已发布并核验。
 - 下一步：`C1` 剪辑资源化（clip 数据格式 + 剪辑级 events）—— 现在所有动作节奏还写在
   `combat.ts` 与 `game.json` 里，第三方改动作只能改代码。
 - 之后：`C2` 逐层 bone mask（`chainBlend` 不区分来源，见「下一步」第 25 条）、
