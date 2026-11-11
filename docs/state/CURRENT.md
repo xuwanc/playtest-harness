@@ -5,7 +5,15 @@
 
 ## 一句话
 
-v0.9.95：**残影双轨修复**——RT 拖尾此前不显示（灯光未进 layer、背景未屏蔽）、老头残影掉帧（每帧深克隆整棵 rig + new 材质）。
+v0.9.95：**攻击层改四元数增量 + 残影双轨修复**——躯干用 additive 叠攻击（`站姿⁻¹ ⊗ 攻击`，w=1 与旧绝对姿态逐位一致）；RT 拖尾此前不显示（灯光未进 layer、背景未屏蔽）、老头残影掉帧（每帧深克隆整棵 rig + new 材质）。
+① 本轮（姿态层 · v9s.73）：**攻击层从「欧拉逐轴覆盖」变成「四元数增量」**——躯干按
+`delta = 站姿⁻¹ ⊗ 攻击姿势`、`final = 基础 ⊗ slerp(I, delta, w)` 叠加。
+`presentation/pose-quat.ts`（快照 / 增量 / 合成 / 最大转角，纯函数）；`voxel-rig` 的
+`captureBasePose` 抓四元数、`buildAttackReference` 解持械站姿当基准、`blendCombatPose`
+改四元数合成（满权重也合成）。满权重与旧绝对姿态逐位一致，大角度切换走最短弧。
+**手臂不走这条路径**：`shoulder` 是 YXZ，抬臂 −1.9 rad 时四元数→欧拉会翻支、
+下游按 `rotation.x` 读抬臂角全错（举顶仰角 89°→78°），所以 `POSE_NODES` 只有 `[upper]`。
+顺手修了 `applyCombatPose` 归零 `upper.rotation.y` 吃掉持械站姿（剑盾 0.12 → 0.03 rad）。
 ① 本轮（表现层）：`spine.segments` / `spine.pivots`（缺省 3 段、`[0.42, 0.72]`），
 分配数学抽成 `presentation/spine-chain.ts`（俯仰按 waist→chest 线性权重、偏航按 `x^p` 累计曲线，
 两段时逐位退化成 v9s.70）。每级折角降到 1/3，接缝缝宽从 8.8cm 收到 ~3.2cm，补块退回兜底；
@@ -33,7 +41,7 @@ v0.9.95：**残影双轨修复**——RT 拖尾此前不显示（灯光未进 la
 | 老人开局 | <https://xuwanc.github.io/playtest-harness/?hero=elder> |
 | 鱼人开局 | <https://xuwanc.github.io/playtest-harness/?hero=murloc> |
 | 哨兵机开局 | <https://xuwanc.github.io/playtest-harness/?hero=sentinel> |
-| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 `v0.9.94`（不写死 js 名，构建期注入会变） |
+| 本轮线上核验 | 发布后由 `tools/check-online.py` 对比本地 / 线上同一份 JS + 徽标版本 `v0.9.95`（不写死 js 名，构建期注入会变） |
 | 沙盒隧道 | 仅本地临时调试用，按 runtimeId 定址、每次重建都变，**不作为对外链接** |
 
 ## 验证基线（改完必须复跑）
