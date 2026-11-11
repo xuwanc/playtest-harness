@@ -230,7 +230,9 @@ def claim_version():
         txt = CURRENT_PATH.read_text()
         txt = re.sub(r'0\.9\.\d+', new, txt)
         if internal:
-            txt = re.sub(r'v9s\.\d+', internal, txt)
+            # 只改「内部代号 v9s.NN」这一处。全量替换会把 CURRENT 里的历史引用
+            #（「v9s.70 踩的坑」这类）一起改成新号，等于篡改历史（v9s.73 实测中招）。
+            txt = re.sub(r'(内部代号 )v9s\.\d+', r'\g<1>' + internal, txt)
         txt = re.sub(r'(最后更新：)[^\n]*',
                      r'\g<1>' + datetime.now().strftime('%Y-%m-%d %H:%M') + '。', txt)
         CURRENT_PATH.write_text(txt)
